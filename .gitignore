@@ -1,0 +1,8 @@
+target/
+node_modules/
+dist/
+build/
+.svelte-kit/
+.nexo/cache/
+*.log
+.DS_Store
