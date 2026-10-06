@@ -1,17 +1,17 @@
-# ADR 0001: Tauri 2 no editor e Rust no núcleo
+# ADR 0001: Tauri 2 for the editor, Rust for the core
 
-**Status:** aceito
+**Status:** accepted
 
-## Contexto
+## Context
 
-A interface precisa ser excepcionalmente bonita e o núcleo precisa ser rápido e portátil, incluindo web.
+The UI must be beautiful and productive; the core must be fast and portable, including the web.
 
-## Decisão
+## Decision
 
-Editor em Tauri 2 com frontend Svelte 5 + Vite + TypeScript. Núcleo, runtime e ferramentas em Rust. C/C++ só via bindings quando uma biblioteca indispensável não tiver equivalente em Rust.
+Editor in Tauri 2 with a Svelte 5 + Vite + TypeScript frontend. Core, runtime and tools in Rust. C/C++ only through bindings when an essential library has no Rust equivalent.
 
-## Consequências
+## Consequences
 
-- UI com toda a expressividade da web e instalador pequeno.
-- Rust compila para nativo e WASM, permitindo um único runtime.
-- Dependência do WebView do sistema: WebView2 (Windows), WKWebView (macOS), WebKitGTK (Linux). O Linux exige atenção extra com WebGPU.
+- Rich UI and a small installer.
+- Rust compiles to native and WASM, enabling one runtime.
+- Depends on the system WebView: WebView2 (Windows), WKWebView (macOS), WebKitGTK (Linux). Linux needs extra care with WebGPU.

@@ -1,17 +1,17 @@
-# ADR 0003: Grafos compilam para IR; C# é saída gerada
+# ADR 0003: Graphs compile to an IR; C# is generated output
 
-**Status:** aceito
+**Status:** accepted
 
-## Contexto
+## Context
 
-A lógica visual precisa de hot reload instantâneo e rodar em desktop e web. O usuário quer C# como representação textual.
+Visual logic needs instant hot reload and must run on desktop and web. The textual representation should be C#.
 
-## Decisão
+## Decision
 
-Grafos e folhas de eventos compilam para um IR tipado executado pela `nexo-vm` em Rust. Um gerador produz C# legível a partir do mesmo IR. Scripts C# escritos à mão chegam numa fase posterior, sobre a mesma API.
+Visual scripts compile to a typed IR executed by `nexo-vm` in Rust. A generator produces readable C# from the same IR. Hand-written C# arrives later, on the same API.
 
-## Consequências
+## Consequences
 
-- Hot reload sem compilador externo e sem runtime .NET nos jogos.
-- Exportação web e mobile simples.
-- A API da engine precisa ser desenhada desde o início pensando em C# (nomes, tipos, eventos), para que o código gerado seja natural.
+- Hot reload without an external compiler and without a .NET runtime in games.
+- Simple web and mobile export.
+- The engine API must be designed with C# in mind from day one (names, types, events).

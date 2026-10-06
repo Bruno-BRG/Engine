@@ -1,49 +1,40 @@
 # 07. Roadmap
 
-Cada fase termina com algo que dá para usar e mostrar.
+Each phase ends with something usable. Task-level detail lives in the [backlog](backlog/README.md); the IDs below point there.
 
-## Fase 0: Fundação
+## Phase 0: Foundation ✅ (Windows)
 
-**Status:** concluída no Windows. Falta testar macOS e Linux.
+Cargo workspace, Tauri 2 + Svelte 5 app, design tokens, editor shell, WASM + WebGPU viewport proof (144 fps in WebView2), templates, scene save/load in RON, live C# panel.
 
-- Repositório com workspace Cargo e app Tauri 2 + Svelte 5.
-- Design system: tokens, componentes base (botão, campo, painel, árvore, menu, toast), tema escuro.
-- Shell do editor: painéis encaixáveis, Ctrl+K, tela inicial.
-- Prova técnica do viewport: `nexo-runtime` em WASM desenhando sprites via WebGPU dentro do Tauri, a 60 fps, nas três plataformas desktop.
+## Phase 1: Unity-style editor + node scenes
 
-**Pronto quando:** o editor abre em menos de 2 s, mostra um sprite girando no viewport e já parece bonito.
+- Unity-style theme and layout: menu bar, toolbar with Play/Pause/Step, Scene/Game tabs, dockable panels (EDT-001…EDT-030).
+- Node tree model in Rust with types, UIDs, parenting, scene instancing (SCN-001…SCN-020).
+- Inspector driven by node type metadata, Add Node/Component menu (INS-001…INS-020).
+- Project browser and asset import with thumbnails and hot reload (AST-001…AST-015).
+- Gizmos: move, rotate, scale, rect tool, snapping (VPT-001…VPT-015).
+- Unity-style Console (CON-001…CON-010).
 
-## Fase 1: Cena
+**Exit:** build a level with real sprites as a node tree, save, reopen, nothing lost.
 
-- ECS, cena, serialização em RON, assets com UUID.
-- Hierarquia, Inspector, gizmos, desfazer/refazer.
-- Play/stop no viewport.
+## Phase 2: Physics, input, audio, visual logic
 
-**Pronto quando:** dá para montar uma fase com sprites e salvar/abrir sem perda.
+- Rapier 2D: bodies, shapes, layers/masks, materials, joints, raycasts, debug draw (PHY).
+- Input map and actions (INP), audio players and buses (AUD).
+- GameMaker-style Logic workspace: script list, events, infinite canvas, node search, IR + VM, live debugging (VIS).
 
-## Fase 2: Lógica visual
+**Exit:** someone who has never coded makes a playable platformer with coins in 30 minutes.
 
-- Modelo de grafo, editor de grafos em canvas, IR e VM.
-- Folhas de eventos sobre o mesmo modelo.
-- Física 2D, entrada, áudio, behaviors Plataforma, 8 direções, Sólido, Câmera.
-- Painel C# ao vivo.
-- Depuração com fios animados e valores nos pinos.
+## Phase 3: Public alpha
 
-**Pronto quando:** alguém que nunca programou faz um jogo de plataforma com moedas em 30 minutos seguindo o tutorial.
+Desktop + web export (EXP), tilemaps (R2D), sprite animation and AnimationPlayer (ANI), game UI nodes (GUI), particles, profiler basics (DBG), three example projects, node reference docs.
 
-## Fase 3: Primeiro lançamento (alpha pública)
+**Exit:** a small complete game published on itch.io made only with Nexo.
 
-- Exportação desktop e web.
-- Tilemap, animação de sprites, partículas, UI do jogo.
-- Prefabs com overrides, nós latentes, máquina de estados.
-- Três projetos de exemplo e documentação de todos os nós.
+## Phase 4: Depth (1.0)
 
-**Pronto quando:** um jogo completo pequeno é publicado no itch.io feito só com o Nexo.
+User behaviors, eject to C#, graph diff, 2D lights and shadows, post-processing, shader graph, localization, full profiler.
 
-## Fase 4: Profundidade (1.0)
+## Phase 5: Expansion
 
-- Behaviors do usuário, ejetar para C#, profiler, diff de grafos, luz 2D, pós-processamento, i18n, editor de shaders.
-
-## Fase 5: Expansão
-
-- Scripts C# à mão, mobile, 3D inicial, loja de extensões, multiplayer.
+Hand-written C#, mobile, initial 3D, asset/extension store, multiplayer.

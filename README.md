@@ -1,70 +1,79 @@
-# Nexo Engine
+<p align="center">
+  <img src="editor/public/logo.svg" width="96" alt="Nexo logo" />
+</p>
 
-> Nome provisório. Uma game engine 2D/3D focada em **programação visual**, com um editor bonito o bastante para dar vontade de abrir todo dia.
+<h1 align="center">Nexo Engine</h1>
 
-Nexo é uma engine desktop construída com **Tauri 2** (editor) e **Rust** (núcleo e runtime). A forma principal de criar lógica de jogo é visual: grafos de nós e folhas de eventos que representam o mesmo código por baixo. Quando for preciso ver ou exportar a lógica como texto, ela é traduzida para **C#**.
+<p align="center">
+  A 2D-first game engine where <b>visual programming is the main way to build games</b>.<br/>
+  Rust core · Tauri 2 editor · WebGPU viewport · C# as the textual view of every graph.
+</p>
 
-## Princípios
+<p align="center">
+  <img src="docs/assets/screenshots/editor-phase0.png" alt="Nexo editor, Phase 0" width="900" />
+</p>
 
-1. **Visual primeiro.** Tudo que um jogo precisa deve ser possível sem digitar código.
-2. **Bonito e rápido.** A interface é produto, não detalhe. 60 fps no editor, resposta instantânea a cada clique.
-3. **Ver o resultado na hora.** Play-in-editor com hot reload da lógica visual, sem recompilar.
-4. **Sem caixa-preta.** Cada grafo pode ser visto como C# legível. Quem aprende no visual aprende a programar.
-5. **Começar pequeno.** 2D excelente antes de 3D ambicioso.
+> **Status:** Phase 0 (foundation) complete on Windows. The editor opens, renders scenes through the Rust runtime compiled to WebAssembly, plays them in the viewport and shows live generated C#. See the [roadmap](docs/07-roadmap.md) and the [backlog](docs/backlog/README.md).
 
-## Rodando o editor
+## Why Nexo
 
-Pré-requisitos: Rust (com o target `wasm32-unknown-unknown`), `wasm-bindgen-cli` na mesma versão do crate (0.2.129), Node 20+ e pnpm. No Windows também é preciso o Visual Studio Build Tools com C++ e o WebView2 (já vem no Windows 11).
+- **Visual first.** Everything a game needs should be possible without typing code. Event sheets (GameMaker/Construct style) and node graphs (Blueprint style) share one model.
+- **Everything is a node.** Scenes are trees of typed nodes, like Godot: `Sprite2D`, `CharacterBody2D`, `Area2D`, `Camera2D`... You change behavior by changing node types and properties.
+- **Unity-grade editor.** Familiar layout (Hierarchy, Scene/Game, Inspector, Project, Console), dense and organized, fast.
+- **No black box.** Every graph can be read as clean C#, so learning visually teaches real programming.
+- **Light.** Small installer thanks to Tauri; the same runtime powers the editor viewport, desktop builds and web builds.
 
-```powershell
+## Architecture
+
+```mermaid
+flowchart LR
+  UI["Editor UI<br/>Svelte 5 + TypeScript"] <--> BE["Tauri backend<br/>Rust"]
+  UI <--> VP["Viewport<br/>nexo-runtime (WASM + WebGPU)"]
+  BE --> Core["nexo-core · nexo-graph · nexo-csharp"]
+  VP --> Core
+  VP --> R["nexo-render (wgpu)"]
+  Export["Exported game<br/>native or web"] --> Core & R
+```
+
+## Getting started
+
+Requirements: Rust (with `wasm32-unknown-unknown`), `wasm-bindgen-cli` 0.2.129, Node 20+, pnpm. On Windows: Visual Studio Build Tools (C++) and WebView2.
+
+```bash
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129 --locked
 cd editor
 pnpm install
-pnpm dev          # app desktop (Tauri) com hot reload
-pnpm dev:web      # só a interface, no navegador em http://localhost:1420
-pnpm build        # instalador do app desktop
+pnpm dev        # desktop app (Tauri) with hot reload
+pnpm dev:web    # UI only, in the browser at http://localhost:1420
+pnpm build      # desktop installer
 ```
 
-O comando `dev` compila o runtime para WebAssembly antes de subir a interface. No modo navegador os projetos ficam no `localStorage`, o que serve para testar a interface sem o app desktop.
+## Repository layout
 
-## Estado atual (Fase 0)
-
-- Editor desktop em Tauri 2 com barra de título própria, tela inicial com modelos e projetos recentes.
-- Viewport rodando o runtime Rust em WASM com WebGPU (WebGL2 como reserva): grade, moldura da tela do jogo, sprites procedurais com sombra e contorno de seleção.
-- Hierarquia com filtro, renomear, ocultar, travar e reordenar arrastando; Inspector com campos de arrastar valor e expressões (`32*4`); cores; behaviors Girar, Flutuar e Pulsar.
-- Jogar/parar dentro do viewport com Depurador de valores ao vivo; painel C# gerado ao vivo a partir do objeto selecionado.
-- Paleta de comandos (Ctrl+K), atalhos, desfazer/refazer ilimitado, salvamento automático em `cenas/principal.scene.ron`, tema claro e escuro.
-
-## Documentação
-
-| Documento | Conteúdo |
+| Path | Purpose |
 |---|---|
-| [01 Visão do produto](docs/01-visao.md) | Público, proposta de valor, diferenciais |
-| [02 Pesquisa de engines](docs/02-pesquisa-engines.md) | Unity, Unreal, Godot, GameMaker, Construct 3, GDevelop e o que trazer de cada |
-| [03 Arquitetura](docs/03-arquitetura.md) | Tauri, Rust, renderização, ECS, formato de projeto, exportação |
-| [04 Programação visual](docs/04-programacao-visual.md) | Modelo de grafos, folhas de eventos, IR, VM, geração de C# |
-| [05 Interface e UX](docs/05-interface-ux.md) | Design system, layout do editor, interações, acessibilidade |
-| [06 Funcionalidades](docs/06-funcionalidades.md) | Lista completa de módulos e prioridade de cada um |
-| [07 Roadmap](docs/07-roadmap.md) | Fases, entregas e critérios de pronto |
-| [Decisões (ADRs)](docs/adr/) | Registro das decisões técnicas e seus motivos |
+| `crates/nexo-core` | Shared types (camera, sprite instances, later the node tree) |
+| `crates/nexo-render` | 2D renderer on wgpu (native, WebGPU, WebGL2) |
+| `crates/nexo-runtime-web` | Runtime compiled to WASM for the editor viewport and web export |
+| `editor/src` | Editor UI (Svelte 5) |
+| `editor/src-tauri` | Tauri backend: projects, scenes, file system |
+| `docs/` | Vision, architecture, research, backlog, decisions |
 
-## Estrutura planejada do repositório
+## Documentation
 
-```
-nexo/
-├─ editor/            # App Tauri: frontend (SvelteKit + TS) e backend (Rust)
-│  ├─ src/            # UI do editor
-│  └─ src-tauri/      # Comandos Tauri, ponte com o núcleo
-├─ crates/
-│  ├─ nexo-core/      # ECS, cena, assets, tipos base
-│  ├─ nexo-render/    # Renderização com wgpu (nativo e WebGPU)
-│  ├─ nexo-graph/     # Modelo de grafos, validação, compilação para IR
-│  ├─ nexo-vm/        # Máquina virtual que executa o IR
-│  ├─ nexo-csharp/    # Gerador de C# a partir do IR
-│  ├─ nexo-physics/   # Integração com Rapier 2D/3D
-│  ├─ nexo-audio/     # Áudio (kira)
-│  └─ nexo-runtime/   # Player standalone usado nos jogos exportados
-├─ docs/
-└─ examples/          # Projetos de exemplo (plataforma, top-down, puzzle)
-```
+| Document | Content |
+|---|---|
+| [Vision](docs/01-vision.md) | Audience, value proposition, differentiators |
+| [Engine research](docs/research/README.md) | Deep study of Unity, Godot and GameMaker, with sources |
+| [Architecture](docs/03-architecture.md) | Tauri, Rust, rendering, node tree, project format, export |
+| [Visual programming](docs/04-visual-programming.md) | Event sheets, node graphs, IR, VM, C# generation |
+| [Editor UI & UX](docs/05-editor-ui.md) | Unity-style design system and layout |
+| [Roadmap](docs/07-roadmap.md) | Phases and exit criteria |
+| [Backlog](docs/backlog/README.md) | Every task, grouped by topic |
+| [Decisions (ADRs)](docs/adr/) | Technical decisions and why |
+| [Contributing](CONTRIBUTING.md) | How to set up, code style, commits, PRs |
+
+## License
+
+MIT OR Apache-2.0.

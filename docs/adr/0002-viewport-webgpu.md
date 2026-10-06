@@ -1,20 +1,20 @@
-# ADR 0002: Viewport com o runtime em WASM + WebGPU
+# ADR 0002: Viewport runs the runtime in WASM + WebGPU
 
-**Status:** aceito. A prova técnica da Fase 0 rodou no WebView2 (Windows) com WebGPU a 144 fps, a taxa do monitor. Falta validar WKWebView (macOS) e WebKitGTK (Linux).
+**Status:** accepted. The Phase 0 proof ran in WebView2 (Windows) with WebGPU at 144 fps (the monitor refresh rate). WKWebView (macOS) and WebKitGTK (Linux) still need validation.
 
-## Contexto
+## Context
 
-Embutir uma superfície nativa de renderização dentro de uma janela Tauri é possível, mas frágil (sobreposição de janelas, foco, redimensionamento, DPI).
+Embedding a native render surface inside a Tauri window is possible but fragile (window overlap, focus, resize, DPI).
 
-## Decisão
+## Decision
 
-Rodar o `nexo-runtime` compilado para WASM dentro do WebView, renderizando num `<canvas>` com WebGPU (fallback WebGL2).
+Run `nexo-runtime` compiled to WASM inside the WebView, rendering to a `<canvas>` with WebGPU (WebGL2 fallback).
 
-## Alternativa (plano B)
+## Fallback
 
-Janela filha nativa com wgpu posicionada sobre a área do viewport, sincronizada pelo backend Tauri. Usada se o desempenho ou o suporte a WebGPU no WebKitGTK/WKWebView não for aceitável.
+A native wgpu child window positioned over the viewport area, synchronized by the Tauri backend, if WebGPU support or performance is not acceptable on a platform.
 
-## Consequências
+## Consequences
 
-- Editor e exportação web usam o mesmo código: o que se vê é o que se exporta.
-- WASM tem limite de threads e memória; cenas muito pesadas no editor podem exigir o plano B.
+- Editor and web export share code: what you see is what you ship.
+- WASM has thread and memory limits; very heavy scenes may require the fallback.
