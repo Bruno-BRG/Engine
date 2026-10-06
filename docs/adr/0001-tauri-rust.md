@@ -8,7 +8,7 @@ A interface precisa ser excepcionalmente bonita e o núcleo precisa ser rápido 
 
 ## Decisão
 
-Editor em Tauri 2 com frontend SvelteKit + TypeScript. Núcleo, runtime e ferramentas em Rust. C/C++ só via bindings quando uma biblioteca indispensável não tiver equivalente em Rust.
+Editor em Tauri 2 com frontend Svelte 5 + Vite + TypeScript. Núcleo, runtime e ferramentas em Rust. C/C++ só via bindings quando uma biblioteca indispensável não tiver equivalente em Rust.
 
 ## Consequências
 

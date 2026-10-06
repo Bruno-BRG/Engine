@@ -4,7 +4,9 @@ Cada fase termina com algo que dá para usar e mostrar.
 
 ## Fase 0: Fundação
 
-- Repositório com workspace Cargo e app Tauri 2 + SvelteKit.
+**Status:** concluída no Windows. Falta testar macOS e Linux.
+
+- Repositório com workspace Cargo e app Tauri 2 + Svelte 5.
 - Design system: tokens, componentes base (botão, campo, painel, árvore, menu, toast), tema escuro.
 - Shell do editor: painéis encaixáveis, Ctrl+K, tela inicial.
 - Prova técnica do viewport: `nexo-runtime` em WASM desenhando sprites via WebGPU dentro do Tauri, a 60 fps, nas três plataformas desktop.

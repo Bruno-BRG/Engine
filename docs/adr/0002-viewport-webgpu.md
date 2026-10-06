@@ -1,6 +1,6 @@
 # ADR 0002: Viewport com o runtime em WASM + WebGPU
 
-**Status:** proposto, depende da prova técnica da Fase 0
+**Status:** aceito. A prova técnica da Fase 0 rodou no WebView2 (Windows) com WebGPU a 144 fps, a taxa do monitor. Falta validar WKWebView (macOS) e WebKitGTK (Linux).
 
 ## Contexto
 

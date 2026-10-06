@@ -4,5 +4,7 @@ dist/
 build/
 .svelte-kit/
 .nexo/cache/
+editor/src/lib/runtime/pkg/
+editor/src-tauri/gen/
 *.log
 .DS_Store

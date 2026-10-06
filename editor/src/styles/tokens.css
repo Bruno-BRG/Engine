@@ -1,0 +1,73 @@
+/* Design system do Nexo: tokens. Ver docs/05-interface-ux.md */
+:root {
+  --font-ui: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-15: 15px;
+  --fs-18: 18px;
+  --fs-24: 24px;
+
+  --r-ctl: 6px;
+  --r-panel: 10px;
+  --r-dlg: 14px;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t-med: 200ms;
+
+  --accent: #7c5cff;
+  --accent-hi: #9a82ff;
+  --accent-soft: rgb(124 92 255 / 0.16);
+  --accent-ring: rgb(124 92 255 / 0.45);
+  --success: #3ddc97;
+  --warning: #ffb84d;
+  --danger: #ff5c7a;
+  --info: #5cc8ff;
+
+  /* Cores dos tipos de pino (programação visual) */
+  --type-exec: #ffffff;
+  --type-bool: #ff5c7a;
+  --type-int: #4fd6e8;
+  --type-float: #3ddc97;
+  --type-text: #ff7ad9;
+  --type-vec: #ffd84d;
+  --type-object: #5c9dff;
+  --type-color: #b07cff;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-0: #0e0f13;
+  --bg-1: #15171d;
+  --bg-2: #1c1f27;
+  --bg-3: #242833;
+  --bg-hover: rgb(255 255 255 / 0.05);
+  --bg-active: rgb(255 255 255 / 0.08);
+  --line: #2a2e39;
+  --line-soft: #20232c;
+  --text: #e8eaf0;
+  --text-dim: #8a90a2;
+  --text-faint: #5c6274;
+  --shadow-pop: 0 16px 48px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.3), 0 0 0 1px #2a2e39;
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --bg-0: #eceef3;
+  --bg-1: #f6f7fa;
+  --bg-2: #ffffff;
+  --bg-3: #e6e8ee;
+  --bg-hover: rgb(15 18 30 / 0.05);
+  --bg-active: rgb(15 18 30 / 0.08);
+  --line: #d9dce5;
+  --line-soft: #e6e8ee;
+  --text: #171923;
+  --text-dim: #5d6375;
+  --text-faint: #9097a8;
+  --shadow-pop: 0 16px 48px rgb(20 24 40 / 0.16), 0 2px 8px rgb(20 24 40 / 0.08), 0 0 0 1px #d9dce5;
+  --shadow-card: 0 8px 24px rgb(20 24 40 / 0.06);
+}

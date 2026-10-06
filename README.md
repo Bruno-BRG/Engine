@@ -12,6 +12,30 @@ Nexo é uma engine desktop construída com **Tauri 2** (editor) e **Rust** (núc
 4. **Sem caixa-preta.** Cada grafo pode ser visto como C# legível. Quem aprende no visual aprende a programar.
 5. **Começar pequeno.** 2D excelente antes de 3D ambicioso.
 
+## Rodando o editor
+
+Pré-requisitos: Rust (com o target `wasm32-unknown-unknown`), `wasm-bindgen-cli` na mesma versão do crate (0.2.129), Node 20+ e pnpm. No Windows também é preciso o Visual Studio Build Tools com C++ e o WebView2 (já vem no Windows 11).
+
+```powershell
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+cd editor
+pnpm install
+pnpm dev          # app desktop (Tauri) com hot reload
+pnpm dev:web      # só a interface, no navegador em http://localhost:1420
+pnpm build        # instalador do app desktop
+```
+
+O comando `dev` compila o runtime para WebAssembly antes de subir a interface. No modo navegador os projetos ficam no `localStorage`, o que serve para testar a interface sem o app desktop.
+
+## Estado atual (Fase 0)
+
+- Editor desktop em Tauri 2 com barra de título própria, tela inicial com modelos e projetos recentes.
+- Viewport rodando o runtime Rust em WASM com WebGPU (WebGL2 como reserva): grade, moldura da tela do jogo, sprites procedurais com sombra e contorno de seleção.
+- Hierarquia com filtro, renomear, ocultar, travar e reordenar arrastando; Inspector com campos de arrastar valor e expressões (`32*4`); cores; behaviors Girar, Flutuar e Pulsar.
+- Jogar/parar dentro do viewport com Depurador de valores ao vivo; painel C# gerado ao vivo a partir do objeto selecionado.
+- Paleta de comandos (Ctrl+K), atalhos, desfazer/refazer ilimitado, salvamento automático em `cenas/principal.scene.ron`, tema claro e escuro.
+
 ## Documentação
 
 | Documento | Conteúdo |

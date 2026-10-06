@@ -31,7 +31,7 @@ flowchart LR
 
 **O mesmo runtime no editor e no jogo.** O viewport do editor roda o `nexo-runtime` compilado para WASM, renderizando via WebGPU num `<canvas>`. Isso garante que o que se vê no editor é exatamente o que o jogo exportado faz, e de quebra a exportação web sai de graça. Se o WebGPU do WebView de alguma plataforma não for suficiente, há um plano B: janela nativa wgpu sobreposta à área do viewport (ver ADR 0002).
 
-**SvelteKit no frontend.** Reatividade fina e pouco overhead, bom para painéis com muitos campos atualizando ao vivo. Alternativa aceitável: SolidJS. O editor de grafos é implementado em canvas/WebGL próprio para aguentar milhares de nós.
+**Svelte 5 + Vite no frontend.** Reatividade fina (runes) e pouco overhead, bom para painéis com muitos campos atualizando ao vivo. O editor é um app de página única, então não há necessidade do roteamento do SvelteKit. O editor de grafos será implementado em canvas/WebGL próprio para aguentar milhares de nós.
 
 ## Núcleo
 
