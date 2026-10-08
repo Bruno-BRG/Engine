@@ -11,6 +11,24 @@ pub const LAYER_COUNT: usize = 32;
 /// Camadas que os projetos novos começam com. As demais ficam vazias até serem nomeadas.
 pub const DEFAULT_LAYERS: &[&str] = &["default", "ground", "player", "enemy"];
 
+/// Material de física (PHY-023): atrito, quique e as duas formas de superfície do Rapier.
+/// Um corpo usa um material pelo nome.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PhysicsMaterial {
+    pub name: String,
+    /// Atrito entre 0 (gelo) e 1 ou mais.
+    pub friction: f64,
+    /// Quique entre 0 (sem quique) e 1 (quique total).
+    pub bounce: f64,
+    /// Superfície áspera: usa o atrito máximo entre os dois corpos, em vez da média.
+    pub rough: bool,
+    /// Superfície absorvente: usa o quique mínimo entre os dois corpos.
+    pub absorbent: bool,
+}
+
+/// Tags padrão dos projetos novos (SCN-033). Cada nó tem uma tag, usada pela lógica visual.
+pub const DEFAULT_TAGS: &[&str] = &["untagged", "player", "enemy", "coin"];
+
 /// Barramento de áudio: um canal com volume próprio, pelo qual passam os players.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bus {
@@ -30,6 +48,9 @@ pub struct ProjectSettings {
     pub layer_matrix: Vec<u32>,
     pub input: InputMap,
     pub buses: Vec<Bus>,
+    /// Tags disponíveis para os nós (SCN-033).
+    pub tags: Vec<String>,
+    pub physics_materials: Vec<PhysicsMaterial>,
 }
 
 impl Default for ProjectSettings {
@@ -42,6 +63,8 @@ impl Default for ProjectSettings {
             layer_matrix: vec![u32::MAX; LAYER_COUNT],
             input: InputMap::defaults(),
             buses: vec![Bus { name: "Master".into(), volume_db: 0.0, mute: false }],
+            tags: DEFAULT_TAGS.iter().map(|s| s.to_string()).collect(),
+            physics_materials: Vec::new(),
         }
     }
 }
@@ -104,6 +127,14 @@ mod tests {
         s.layers[5] = "coin".into();
         s.layer_matrix[0] = 0b11;
         s.buses.push(Bus { name: "Música".into(), volume_db: -6.0, mute: false });
+        s.tags.push("boss".into());
+        s.physics_materials.push(PhysicsMaterial {
+            name: "Gelo".into(),
+            friction: 0.05,
+            bounce: 0.0,
+            rough: false,
+            absorbent: false,
+        });
         let text = s.to_ron().unwrap();
         assert_eq!(ProjectSettings::from_ron(&text).unwrap(), s);
     }

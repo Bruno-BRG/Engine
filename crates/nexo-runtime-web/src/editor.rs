@@ -3,7 +3,7 @@
 //! A reprodução guarda uma cópia da cena e um relógio; a edição fica intacta enquanto joga.
 
 use nexo_core::query::{self, Draw};
-use nexo_core::{Input, InputMap, Scene, Uid, registry};
+use nexo_core::{Input, InputMap, ProjectSettings, Scene, Uid, registry};
 use nexo_physics::Physics;
 use serde::Serialize;
 use serde_json::Value;
@@ -20,7 +20,8 @@ struct Play {
 pub struct SceneEditor {
     scene: Scene,
     play: Option<Play>,
-    input_map: InputMap,
+    /// Configurações do projeto (settings.ron). O mapa de entrada usado pelo jogo é `settings.input`.
+    settings: ProjectSettings,
     input: Input,
 }
 
@@ -48,7 +49,7 @@ impl SceneEditor {
         SceneEditor {
             scene: Scene::new("Principal", seed as u64),
             play: None,
-            input_map: InputMap::defaults(),
+            settings: ProjectSettings::default(),
             input: Input::default(),
         }
     }
@@ -220,27 +221,38 @@ impl SceneEditor {
 
     /// True se alguma tecla da ação está pressionada.
     pub fn action_pressed(&self, action: &str) -> bool {
-        self.input.action_pressed(&self.input_map, action)
+        self.input.action_pressed(&self.settings.input, action)
     }
 
     /// -1, 0 ou 1: negativo com `neg` pressionada, positivo com `pos`.
     pub fn axis(&self, neg: &str, pos: &str) -> f64 {
-        self.input.axis(&self.input_map, neg, pos)
+        self.input.axis(&self.settings.input, neg, pos)
     }
 
     /// Vetor [x, y] das quatro ações, com comprimento no máximo 1.
     pub fn input_vector(&self, left: &str, right: &str, up: &str, down: &str) -> Vec<f64> {
-        self.input.vector(&self.input_map, left, right, up, down).to_vec()
+        self.input.vector(&self.settings.input, left, right, up, down).to_vec()
     }
 
     /// Mapa de ações em RON, para salvar no projeto.
     pub fn input_map_ron(&self) -> Result<String, JsError> {
-        self.input_map.to_ron().map_err(js_err)
+        self.settings.input.to_ron().map_err(js_err)
     }
 
     /// Substitui o mapa de ações por um texto RON.
     pub fn set_input_map_ron(&mut self, text: &str) -> Result<(), JsError> {
-        self.input_map = InputMap::from_ron(text).map_err(js_err)?;
+        self.settings.input = InputMap::from_ron(text).map_err(js_err)?;
+        Ok(())
+    }
+
+    /// Configurações do projeto (settings.ron) em RON.
+    pub fn settings_ron(&self) -> Result<String, JsError> {
+        self.settings.to_ron().map_err(js_err)
+    }
+
+    /// Carrega as configurações do projeto a partir de settings.ron. Texto vazio usa os padrões.
+    pub fn set_settings_ron(&mut self, text: &str) -> Result<(), JsError> {
+        self.settings = ProjectSettings::from_ron(text).map_err(js_err)?;
         Ok(())
     }
 
