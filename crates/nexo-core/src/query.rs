@@ -194,13 +194,61 @@ pub fn floats(draws: &[Draw]) -> Vec<f32> {
     buf
 }
 
-/// Sprite sob o ponto do mundo (o de cima ganha). `None` se nada está embaixo do ponto.
+/// Node under the world point: a sprite first (the top one wins), then a collision shape without a
+/// sprite, found by its outline (PHY-012). `None` if nothing is under the point.
 pub fn pick(scene: &Scene, x: f64, y: f64, time: Option<f64>) -> Option<Uid> {
-    draws(scene, time, &[], None)
+    let sprite = draws(scene, time, &[], None)
         .iter()
         .rev()
         .find(|d| inside(&d.instance, d.texture.is_some(), x, y))
-        .map(|d| d.uid)
+        .map(|d| d.uid);
+    sprite.or_else(|| pick_shape(scene, x, y, time))
+}
+
+/// Visible collision shape under the point, tested against its outline. The last one in tree order
+/// (drawn on top) wins.
+fn pick_shape(scene: &Scene, x: f64, y: f64, time: Option<f64>) -> Option<Uid> {
+    world_map(scene, time)
+        .into_iter()
+        .rev()
+        .filter(|(_, _, visible)| *visible)
+        .filter_map(|(uid, xf, _)| shape_outline(scene, uid, xf))
+        .find(|o| inside_outline(&o.points, x, y))
+        .map(|o| o.uid)
+}
+
+/// Distance, in world units, within which a click picks a segment shape (it has no area).
+const SEGMENT_PICK: f64 = 6.0;
+
+/// Polygons (concave too) use the even-odd rule. A segment (two points) is picked within `SEGMENT_PICK`.
+fn inside_outline(pts: &[[f64; 2]], x: f64, y: f64) -> bool {
+    match pts {
+        [] | [_] => false,
+        [a, b] => dist_to_segment([x, y], *a, *b) <= SEGMENT_PICK,
+        _ => {
+            let mut inside = false;
+            for (&[xi, yi], &[xj, yj]) in pts.iter().zip(pts.iter().cycle().skip(pts.len() - 1)) {
+                // Edges crossing the horizontal line through `y`; here `yi != yj`, so the division is safe.
+                if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+                    inside = !inside;
+                }
+            }
+            inside
+        }
+    }
+}
+
+/// Distance from `p` to the segment `a`-`b`.
+fn dist_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (cx, cy) = (a[0] + t * dx, a[1] + t * dy);
+    (p[0] - cx).hypot(p[1] - cy)
 }
 
 fn inside(inst: &SpriteInstance, textured: bool, x: f64, y: f64) -> bool {
@@ -293,22 +341,20 @@ fn local_outline(n: &Node) -> Vec<[f64; 2]> {
 /// Contornos das formas de colisão ativas (`CollisionShape2D` e `CollisionPolygon2D` com `disabled`
 /// falso) filhas de um corpo ou área. Formas fora de um corpo não aparecem: o Rapier também as ignora.
 pub fn shape_outlines(scene: &Scene, time: Option<f64>) -> Vec<ShapeOutline> {
+    world_map(scene, time).into_iter().filter_map(|(uid, xf, _)| shape_outline(scene, uid, xf)).collect()
+}
+
+/// Outline of one node in world space, if it is an active collision shape inside a body or area.
+fn shape_outline(scene: &Scene, uid: Uid, xf: Xf) -> Option<ShapeOutline> {
     const BODIES: &[&str] = &["StaticBody2D", "RigidBody2D", "CharacterBody2D", "Area2D"];
-    let mut out = Vec::new();
-    for (uid, xf, _) in world_map(scene, time) {
-        let Some(n) = scene.node(uid) else { continue };
-        let is_shape = n.kind == "CollisionShape2D" || n.kind == "CollisionPolygon2D";
-        if !is_shape || value_of(n, "disabled").as_bool().unwrap_or(false) {
-            continue;
-        }
-        let Some(owner) = n.parent.filter(|p| scene.node(*p).is_some_and(|b| BODIES.contains(&b.kind.as_str())))
-        else {
-            continue;
-        };
-        let points = local_outline(n).into_iter().map(|[px, py]| apply(xf, px, py)).collect();
-        out.push(ShapeOutline { uid, owner, points });
+    let n = scene.node(uid)?;
+    let is_shape = n.kind == "CollisionShape2D" || n.kind == "CollisionPolygon2D";
+    if !is_shape || value_of(n, "disabled").as_bool().unwrap_or(false) {
+        return None;
     }
-    out
+    let owner = n.parent.filter(|p| scene.node(*p).is_some_and(|b| BODIES.contains(&b.kind.as_str())))?;
+    let points = local_outline(n).into_iter().map(|[px, py]| apply(xf, px, py)).collect();
+    Some(ShapeOutline { uid, owner, points })
 }
 
 /// Câmera atual: posição mundial e zoom. `None` se a cena não tem uma `Camera2D` atual.
@@ -551,6 +597,70 @@ mod tests {
         assert_eq!(p.points, vec![[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]);
         let g = outlines.iter().find(|o| o.uid == segmento).unwrap();
         assert_eq!(g.points, vec![[-20.0, 0.0], [20.0, 0.0]]);
+    }
+
+    /// A body at `(100, 50)` with one shape child, for the picking tests.
+    fn body_with_shape(shape: &str, size: Value) -> (Scene, Uid, Uid) {
+        let mut s = Scene::new("t", 6);
+        let corpo = s.add_node(None, "StaticBody2D", None).unwrap();
+        s.set_prop(corpo, "position", json!([100.0, 50.0]), None).unwrap();
+        let forma = s.add_node(Some(corpo), "CollisionShape2D", None).unwrap();
+        s.set_prop(forma, "shape", json!(shape), None).unwrap();
+        s.set_prop(forma, "size", size, None).unwrap();
+        (s, corpo, forma)
+    }
+
+    #[test]
+    fn pick_finds_rectangle_shape_without_sprite() {
+        // Rectangle 32 x 16 centred on (100, 50): x in [84, 116], y in [42, 58].
+        let (s, _, forma) = body_with_shape("rect", json!([32.0, 16.0]));
+        assert_eq!(pick(&s, 100.0, 50.0, None), Some(forma));
+        assert_eq!(pick(&s, 115.0, 57.0, None), Some(forma));
+        assert_eq!(pick(&s, 117.0, 50.0, None), None);
+    }
+
+    #[test]
+    fn pick_finds_circle_shape_without_sprite() {
+        // Circle of radius 10 on (100, 50): the outline is a 24-gon, so 9 is inside and 11 is outside.
+        let (s, _, forma) = body_with_shape("circle", json!([20.0, 20.0]));
+        assert_eq!(pick(&s, 109.0, 50.0, None), Some(forma));
+        assert_eq!(pick(&s, 111.0, 50.0, None), None);
+    }
+
+    #[test]
+    fn pick_finds_concave_polygon_by_its_area() {
+        // Concave "V": the notch at the top is outside the shape.
+        let mut s = Scene::new("t", 7);
+        let corpo = s.add_node(None, "StaticBody2D", None).unwrap();
+        let poligono = s.add_node(Some(corpo), "CollisionPolygon2D", None).unwrap();
+        let pontos = json!([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [10.0, 5.0], [0.0, 20.0]]);
+        s.set_prop(poligono, "points", pontos, None).unwrap();
+        assert_eq!(pick(&s, 2.0, 15.0, None), Some(poligono));
+        assert_eq!(pick(&s, 10.0, 15.0, None), None, "notch");
+    }
+
+    #[test]
+    fn pick_finds_segment_within_tolerance() {
+        // Segment from (-20, 0) to (20, 0), around the body origin.
+        let (s, _, forma) = body_with_shape("segment", json!([40.0, 0.0]));
+        assert_eq!(pick(&s, 100.0, 53.0, None), Some(forma));
+        assert_eq!(pick(&s, 100.0, 60.0, None), None);
+        assert_eq!(pick(&s, 130.0, 50.0, None), None, "past the end");
+    }
+
+    #[test]
+    fn pick_ignores_shapes_of_hidden_bodies() {
+        let (mut s, corpo, _) = body_with_shape("circle", json!([20.0, 20.0]));
+        s.set_prop(corpo, "visible", json!(false), None).unwrap();
+        assert_eq!(pick(&s, 100.0, 50.0, None), None);
+    }
+
+    #[test]
+    fn sprite_wins_over_shape_at_same_point() {
+        let (mut s, corpo, _) = body_with_shape("rect", json!([32.0, 16.0]));
+        let sprite = s.add_node(Some(corpo), "Sprite2D", None).unwrap();
+        s.set_prop(sprite, "size", json!([32.0, 16.0]), None).unwrap();
+        assert_eq!(pick(&s, 100.0, 50.0, None), Some(sprite));
     }
 
     #[test]

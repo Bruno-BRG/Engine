@@ -198,57 +198,66 @@
     return null;
   }
 
+  /** Com grade, uma dimensão com sinal (em mundo) vai para o múltiplo mais próximo, com pelo menos uma célula. */
+  function signedSnap(v: number, grid: number | null): number {
+    if (!grid) return v;
+    const mag = Math.max(grid, snapTo(Math.abs(v), grid));
+    return v < 0 ? -mag : mag;
+  }
+
   /**
    * Arrasta a alça `key` da forma `n` até o ponto `w` do mundo e grava com set_prop (PHY-012).
    * `anchor` é a ancoragem de `anchorOf`, medida no início do arrasto. Tamanho em unidades do nó.
+   * Com `grid` (snap ligado), as dimensões medidas em mundo caem em múltiplos da grade: raio, largura,
+   * altura e comprimento. O colisor usa tamanho × escala, então o valor gravado é a medida em mundo
+   * dividida pela escala.
    */
-  function dragShape(n: NodeView, key: string, w: Pt, anchor: Pt | null, coalesce: string) {
+  function dragShape(n: NodeView, key: string, w: Pt, anchor: Pt | null, coalesce: string, grid: number | null) {
     const wp = world(n);
-    const lp = toLocal(wp, w.x, w.y);
     if (n.kind === 'CollisionPolygon2D') {
+      const lp = toLocal(wp, w.x, w.y);
       const pts = ((n.props.points as [number, number][] | undefined) ?? []).map((q) => [q[0], q[1]] as [number, number]);
       const i = Number(key.slice(1));
       if (pts[i]) pts[i] = [round2(lp.x), round2(lp.y)];
       scene.setProp(n.uid, 'points', pts, coalesce);
       return;
     }
+    const sx = Math.abs(wp.sx) || 1;
+    const sy = Math.abs(wp.sy) || 1;
+    /** Medida em mundo `worldLen` na unidade da propriedade; com grade, cai num múltiplo da grade. */
+    const sized = (worldLen: number, scale: number, min: number) =>
+      grid ? Math.max(grid, snapTo(worldLen, grid)) / scale : Math.max(min, worldLen / scale);
     const [w0, h0] = (n.props.size as [number, number]) ?? [32, 32];
+    // Círculo: o centro não se move; o raio é a distância do centro ao mouse.
     if (n.props.shape === 'circle') {
-      const r = Math.max(0.5, Math.hypot(lp.x, lp.y));
+      const r = sized(Math.hypot(w.x - wp.x, w.y - wp.y), sx, 0.5);
       scene.setProp(n.uid, 'size', [round2(2 * r), round2(2 * r)], coalesce);
       return;
     }
+    // Cápsula: o centro não se move; a largura é o diâmetro e a altura é o total.
     if (n.props.shape === 'capsule_y') {
+      const d = rotateBy(w.x - wp.x, w.y - wp.y, -wp.rot * RAD);
       if (key === 'x') {
-        const width = Math.max(1, round2(2 * Math.abs(lp.x)));
-        scene.setProp(n.uid, 'size', [width, Math.max(h0, width)], coalesce);
+        const width = sized(2 * Math.abs(d.x), sx, 1);
+        scene.setProp(n.uid, 'size', [round2(width), round2(Math.max(h0, width))], coalesce);
       } else {
-        const height = Math.max(w0, round2(2 * Math.abs(lp.y)));
-        scene.setProp(n.uid, 'size', [w0, height], coalesce);
+        const height = sized(2 * Math.abs(d.y), sy, 1);
+        scene.setProp(n.uid, 'size', [w0, round2(Math.max(w0, height))], coalesce);
       }
       return;
     }
     if (!anchor) return;
     // Retângulo e segmento: a ancoragem fica no mundo e o centro vai para o meio dos dois pontos.
-    const sx = Math.abs(wp.sx) || 1;
-    const sy = Math.abs(wp.sy) || 1;
-    let mid: Pt;
-    let width: number;
-    let height = h0;
-    if (n.props.shape === 'segment') {
-      // Só o comprimento no eixo do nó: a ponta acompanha o eixo, não o mouse fora dele.
-      const ax = Math.cos(wp.rot * RAD);
-      const ay = Math.sin(wp.rot * RAD);
-      const along = (w.x - anchor.x) * ax + (w.y - anchor.y) * ay;
-      mid = { x: anchor.x + ax * (along / 2), y: anchor.y + ay * (along / 2) };
-      width = Math.max(1, Math.abs(along) / sx);
-    } else {
-      const d = rotateBy(w.x - anchor.x, w.y - anchor.y, -wp.rot * RAD);
-      mid = { x: (anchor.x + w.x) / 2, y: (anchor.y + w.y) / 2 };
-      width = Math.max(1, Math.abs(d.x) / sx);
-      height = Math.max(1, Math.abs(d.y) / sy);
-    }
-    const pos = toLocal(parentWorld(n), mid.x, mid.y);
+    // `da` é a distância da ancoragem ao mouse, nos eixos do nó.
+    const da = rotateBy(w.x - anchor.x, w.y - anchor.y, -wp.rot * RAD);
+    const dx = signedSnap(da.x, grid);
+    // Segmento: só o comprimento no eixo do nó; a ponta acompanha o eixo, não o mouse fora dele.
+    const segment = n.props.shape === 'segment';
+    const dy = segment ? 0 : signedSnap(da.y, grid);
+    const half = rotateBy(dx / 2, dy / 2, wp.rot * RAD);
+    const pos = toLocal(parentWorld(n), anchor.x + half.x, anchor.y + half.y);
+    const width = Math.max(1, Math.abs(dx) / sx);
+    const height = segment ? h0 : Math.max(1, Math.abs(dy) / sy);
     scene.setProps(n.uid, { size: [round2(width), round2(height)], position: [round2(pos.x), round2(pos.y)] }, coalesce);
   }
 
@@ -734,9 +743,11 @@
     if (drag?.kind === 'shape') {
       const n = scene.node(drag.uid);
       if (!n) return;
+      const grid = snapOn(e) ? app.gridSize : null;
       let w = toWorld(p.x, p.y);
-      if (snapOn(e)) w = { x: snapTo(w.x, app.gridSize), y: snapTo(w.y, app.gridSize) };
-      dragShape(n, drag.handle, w, drag.anchor, drag.key);
+      // Vértice de polígono vai para a grade; as demais formas snapam as dimensões em dragShape (PHY-012).
+      if (grid && n.kind === 'CollisionPolygon2D') w = { x: snapTo(w.x, grid), y: snapTo(w.y, grid) };
+      dragShape(n, drag.handle, w, drag.anchor, drag.key, grid);
       dirtyDrag();
       return;
     }
