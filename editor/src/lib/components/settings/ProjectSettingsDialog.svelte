@@ -8,6 +8,7 @@
     finishCapture,
     type SettingsTab,
   } from '$lib/state/settings.svelte';
+  import { watchGamepad } from '$lib/runtime/devices';
   import GeneralTab from './GeneralTab.svelte';
   import InputTab from './InputTab.svelte';
   import PhysicsTab from './PhysicsTab.svelte';
@@ -71,6 +72,13 @@
       window.removeEventListener('keyup', onkey, true);
       returnFocus?.focus();
     };
+  });
+
+  // Gamepad capture (INP-001): while a capture is pending, wait for a button, trigger or stick. The keyboard
+  // path is still `onkey`. Whichever arrives first wins, and finishCapture clears the capture, which stops the wait.
+  $effect(() => {
+    if (!settingsUi.capture) return;
+    return watchGamepad((code) => finishCapture(code));
   });
 </script>
 
