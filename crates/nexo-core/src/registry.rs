@@ -601,8 +601,8 @@ pub fn default_value(kind: &str, prop: &str) -> Option<Value> {
 
 /// Vector component named as a property: "position_x" is the X of "position", and "scale_y" the Y of "scale". Returns
 /// the vector property and the index of the component. Scripts use these names (Move To, Tween) as numeric properties.
-pub fn componente(nome: &str) -> Option<(&'static str, usize)> {
-    match nome {
+pub fn component(name: &str) -> Option<(&'static str, usize)> {
+    match name {
         "position_x" => Some(("position", 0)),
         "position_y" => Some(("position", 1)),
         "scale_x" => Some(("scale", 0)),

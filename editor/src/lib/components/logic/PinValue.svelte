@@ -62,19 +62,19 @@
   />
 {:else if ty === 'String' && prop?.kind === 'enum'}
   <select
-    class="campo largo"
+    class="campo wide"
     value={texto(valor)}
     onpointerdown={pare}
     onchange={(e) => onchange({ String: e.currentTarget.value })}
     aria-label="Opção"
   >
-    {#each prop.options as opcao (opcao)}
-      <option value={opcao}>{opcao}</option>
+    {#each prop.options as option (option)}
+      <option value={option}>{option}</option>
     {/each}
   </select>
 {:else if ty === 'String' && prop?.kind === 'color'}
   <input
-    class="cor"
+    class="color"
     type="color"
     value={texto(valor) || '#ffffff'}
     onpointerdown={pare}
@@ -146,7 +146,7 @@
   .num {
     width: 46px;
   }
-  .largo {
+  .wide {
     width: 96px;
   }
   .par {
@@ -156,7 +156,7 @@
   .marca {
     margin: 0 2px;
   }
-  .cor {
+  .color {
     width: 46px;
     height: 18px;
     padding: 0;

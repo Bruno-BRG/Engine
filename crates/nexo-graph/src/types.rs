@@ -126,6 +126,8 @@ mod tests {
         assert_eq!(PinType::of_prop(PropKind::Vec2), Some(PinType::Vec2));
         // A list of points has no pin: property nodes refuse it.
         assert_eq!(PinType::of_prop(PropKind::Points), None);
+        // A map (script_vars, VIS-022) has no pin either.
+        assert_eq!(PinType::of_prop(PropKind::Map), None);
     }
 
     #[test]
@@ -142,5 +144,6 @@ mod tests {
         assert_eq!(Value::from_json(PropKind::Vec2, &json!([1.0])), None);
         assert_eq!(Value::from_json(PropKind::Float, &json!("x")), None);
         assert_eq!(Value::from_json(PropKind::Points, &json!([])), None);
+        assert_eq!(Value::from_json(PropKind::Map, &json!({})), None);
     }
 }

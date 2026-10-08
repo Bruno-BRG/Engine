@@ -174,8 +174,12 @@ pub enum Refusal {
         node_type: String,
         name: String,
     },
-    /// Property node whose property is a list of points, which property nodes do not read yet.
-    PointsProperty { label: String, name: String },
+    /// Property node whose property has no pin: a list of points or a map, which property nodes do not read yet.
+    UnsupportedProperty {
+        label: String,
+        name: String,
+        kind: PropKind,
+    },
     /// Property node with a declared type and no embedded property name.
     PropertyWithoutName { label: String },
     /// Type or name of a property node comes from a wire. The compiler needs them as embedded values.
@@ -185,6 +189,16 @@ pub enum Refusal {
 /// Name of a cycle class, as it appears in the messages.
 fn cycle_class(flow: bool) -> &'static str {
     if flow { "de fluxo" } else { "de dados" }
+}
+
+/// Name of a property kind that has no pin, as it appears in the messages. Only lists of points and maps lack a pin
+/// (`PinType::of_prop`).
+fn kind_without_pin(kind: PropKind) -> &'static str {
+    match kind {
+        PropKind::Map => "um mapa",
+        PropKind::Points => "uma lista de pontos",
+        _ => "um valor sem pino",
+    }
 }
 
 impl Refusal {
@@ -245,9 +259,10 @@ impl Refusal {
                 node_type,
                 name,
             } => format!("{label}: {node_type} não tem a propriedade '{name}'"),
-            Refusal::PointsProperty { label, name } => {
-                format!("{label}: '{name}' é uma lista de pontos, que os nós de propriedade ainda não leem")
-            }
+            Refusal::UnsupportedProperty { label, name, kind } => format!(
+                "{label}: '{name}' é {}, que os nós de propriedade ainda não leem",
+                kind_without_pin(*kind)
+            ),
             Refusal::PropertyWithoutName { label } => {
                 format!("{label} precisa do nome da propriedade embutido")
             }
@@ -286,7 +301,9 @@ impl Refusal {
             Refusal::RequiredInputMissing { field: false, .. } => "Ligue um fio a essa entrada",
             Refusal::UnknownNodeType { .. } => "Escolha um tipo da lista do nó",
             Refusal::UnknownProperty { .. } => "Escolha uma propriedade da lista do nó",
-            Refusal::PointsProperty { .. } => "Escolha uma propriedade que não seja lista de pontos",
+            Refusal::UnsupportedProperty { .. } => {
+                "Escolha uma propriedade de número, texto, booleano ou vetor"
+            }
             Refusal::PropertyWithoutName { .. } => "Escolha a propriedade no campo do nó",
             Refusal::WiredPropertyPin { .. } => {
                 "Escreva o valor no campo do nó, em vez de ligar um fio"
@@ -362,7 +379,7 @@ fn declared_property(node: &GraphNode) -> Result<DeclaredProperty, Refusal> {
     if name.is_empty() {
         return Err(Refusal::PropertyWithoutName { label });
     }
-    if let Some((vector, index)) = registry::componente(&name) {
+    if let Some((vector, index)) = registry::component(&name) {
         let def = registry::prop_def(&node_type, vector)
             .filter(|d| d.kind == PropKind::Vec2)
             .ok_or(Refusal::UnknownProperty {
@@ -384,7 +401,11 @@ fn declared_property(node: &GraphNode) -> Result<DeclaredProperty, Refusal> {
         node_type: node_type.clone(),
         name: name.clone(),
     })?;
-    let ty = PinType::of_prop(def.kind).ok_or(Refusal::PointsProperty { label, name })?;
+    let ty = PinType::of_prop(def.kind).ok_or(Refusal::UnsupportedProperty {
+        label,
+        name,
+        kind: def.kind,
+    })?;
     Ok(DeclaredProperty {
         ty,
         default: Value::from_json(def.kind, &def.default),
@@ -667,7 +688,8 @@ impl Graph {
         Ok(())
     }
 
-    /// Tira o valor embutido de uma entrada: ela volta ao padrão da biblioteca. Devolve se havia valor.
+    /// Removes the embedded value of an input, so it goes back to the library default. Returns the wires that no
+    /// longer type-check when the type or the name of a property node is removed (VIS-021); otherwise, an empty list.
     pub fn remove_value(&mut self, node: u64, pin: &str) -> Vec<Wire> {
         let existed = match self.nodes.iter_mut().find(|n| n.id == node) {
             Some(n) => {
@@ -686,21 +708,33 @@ impl Graph {
     }
 
     /// Removes the wires of a property node's value pin that no longer type-check after its type or name changed
-    /// (VIS-021), and returns them. Does nothing for other nodes.
+    /// (VIS-021), and returns them, in their order. Does nothing for other nodes. The stale wires are found on the
+    /// graph as it is and removed together, so the order in which the wires were made does not change the result.
     fn drop_stale_value_wires(&mut self, node: u64) -> Vec<Wire> {
         let mut removed = Vec::new();
         if !self.node(node).is_some_and(|n| is_property_node(&n.kind)) {
             return removed;
         }
-        while let Some(i) = self.stale_value_wire(node) {
-            removed.push(self.wires.remove(i));
+        loop {
+            let stale = self.stale_value_wires(node);
+            if stale.is_empty() {
+                return removed;
+            }
+            let mut kept = Vec::with_capacity(self.wires.len());
+            for (i, wire) in std::mem::take(&mut self.wires).into_iter().enumerate() {
+                if stale.contains(&i) {
+                    removed.push(wire);
+                } else {
+                    kept.push(wire);
+                }
+            }
+            self.wires = kept;
         }
-        removed
     }
 
-    /// Index of the first wire that is tied to the value of `node` and no longer type-checks. Tied wires are the
-    /// input wire into `value`, the output wires from `value`, and the wires that leave the reroutes it feeds.
-    fn stale_value_wire(&self, node: u64) -> Option<usize> {
+    /// Indexes of the wires tied to the value of `node` that no longer type-check. Tied wires are the input wire into
+    /// `value`, the output wires from `value`, and the wires that leave the reroutes it feeds (VIS-021).
+    fn stale_value_wires(&self, node: u64) -> Vec<usize> {
         // (node, pin) pairs that carry the value of `node`: its `value` output, and the outputs of the reroutes it feeds.
         let mut carriers: HashSet<(u64, String)> = HashSet::from([(node, "value".to_string())]);
         let mut grew = true;
@@ -713,11 +747,16 @@ impl Graph {
                 }
             }
         }
-        self.wires.iter().position(|w| {
-            let into_value = w.to.node == node && w.to.pin == "value";
-            let from_value = carriers.contains(&(w.from.node, w.from.pin.clone()));
-            (into_value || from_value) && self.endpoint_type(&w.from, &w.to).is_err()
-        })
+        self.wires
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| {
+                let into_value = w.to.node == node && w.to.pin == "value";
+                let from_value = carriers.contains(&(w.from.node, w.from.pin.clone()));
+                (into_value || from_value) && self.endpoint_type(&w.from, &w.to).is_err()
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Declara ou troca uma variável (VIS-022). Se o nome já existe, a variável é trocada no mesmo lugar, para a
@@ -2260,6 +2299,21 @@ mod tests {
     }
 
     #[test]
+    fn map_property_is_refused_with_its_own_message() {
+        // script_vars is the map of exported values that every node has (VIS-022). It has no pin, and it is not a
+        // list of points, so the message must not say so.
+        let mut g = Graph::default();
+        let id = property_node(&mut g, "GetProperty", "Sprite2D", "script_vars");
+        let errors = g.validate();
+        assert!(
+            errors.iter().any(|e| e.message.contains("é um mapa, que os nós de propriedade")),
+            "{errors:?}"
+        );
+        assert!(!errors.iter().any(|e| e.message.contains("lista de pontos")), "{errors:?}");
+        assert!(g.output_type(g.node(id).unwrap(), "value").is_err());
+    }
+
+    #[test]
     fn wired_type_and_name_are_refused() {
         let mut g = Graph::default();
         let concat = adiciona(&mut g, "Concat");
@@ -2363,5 +2417,54 @@ mod tests {
         let dropped = g.remove_value(writer, "type");
         assert_eq!(dropped.len(), 1);
         assert!(g.wires.is_empty());
+    }
+
+    /// Reader of Sprite2D "modulate" (text), wired through a reroute into the text input of a Print node. The wire
+    /// into the reroute is the first one made, or the last one when `last` is true (it is made again after the other).
+    fn reroute_to_print(last: bool) -> (Graph, u64, u64, u64) {
+        let mut g = Graph::default();
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "modulate");
+        let reroute = g.add_reroute([0.0, 0.0]);
+        let print = adiciona(&mut g, "Print");
+        g.connect((reader, "value"), (reroute, "in")).unwrap();
+        g.connect((reroute, "out"), (print, "msg")).unwrap();
+        if last {
+            g.disconnect((reader, "value"), (reroute, "in")).unwrap();
+            g.connect((reader, "value"), (reroute, "in")).unwrap();
+        }
+        (g, reader, reroute, print)
+    }
+
+    /// Changing the name of a property node drops the wires that no longer type-check, including the wire out of a
+    /// reroute that takes its type from the value. The result is the same whatever order the wires were made in
+    /// (VIS-021): before, the wire into the reroute went first, and the wire out of it was left with no input.
+    #[test]
+    fn stale_wires_behind_reroute_drop_the_same_in_any_order() {
+        // "nao_existe" is not a property of Sprite2D, so the value has no type and both wires go. "visible" is a bool:
+        // only the wire out of the reroute (text) goes, and the wire into the reroute, now bool, stays.
+        for (name, kept) in [("nao_existe", 0), ("visible", 1)] {
+            let mut outcomes = Vec::new();
+            for last in [false, true] {
+                let (mut g, reader, reroute, print) = reroute_to_print(last);
+                // The list keeps the order the wires were made in, so `last` changes the order the removal sees.
+                assert_eq!(g.wires[0].to.node, if last { print } else { reroute }, "{name}");
+                let dropped = g
+                    .set_value(reader, "name", Value::String(name.into()))
+                    .unwrap();
+                assert_eq!(g.wires.len(), kept, "{name}, last={last}: {:?}", g.wires);
+                assert_eq!(dropped.len(), 2 - kept, "{name}, last={last}");
+                let errors = g.validate();
+                assert!(
+                    !errors.iter().any(|e| e.message.contains("sem fio de entrada")),
+                    "{name}, last={last}: {errors:?}"
+                );
+                let mut dropped: Vec<String> = dropped.iter().map(|w| format!("{w:?}")).collect();
+                dropped.sort();
+                let mut left: Vec<String> = g.wires.iter().map(|w| format!("{w:?}")).collect();
+                left.sort();
+                outcomes.push((dropped, left));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "{name}");
+        }
     }
 }

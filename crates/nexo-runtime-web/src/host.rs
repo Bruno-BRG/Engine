@@ -3,7 +3,7 @@
 //! quadro de cada script. O `Mundo` guarda o nó dono do script, para o console dizer de onde veio cada mensagem.
 
 use nexo_core::audio::DEFAULT_BUS;
-use nexo_core::registry::{self, PropKind, componente};
+use nexo_core::registry::{self, PropKind, component};
 use nexo_core::scene::{as_vec2, value_of};
 use nexo_core::{AudioCommand, AudioPlayback, Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Host, LogLevel, Value};
@@ -94,7 +94,7 @@ impl Host for Mundo<'_> {
     /// Reads the property as a value of its type. A vector component ("position_x") is decimal.
     fn get_property(&mut self, node: u64, name: &str) -> Option<Value> {
         let n = self.cena.node(Uid(node))?;
-        if let Some((prop, i)) = componente(name) {
+        if let Some((prop, i)) = component(name) {
             if !e_vetor(&n.kind, prop) {
                 return None;
             }
@@ -111,7 +111,7 @@ impl Host for Mundo<'_> {
         let Some(n) = self.cena.node(uid) else {
             return false;
         };
-        let (prop, stored) = if let Some((prop, i)) = componente(name) {
+        let (prop, stored) = if let Some((prop, i)) = component(name) {
             if !e_vetor(&n.kind, prop) {
                 return false;
             }
