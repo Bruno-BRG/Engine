@@ -206,7 +206,10 @@ impl Graph {
             .wires
             .iter()
             .position(|w| {
-                w.from.node == from.0 && w.from.pin == from.1 && w.to.node == to.0 && w.to.pin == to.1
+                w.from.node == from.0
+                    && w.from.pin == from.1
+                    && w.to.node == to.0
+                    && w.to.pin == to.1
             })
             .ok_or_else(|| format!("não há fio de {}.{} para {}.{}", from.0, from.1, to.0, to.1))?;
         self.wires.remove(pos);
@@ -216,7 +219,8 @@ impl Graph {
     /// Remove o fio que chega na entrada `to`, se houver. Devolve se removeu alguma coisa.
     pub fn disconnect_input(&mut self, to: (u64, &str)) -> bool {
         let antes = self.wires.len();
-        self.wires.retain(|w| !(w.to.node == to.0 && w.to.pin == to.1));
+        self.wires
+            .retain(|w| !(w.to.node == to.0 && w.to.pin == to.1));
         self.wires.len() != antes
     }
 
@@ -242,7 +246,13 @@ impl Graph {
     }
 
     /// Declara uma variável do script. O padrão tem de ser do mesmo tipo da variável.
-    pub fn add_variable(&mut self, name: &str, ty: PinType, default: Value, exported: bool) -> Result<(), String> {
+    pub fn add_variable(
+        &mut self,
+        name: &str,
+        ty: PinType,
+        default: Value,
+        exported: bool,
+    ) -> Result<(), String> {
         if name.trim().is_empty() {
             return Err("nome de variável vazio".into());
         }
@@ -316,7 +326,10 @@ impl Graph {
         let ty = self.endpoint_type(&from, &to)?;
         // Cada entrada aceita um fio só. Vale para fluxo e para dados.
         if self.wires.iter().any(|w| w.to == to) {
-            return Err(format!("a entrada '{}' do nó {} já está conectada", to.pin, to.node));
+            return Err(format!(
+                "a entrada '{}' do nó {} já está conectada",
+                to.pin, to.node
+            ));
         }
         // Há ciclo se o nó de destino já alcança o de origem pelos fios da mesma classe.
         let flow = ty == PinType::Flow;
@@ -422,7 +435,12 @@ impl Graph {
     pub(crate) fn variable_of(&self, node: &GraphNode) -> Result<&Variable, String> {
         let name = match node.values.get("name") {
             Some(Value::String(s)) => s.as_str(),
-            _ => return Err(format!("{} precisa do nome da variável embutido", node.etiqueta())),
+            _ => {
+                return Err(format!(
+                    "{} precisa do nome da variável embutido",
+                    node.etiqueta()
+                ));
+            }
         };
         self.variable(name)
             .ok_or_else(|| format!("variável '{name}' não existe"))
@@ -543,10 +561,10 @@ impl Graph {
                     ));
                 }
             }
-            if node.kind == "GetVariable" || node.kind == "SetVariable" {
-                if let Err(msg) = self.variable_of(node) {
-                    erros.push(erro(node.id, msg));
-                }
+            if (node.kind == "GetVariable" || node.kind == "SetVariable")
+                && let Err(msg) = self.variable_of(node)
+            {
+                erros.push(erro(node.id, msg));
             }
         }
 
@@ -635,7 +653,9 @@ mod tests {
         let erro = g.connect((ev, "exec"), (99, "exec")).unwrap_err();
         assert!(erro.contains("não existe"), "{erro}");
         let soma = adiciona(&mut g, "Add");
-        let erro = g.connect((ev, "exec"), (soma, "entrada_falsa")).unwrap_err();
+        let erro = g
+            .connect((ev, "exec"), (soma, "entrada_falsa"))
+            .unwrap_err();
         assert!(erro.contains("não tem a entrada"), "{erro}");
     }
 
@@ -821,7 +841,8 @@ mod tests {
     fn validar_pega_variavel_inexistente() {
         let mut g = Graph::default();
         let le = adiciona(&mut g, "GetVariable");
-        g.set_value(le, "name", Value::String("nada".into())).unwrap();
+        g.set_value(le, "name", Value::String("nada".into()))
+            .unwrap();
         let erros = g.validate();
         assert!(
             erros
@@ -837,15 +858,30 @@ mod tests {
         let a = adiciona(&mut g, "Add");
         let b = adiciona(&mut g, "Add");
         g.wires.push(Wire {
-            from: PinRef { node: a, pin: "result".into() },
-            to: PinRef { node: b, pin: "a".into() },
+            from: PinRef {
+                node: a,
+                pin: "result".into(),
+            },
+            to: PinRef {
+                node: b,
+                pin: "a".into(),
+            },
         });
         g.wires.push(Wire {
-            from: PinRef { node: b, pin: "result".into() },
-            to: PinRef { node: a, pin: "a".into() },
+            from: PinRef {
+                node: b,
+                pin: "result".into(),
+            },
+            to: PinRef {
+                node: a,
+                pin: "a".into(),
+            },
         });
         let erros = g.validate();
-        assert!(erros.iter().any(|e| e.message.contains("ciclo de dados")), "{erros:?}");
+        assert!(
+            erros.iter().any(|e| e.message.contains("ciclo de dados")),
+            "{erros:?}"
+        );
     }
 
     #[test]
@@ -864,7 +900,13 @@ mod tests {
             exported: false,
         });
         let erros = g.validate();
-        assert!(erros.iter().any(|e| e.message.contains("mais de uma vez")), "{erros:?}");
-        assert!(erros.iter().any(|e| e.message.contains("padrão de 'vida'")), "{erros:?}");
+        assert!(
+            erros.iter().any(|e| e.message.contains("mais de uma vez")),
+            "{erros:?}"
+        );
+        assert!(
+            erros.iter().any(|e| e.message.contains("padrão de 'vida'")),
+            "{erros:?}"
+        );
     }
 }

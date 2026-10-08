@@ -59,6 +59,14 @@ impl Value {
     }
 }
 
+/// Nível de uma mensagem do console (CON-004): Print escreve Info, Warn escreve Warning, Error escreve Error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogLevel {
+    Info,
+    Warning,
+    Error,
+}
+
 /// Variável do script (VIS-022). Com `exported`, ela aparece no Inspector e cada instância guarda o seu valor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Variable {
