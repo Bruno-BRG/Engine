@@ -6,7 +6,7 @@ use nexo_core::audio::DEFAULT_BUS;
 use nexo_core::registry::{self, PropKind};
 use nexo_core::scene::{as_vec2, value_of};
 use nexo_core::{AudioCommand, AudioPlayback, Input, ProjectSettings, Scene, Uid};
-use nexo_graph::{Host, LogLevel};
+use nexo_graph::{Host, LogLevel, Value};
 use nexo_physics::Physics;
 use serde::Serialize;
 use serde_json::json;
@@ -58,6 +58,31 @@ fn e_vetor(kind: &str, prop: &str) -> bool {
     registry::prop_def(kind, prop).is_some_and(|d| d.kind == PropKind::Vec2)
 }
 
+/// Valor decimal: um decimal, ou um inteiro (que se converte).
+fn decimal(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float(f) => Some(*f),
+        Value::Int(n) => Some(*n as f64),
+        _ => None,
+    }
+}
+
+/// JSON que o registro guarda para uma propriedade do tipo `kind`, a partir do valor do script (VIS-021). `None`
+/// quando o valor não é desse tipo: a gravação é recusada. Decimal e inteiro se convertem; `coerce` do núcleo
+/// arredonda e limita o número.
+fn json_de(kind: PropKind, value: &Value) -> Option<serde_json::Value> {
+    match (kind, value) {
+        (PropKind::Float, Value::Float(f)) => Some(json!(f)),
+        (PropKind::Float, Value::Int(n)) => Some(json!(*n as f64)),
+        (PropKind::Int | PropKind::Mask, Value::Int(n)) => Some(json!(n)),
+        (PropKind::Int | PropKind::Mask, Value::Float(f)) => Some(json!(f)),
+        (PropKind::Bool, Value::Bool(b)) => Some(json!(b)),
+        (PropKind::Str | PropKind::Enum | PropKind::Color | PropKind::Uid, Value::String(s)) => Some(json!(s)),
+        (PropKind::Vec2, Value::Vec2(v)) => Some(json!(v)),
+        _ => None,
+    }
+}
+
 /// Nível do console no contrato com o TypeScript. Print escreve "info", Warn "warning" e Error "error".
 fn nivel(level: LogLevel) -> &'static str {
     match level {
@@ -78,23 +103,22 @@ impl Mundo<'_> {
 }
 
 impl Host for Mundo<'_> {
-    fn get_property(&mut self, node: u64, name: &str) -> Option<f64> {
+    /// Lê a propriedade como valor do tipo dela. Uma componente de vetor ("position_x") é decimal.
+    fn get_property(&mut self, node: u64, name: &str) -> Option<Value> {
         let n = self.cena.node(Uid(node))?;
         if let Some((prop, i)) = componente(name) {
             if !e_vetor(&n.kind, prop) {
                 return None;
             }
-            return value_of(n, prop).as_array()?.get(i)?.as_f64();
+            return value_of(n, prop).as_array()?.get(i)?.as_f64().map(Value::Float);
         }
         let def = registry::prop_def(&n.kind, name)?;
-        match def.kind {
-            PropKind::Float | PropKind::Int => value_of(n, name).as_f64(),
-            _ => None,
-        }
+        Value::from_json(def.kind, &value_of(n, name))
     }
 
-    /// Grava sem histórico: a reprodução tem a sua própria cópia da cena, que não entra no desfazer.
-    fn set_property(&mut self, node: u64, name: &str, value: f64) -> bool {
+    /// Grava sem histórico: a reprodução tem a sua própria cópia da cena, que não entra no desfazer. Recusa o valor
+    /// de outro tipo que o da propriedade.
+    fn set_property(&mut self, node: u64, name: &str, value: Value) -> bool {
         let uid = Uid(node);
         let Some(n) = self.cena.node(uid) else {
             return false;
@@ -103,14 +127,20 @@ impl Host for Mundo<'_> {
             if !e_vetor(&n.kind, prop) {
                 return false;
             }
+            let Some(x) = decimal(&value) else {
+                return false;
+            };
             let mut v = as_vec2(&value_of(n, prop));
-            v[i] = value;
+            v[i] = x;
             (prop, json!(v))
         } else {
-            match registry::prop_def(&n.kind, name) {
-                Some(d) if matches!(d.kind, PropKind::Float | PropKind::Int) => (name, json!(value)),
-                _ => return false,
-            }
+            let Some(def) = registry::prop_def(&n.kind, name) else {
+                return false;
+            };
+            let Some(valor) = json_de(def.kind, &value) else {
+                return false;
+            };
+            (name, valor)
         };
         self.cena.set_runtime_prop(uid, prop, valor).is_ok()
     }
@@ -215,5 +245,95 @@ impl Host for Mundo<'_> {
             outro => outro,
         };
         self.audio.push(command);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Partes da reprodução que o host usa, com uma cena de um Sprite2D.
+    struct Partes {
+        cena: Scene,
+        fisica: Physics,
+        audio: AudioPlayback,
+        entrada: Input,
+        ajustes: ProjectSettings,
+        console: Vec<Mensagem>,
+        uid: Uid,
+    }
+
+    impl Partes {
+        fn novas() -> Partes {
+            let mut cena = Scene::new("teste", 1);
+            let uid = cena.add_node(None, "Sprite2D", None).unwrap();
+            let ajustes = ProjectSettings::default();
+            let fisica = Physics::build(&cena, &ajustes);
+            Partes {
+                cena,
+                fisica,
+                audio: AudioPlayback::default(),
+                entrada: Input::default(),
+                ajustes,
+                console: Vec::new(),
+                uid,
+            }
+        }
+
+        fn mundo(&mut self) -> Mundo<'_> {
+            Mundo {
+                cena: &mut self.cena,
+                fisica: &mut self.fisica,
+                audio: &mut self.audio,
+                entrada: &self.entrada,
+                ajustes: &self.ajustes,
+                ponteiro: Ponteiro::default(),
+                console: &mut self.console,
+                dono: self.uid,
+            }
+        }
+    }
+
+    #[test]
+    fn leitura_devolve_o_tipo_da_propriedade() {
+        let mut p = Partes::novas();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        assert_eq!(m.get_property(uid, "modulate"), Some(Value::String("#ffffff".into())));
+        assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([0.0, 0.0])));
+        assert_eq!(m.get_property(uid, "centered"), Some(Value::Bool(true)));
+        assert_eq!(m.get_property(uid, "z_index"), Some(Value::Int(0)));
+        assert_eq!(m.get_property(uid, "position_x"), Some(Value::Float(0.0)));
+        assert_eq!(m.get_property(uid, "nao_existe"), None);
+    }
+
+    #[test]
+    fn escrita_de_tipo_errado_devolve_false() {
+        let mut p = Partes::novas();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        assert!(m.set_property(uid, "modulate", Value::String("#ff0000".into())));
+        // Decimal numa cor, texto num booleano, decimal num vetor e propriedade inexistente: recusados.
+        assert!(!m.set_property(uid, "modulate", Value::Float(1.0)));
+        assert!(!m.set_property(uid, "centered", Value::String("sim".into())));
+        assert!(!m.set_property(uid, "position", Value::Float(3.0)));
+        assert!(!m.set_property(uid, "nao_existe", Value::Float(1.0)));
+        assert_eq!(m.get_property(uid, "modulate"), Some(Value::String("#ff0000".into())));
+        // Decimal e inteiro se convertem, como antes da tipagem; o núcleo arredonda o inteiro.
+        assert!(m.set_property(uid, "z_index", Value::Float(4.6)));
+        assert_eq!(m.get_property(uid, "z_index"), Some(Value::Int(5)));
+        assert!(m.set_property(uid, "rotation", Value::Int(90)));
+        assert_eq!(m.get_property(uid, "rotation"), Some(Value::Float(90.0)));
+    }
+
+    #[test]
+    fn componente_de_vetor_continua_decimal() {
+        let mut p = Partes::novas();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        assert!(m.set_property(uid, "position_x", Value::Float(12.0)));
+        assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([12.0, 0.0])));
+        assert_eq!(m.get_property(uid, "position_x"), Some(Value::Float(12.0)));
+        assert!(!m.set_property(uid, "position_x", Value::String("x".into())));
     }
 }

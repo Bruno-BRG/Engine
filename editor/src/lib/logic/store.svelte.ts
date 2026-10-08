@@ -3,9 +3,9 @@
 // é gravado com um atraso curto depois da última alteração, e ao trocar de script ou fechar o projeto.
 
 import { app } from '$lib/state/app.svelte';
-import { scene, type NodeView } from '$lib/state/scene.svelte';
+import { scene, type NodeType, type NodeView } from '$lib/state/scene.svelte';
 import { log } from '$lib/state/log.svelte';
-import { createGraphEditor, readNodeLibrary, type GraphEditor } from '$lib/runtime/engine';
+import { createGraphEditor, readNodeLibrary, readNodeRegistry, type GraphEditor } from '$lib/runtime/engine';
 import { isTauri } from '$lib/platform';
 import { logicDebug } from './debug.svelte';
 import {
@@ -55,6 +55,8 @@ class LogicState {
   /** Tipos de nó da biblioteca de lógica (estáticos: lidos uma vez do WASM). */
   defs = $state.raw<NodeDef[]>([]);
   defsByKind = $derived(new Map(this.defs.map((d) => [d.kind, d] as const)));
+  /** Tipos do registro (com as propriedades de cada um), para escolher o tipo e o nome dos nós de propriedade. */
+  tipos = $state.raw<NodeType[]>([]);
 
   /** Pasta do projeto aberto, ou null. */
   project = $state<string | null>(null);
@@ -106,6 +108,7 @@ class LogicState {
     try {
       if (!this.defs.length) {
         this.defs = JSON.parse(await readNodeLibrary()) as NodeDef[];
+        this.tipos = JSON.parse(readNodeRegistry()) as NodeType[];
       }
       await this.#reload();
     } catch (e) {

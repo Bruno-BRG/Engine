@@ -5,6 +5,7 @@
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { log } from '$lib/state/log.svelte';
   import { familyOf, type PinFilter } from '$lib/logic/library';
+  import { ehNoDePropriedade, propriedadeDoTipo, propriedadesDoTipo, valorPadrao } from '$lib/logic/propriedades';
   import {
     COMMENT_MIN,
     ROW_H,
@@ -26,6 +27,7 @@
     pinStyle,
     textOf,
     type GraphNode,
+    type PinDef,
     type PinRef,
     type PinType,
     type Value,
@@ -34,6 +36,7 @@
   import NodeSearch from './NodeSearch.svelte';
   import PinShape from './PinShape.svelte';
   import PinValue from './PinValue.svelte';
+  import PropSelect from './PropSelect.svelte';
 
   /** Arrasto em andamento: pan, mover seleção, fio a partir de um pino, caixa de seleção ou redimensionar. */
   type Drag =
@@ -460,6 +463,42 @@
     return logic.defsByKind.get(n.kind)?.label ?? n.kind;
   }
 
+  /** Texto de um valor embutido ('' quando o pino não tem valor de texto). */
+  function textoEmbutido(n: GraphNode, pin: string): string {
+    const v = n.values[pin];
+    return v && 'String' in v ? v.String : '';
+  }
+
+  /** Propriedade do registro escolhida num nó de propriedade (pelo tipo e pelo nome embutidos), ou undefined. */
+  function propDoNo(n: GraphNode) {
+    const tipo = textoEmbutido(n, 'type');
+    return tipo ? propriedadeDoTipo(logic.tipos, tipo, textoEmbutido(n, 'name')) : undefined;
+  }
+
+  /** Tipo do campo de um pino de entrada. Nos nós de propriedade, o pino de valor é o tipo que o grafo resolveu. */
+  function tipoDoCampo(n: GraphNode, pi: PinDef): PinType | null {
+    return ehNoDePropriedade(n.kind) ? (tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? null) : pi.ty;
+  }
+
+  /** Valor mostrado no campo do pino: o embutido, ou o padrão da propriedade escolhida. */
+  function valorDoCampo(n: GraphNode, pi: PinDef): Value | undefined {
+    const embutido = n.values[pi.name];
+    if (embutido) return embutido;
+    if (ehNoDePropriedade(n.kind) && pi.name === 'value') {
+      const def = propDoNo(n);
+      return (def && valorPadrao(def)) ?? undefined;
+    }
+    return pi.default ?? undefined;
+  }
+
+  /** Opções do seletor de tipo: todos os tipos do registro. */
+  const opcoesDeTipo = $derived(logic.tipos.map((t) => ({ value: t.name, label: t.name })));
+
+  /** Opções do seletor de nome: as propriedades do tipo escolhido no nó (com as herdadas). */
+  function opcoesDeNome(n: GraphNode) {
+    return propriedadesDoTipo(logic.tipos, textoEmbutido(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
+  }
+
   function temPontoDeParada(id: number) {
     return pontosDeParada.has(id);
   }
@@ -583,6 +622,7 @@
             {@const po = def.outputs[i]}
             <div class="linha" style="height: {ROW_H}px">
               {#if pi}
+                {@const tyCampo = tipoDoCampo(n, pi)}
                 <span
                   class="pino entrada"
                   class:aceita={alvoDoArrasto(n.id, pi.name, false) === 'aceita'}
@@ -595,12 +635,29 @@
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? pi.ty} />
                 </span>
                 <span class="rotulo">{pi.label}</span>
-                {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name)) && pi.ty && pi.ty !== 'Flow' && pi.ty !== 'Node'}
-                  <PinValue
-                    ty={pi.ty}
-                    valor={n.values[pi.name] ?? pi.default ?? undefined}
-                    onchange={(v) => logic.setValue(n.id, pi.name, v)}
-                  />
+                {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name))}
+                  {#if ehNoDePropriedade(n.kind) && pi.name === 'type'}
+                    <PropSelect
+                      valor={textoEmbutido(n, 'type')}
+                      opcoes={opcoesDeTipo}
+                      vazio="Sem tipo (decimal)"
+                      onchange={(v) => logic.setValue(n.id, 'type', { String: v })}
+                    />
+                  {:else if ehNoDePropriedade(n.kind) && pi.name === 'name'}
+                    <PropSelect
+                      valor={textoEmbutido(n, 'name')}
+                      opcoes={opcoesDeNome(n)}
+                      vazio="Escolha a propriedade"
+                      onchange={(v) => logic.setValue(n.id, 'name', { String: v })}
+                    />
+                  {:else if tyCampo && tyCampo !== 'Flow' && tyCampo !== 'Node'}
+                    <PinValue
+                      ty={tyCampo}
+                      valor={valorDoCampo(n, pi)}
+                      prop={ehNoDePropriedade(n.kind) ? propDoNo(n) : undefined}
+                      onchange={(v) => logic.setValue(n.id, pi.name, v)}
+                    />
+                  {/if}
                 {/if}
               {/if}
               {#if po}

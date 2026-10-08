@@ -8,8 +8,9 @@ use serde::Serialize;
 use std::sync::OnceLock;
 
 /// Pino de um nó. `ty` vazio quer dizer "o tipo que o próprio nó decide": o da variável nomeada (GetVariable e
-/// SetVariable) ou o do fio que chega (Reroute). `default` vazio torna a entrada obrigatória: sem fio e sem
-/// valor embutido, a validação falha.
+/// SetVariable), o da propriedade nomeada (GetProperty e SetProperty) ou o do fio que chega (Reroute). `default`
+/// vazio torna a entrada obrigatória: sem fio e sem valor embutido, a validação falha. Nos pinos de propriedade o
+/// padrão vem do registro (ver `graph::padrao_da_entrada`).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinDef {
@@ -46,6 +47,17 @@ impl PinDef {
 
     /// Pino cujo tipo segue a variável nomeada pelo próprio nó.
     fn of_variable(name: &'static str, label: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            ty: None,
+            default: None,
+        }
+    }
+
+    /// Pino cujo tipo segue a propriedade nomeada pelo próprio nó (VIS-021): o tipo dela no registro. Como o de
+    /// variável, não tem `ty` nem padrão fixo; a resolução está em `graph::tipo_da_propriedade`.
+    fn of_property(name: &'static str, label: &'static str) -> Self {
         Self {
             name,
             label,
@@ -406,25 +418,31 @@ fn build() -> Vec<NodeDef> {
             vec![exec(), texto("msg", "Texto", "")],
             vec![exec()],
         ),
-        // Nós da cena.
+        // Nós da cena. O tipo e o nome da propriedade são valores embutidos: o compilador não vê a cena, então o
+        // tipo do pino de valor sai do registro (VIS-021). Sem tipo declarado, o valor é decimal, como antes.
         def(
             "GetProperty",
             "Propriedades",
             "Ler propriedade",
-            "Lê uma propriedade numérica de qualquer nó.",
-            vec![no("node", "Nó"), texto("name", "Propriedade", "")],
-            vec![PinDef::new("value", "Valor", PinType::Float)],
+            "Lê uma propriedade de qualquer nó. O tipo do Valor segue a propriedade escolhida; sem tipo, é decimal.",
+            vec![
+                no("node", "Nó"),
+                texto("type", "Tipo do nó", ""),
+                texto("name", "Propriedade", ""),
+            ],
+            vec![PinDef::of_property("value", "Valor")],
         ),
         def(
             "SetProperty",
             "Propriedades",
             "Definir propriedade",
-            "Grava uma propriedade numérica de qualquer nó.",
+            "Grava uma propriedade de qualquer nó. O tipo do Valor segue a propriedade escolhida; sem tipo, é decimal.",
             vec![
                 exec(),
                 no("node", "Nó"),
+                texto("type", "Tipo do nó", ""),
                 texto("name", "Propriedade", ""),
-                decimal("value", "Valor", 0.0),
+                PinDef::of_property("value", "Valor"),
             ],
             vec![exec()],
         ),
@@ -729,5 +747,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn propriedades_tem_tipo_embutido_e_valor_de_tipo_do_registro() {
+        // O tipo do nó é texto embutido, com padrão vazio (= sem tipo, decimal). O valor segue o registro.
+        for kind in ["GetProperty", "SetProperty"] {
+            let def = find(kind).unwrap();
+            let tipo = def.inputs.iter().find(|p| p.name == "type").unwrap();
+            assert_eq!(tipo.ty, Some(PinType::String), "{kind}");
+            assert_eq!(tipo.default, Some(Value::String(String::new())), "{kind}");
+        }
+        let get = find("GetProperty").unwrap();
+        assert!(get.outputs.iter().any(|p| p.name == "value" && p.ty.is_none()));
+        let set = find("SetProperty").unwrap();
+        assert!(set.inputs.iter().any(|p| p.name == "value" && p.ty.is_none() && p.default.is_none()));
     }
 }

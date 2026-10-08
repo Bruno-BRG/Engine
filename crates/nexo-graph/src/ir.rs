@@ -3,9 +3,9 @@
 //! saltos. Nós latentes (Wait, Tween, Move To, Await Signal, Timer) viram ops que a VM suspende e retoma. Os
 //! erros são reunidos pela validação do grafo e devolvidos ao editor, cada um com o id do nó onde foi achado.
 
-use crate::graph::{Graph, GraphNode, REROUTE, def_of};
+use crate::graph::{Graph, GraphNode, REROUTE, def_of, padrao_da_entrada};
 use crate::library;
-use crate::types::{LogLevel, Value, Variable};
+use crate::types::{LogLevel, PinType, Value, Variable};
 use crate::vm::Context;
 use std::collections::BTreeMap;
 
@@ -179,17 +179,19 @@ pub enum Op {
     MouseScreen {
         dst: Reg,
     },
-    /// `dst` = propriedade `name` do nó `node`.
+    /// `dst` = propriedade `name` do nó `node`, do tipo `ty` (VIS-021). O host tem de devolver esse tipo.
     GetProp {
         dst: Reg,
         node: Reg,
         name: Reg,
+        ty: PinType,
     },
-    /// Grava `value` na propriedade `name` do nó `node`.
+    /// Grava `value`, do tipo `ty`, na propriedade `name` do nó `node` (VIS-021).
     SetProp {
         node: Reg,
         name: Reg,
         value: Reg,
+        ty: PinType,
     },
     /// `dst` = o nó da cena com o nome dado (0 quando não existe).
     FindNode {
@@ -469,11 +471,13 @@ impl<'g> Emitter<'g> {
             }
             "SetProperty" => {
                 let r = self.entradas(node, &["node", "name", "value"])?;
+                let ty = self.graph.input_type(node, "value").map_err(|m| err(id, m))?;
                 self.emit(
                     Op::SetProp {
                         node: r[0],
                         name: r[1],
                         value: r[2],
+                        ty,
                     },
                     id,
                 );
@@ -755,7 +759,7 @@ impl<'g> Emitter<'g> {
             .inputs
             .iter()
             .find(|p| p.name == pin)
-            .and_then(|p| p.default.clone());
+            .and_then(|p| padrao_da_entrada(node, p));
         let value = node.values.get(pin).cloned().or(default).ok_or_else(|| {
             err(
                 node.id,
@@ -931,12 +935,14 @@ impl<'g> Emitter<'g> {
             }
             ("GetProperty", "value") => {
                 let r = self.entradas(node, &["node", "name"])?;
+                let ty = self.graph.output_type(node, "value").map_err(|m| err(id, m))?;
                 let dst = self.reg();
                 self.emit(
                     Op::GetProp {
                         dst,
                         node: r[0],
                         name: r[1],
+                        ty,
                     },
                     id,
                 );
@@ -1112,5 +1118,35 @@ mod tests {
                 .any(|e| e.node == Some(inst) && e.message.contains("antes do nó rodar")),
             "{erros:?}"
         );
+    }
+
+    #[test]
+    fn propriedade_tipada_leva_o_tipo_ao_ir() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        // Lê o z_index (inteiro) do próprio nó e grava no mesmo pino: a IR carrega o tipo nas duas ops.
+        let le = adiciona(&mut g, "GetProperty");
+        g.set_value(le, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(le, "name", Value::String("z_index".into())).unwrap();
+        let grava = adiciona(&mut g, "SetProperty");
+        g.set_value(grava, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(grava, "name", Value::String("z_index".into())).unwrap();
+        // Cor (texto) gravada com um valor embutido.
+        let cor = adiciona(&mut g, "SetProperty");
+        g.set_value(cor, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(cor, "name", Value::String("modulate".into())).unwrap();
+        g.set_value(cor, "value", Value::String("#ff0000".into())).unwrap();
+        g.connect((ev, "exec"), (grava, "exec")).unwrap();
+        g.connect((grava, "exec"), (cor, "exec")).unwrap();
+        g.connect((ev, "self"), (le, "node")).unwrap();
+        g.connect((ev, "self"), (grava, "node")).unwrap();
+        g.connect((ev, "self"), (cor, "node")).unwrap();
+        g.connect((le, "value"), (grava, "value")).unwrap();
+
+        let c = compile(&g).unwrap();
+        let ops = &c.programs[0].ops;
+        assert!(ops.iter().any(|op| matches!(op, Op::GetProp { ty: PinType::Int, .. })), "{ops:?}");
+        assert!(ops.iter().any(|op| matches!(op, Op::SetProp { ty: PinType::Int, .. })), "{ops:?}");
+        assert!(ops.iter().any(|op| matches!(op, Op::SetProp { ty: PinType::String, .. })), "{ops:?}");
     }
 }

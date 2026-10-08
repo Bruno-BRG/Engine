@@ -4,6 +4,7 @@
 
 use crate::library::{self, NodeDef, PinDef};
 use crate::types::{PinType, Value, Variable};
+use nexo_core::registry::{self, PropDef};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -149,6 +150,62 @@ pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, String> {
     library::find(&node.kind).ok_or_else(|| format!("tipo de nó desconhecido: '{}'", node.kind))
 }
 
+/// Nós que leem ou gravam uma propriedade do registro (VIS-021). O pino de valor deles segue o tipo da propriedade.
+pub(crate) fn e_no_de_propriedade(kind: &str) -> bool {
+    matches!(kind, "GetProperty" | "SetProperty")
+}
+
+/// Propriedade que um nó de propriedade declara, pelo tipo e pelo nome embutidos, e o tipo do pino dela. Erro se o
+/// tipo não existe no registro, se a propriedade não é dele nem dos seus ancestrais, ou se é uma lista de pontos.
+fn propriedade_declarada(node: &GraphNode) -> Result<(&'static PropDef, PinType), String> {
+    let tipo = texto_do(node, "type");
+    let nome = texto_do(node, "name");
+    if registry::find(&tipo).is_none() {
+        return Err(format!("{}: o tipo de nó '{tipo}' não existe", node.etiqueta()));
+    }
+    let def = registry::prop_def(&tipo, &nome)
+        .ok_or_else(|| format!("{}: {tipo} não tem a propriedade '{nome}'", node.etiqueta()))?;
+    let ty = PinType::of_prop(def.kind).ok_or_else(|| {
+        format!(
+            "{}: '{nome}' é uma lista de pontos, que os nós de propriedade ainda não leem",
+            node.etiqueta()
+        )
+    })?;
+    Ok((def, ty))
+}
+
+/// Tipo do pino de valor de um nó de propriedade (VIS-021). Sem tipo declarado é decimal, como antes da tipagem,
+/// para os grafos antigos. Com tipo, o pino segue o tipo da propriedade no registro.
+pub(crate) fn tipo_da_propriedade(node: &GraphNode) -> Result<PinType, String> {
+    if texto_do(node, "type").is_empty() {
+        return Ok(PinType::Float);
+    }
+    propriedade_declarada(node).map(|(_, ty)| ty)
+}
+
+/// Valor que uma entrada usa quando não tem fio nem valor embutido (VIS-021). No pino de valor de um nó de
+/// propriedade é o padrão da propriedade declarada, e decimal zero sem tipo declarado. Nos demais pinos, o padrão
+/// da biblioteca.
+pub(crate) fn padrao_da_entrada(node: &GraphNode, pin: &PinDef) -> Option<Value> {
+    if e_no_de_propriedade(&node.kind) && pin.name == "value" {
+        if texto_do(node, "type").is_empty() {
+            return Some(Value::Float(0.0));
+        }
+        return propriedade_declarada(node)
+            .ok()
+            .and_then(|(def, _)| Value::from_json(def.kind, &def.default));
+    }
+    pin.default.clone()
+}
+
+/// Trocar o tipo ou a propriedade de um nó de propriedade tira o valor embutido do pino de valor: ele pode ser de
+/// outro tipo, e o nó não aceitaria mais (VIS-021).
+fn limpa_valor_de_propriedade(node: &mut GraphNode, pin: &str) {
+    if e_no_de_propriedade(&node.kind) && (pin == "type" || pin == "name") {
+        node.values.remove("value");
+    }
+}
+
 impl Graph {
     /// Texto RON do grafo, no formato atual.
     pub fn to_ron(&self) -> Result<String, String> {
@@ -276,7 +333,11 @@ impl Graph {
             ));
         }
         if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node) {
+            let mudou = n.values.get(pin) != Some(&value);
             n.values.insert(pin.to_string(), value);
+            if mudou {
+                limpa_valor_de_propriedade(n, pin);
+            }
         }
         Ok(())
     }
@@ -384,10 +445,13 @@ impl Graph {
 
     /// Tira o valor embutido de uma entrada: ela volta ao padrão da biblioteca. Devolve se havia valor.
     pub fn remove_value(&mut self, node: u64, pin: &str) -> bool {
-        self.nodes
-            .iter_mut()
-            .find(|n| n.id == node)
-            .is_some_and(|n| n.values.remove(pin).is_some())
+        self.nodes.iter_mut().find(|n| n.id == node).is_some_and(|n| {
+            let tirou = n.values.remove(pin).is_some();
+            if tirou {
+                limpa_valor_de_propriedade(n, pin);
+            }
+            tirou
+        })
     }
 
     /// Declara ou troca uma variável (VIS-022). Se o nome já existe, a variável é trocada no mesmo lugar, para a
@@ -763,6 +827,7 @@ impl Graph {
         }
         match pin.ty {
             Some(ty) => Ok(ty),
+            None if e_no_de_propriedade(&node.kind) => tipo_da_propriedade(node),
             None => Ok(self.variable_of(node)?.ty),
         }
     }
@@ -907,12 +972,19 @@ impl Graph {
                     Err(msg) => erros.push(erro(node.id, msg)),
                 }
             }
+            // Num nó de propriedade, um tipo ou nome inválido vira erro próprio, abaixo: não repete como obrigatório.
+            let propriedade_invalida = e_no_de_propriedade(&node.kind) && tipo_da_propriedade(node).is_err();
             for p in &def.inputs {
                 let ligada = self
                     .wires
                     .iter()
                     .any(|w| w.to.node == node.id && w.to.pin == p.name);
-                if !ligada && !node.values.contains_key(p.name) && p.default.is_none() {
+                let valor_de_propriedade_invalido = propriedade_invalida && p.name == "value";
+                if !ligada
+                    && !node.values.contains_key(p.name)
+                    && padrao_da_entrada(node, p).is_none()
+                    && !valor_de_propriedade_invalido
+                {
                     erros.push(erro(
                         node.id,
                         format!(
@@ -927,6 +999,25 @@ impl Graph {
                 && let Err(msg) = self.variable_of(node)
             {
                 erros.push(erro(node.id, msg));
+            }
+            if e_no_de_propriedade(&node.kind) {
+                // O compilador não vê a cena: tipo e nome têm de ser valores embutidos, não fios.
+                let mut com_fio = false;
+                for pin in ["type", "name"] {
+                    if self.wires.iter().any(|w| w.to.node == node.id && w.to.pin == pin) {
+                        com_fio = true;
+                        erros.push(erro(
+                            node.id,
+                            format!(
+                                "{}: '{pin}' precisa ser um valor embutido, não pode vir de fio",
+                                node.etiqueta()
+                            ),
+                        ));
+                    }
+                }
+                if !com_fio && let Err(msg) = tipo_da_propriedade(node) {
+                    erros.push(erro(node.id, msg));
+                }
             }
         }
 
@@ -1487,5 +1578,122 @@ mod tests {
             erros.iter().any(|e| e.message.contains("padrão de 'vida'")),
             "{erros:?}"
         );
+    }
+
+    /// Nó de propriedade com o tipo e o nome embutidos, prontos para ligar.
+    fn propriedade(g: &mut Graph, kind: &str, tipo: &str, nome: &str) -> u64 {
+        let id = adiciona(g, kind);
+        g.set_value(id, "type", Value::String(tipo.into())).unwrap();
+        g.set_value(id, "name", Value::String(nome.into())).unwrap();
+        id
+    }
+
+    #[test]
+    fn tipo_do_pino_de_propriedade_segue_o_registro() {
+        let mut g = Graph::default();
+        let casos = [
+            ("modulate", PinType::String),
+            ("position", PinType::Vec2),
+            ("centered", PinType::Bool),
+            ("z_index", PinType::Int),
+            ("rotation", PinType::Float),
+            ("shape", PinType::String),
+        ];
+        for (nome, esperado) in casos {
+            let id = propriedade(&mut g, "GetProperty", "Sprite2D", nome);
+            let no = g.node(id).unwrap();
+            assert_eq!(g.output_type(no, "value"), Ok(esperado), "{nome}");
+        }
+        // Sem tipo declarado, o nó lê decimal, como os grafos de antes da tipagem.
+        let antigo = adiciona(&mut g, "GetProperty");
+        g.set_value(antigo, "name", Value::String("position_x".into()))
+            .unwrap();
+        assert_eq!(
+            g.output_type(g.node(antigo).unwrap(), "value"),
+            Ok(PinType::Float)
+        );
+        // O pino aparece com o tipo resolvido para o editor.
+        let pino = g.pins().into_iter().find(|p| p.node == antigo && p.pin == "value");
+        assert_eq!(pino.and_then(|p| p.ty), Some(PinType::Float));
+    }
+
+    #[test]
+    fn validar_recusa_tipo_nome_e_lista_de_pontos_desconhecidos() {
+        let mut g = Graph::default();
+        propriedade(&mut g, "GetProperty", "Tipo9", "x");
+        propriedade(&mut g, "GetProperty", "Sprite2D", "nao_existe");
+        propriedade(&mut g, "SetProperty", "CollisionPolygon2D", "points");
+        let erros = g.validate();
+        assert!(
+            erros.iter().any(|e| e.message.contains("'Tipo9' não existe")),
+            "{erros:?}"
+        );
+        assert!(
+            erros.iter().any(|e| e.message.contains("não tem a propriedade 'nao_existe'")),
+            "{erros:?}"
+        );
+        assert!(
+            erros.iter().any(|e| e.message.contains("lista de pontos")),
+            "{erros:?}"
+        );
+        // Só o erro próprio aparece: o valor de uma propriedade inválida não vira "obrigatória".
+        assert!(
+            !erros.iter().any(|e| e.message.contains("obrigatória 'value'")),
+            "{erros:?}"
+        );
+    }
+
+    #[test]
+    fn tipo_e_nome_ligados_a_fio_sao_recusados() {
+        let mut g = Graph::default();
+        let texto = adiciona(&mut g, "Concat");
+        let gp = propriedade(&mut g, "GetProperty", "Sprite2D", "modulate");
+        g.connect((texto, "result"), (gp, "type")).unwrap();
+        g.connect((texto, "result"), (gp, "name")).unwrap();
+        let erros = g.validate();
+        assert!(
+            erros.iter().any(|e| e.message.contains("'type' precisa ser um valor embutido")),
+            "{erros:?}"
+        );
+        assert!(
+            erros.iter().any(|e| e.message.contains("'name' precisa ser um valor embutido")),
+            "{erros:?}"
+        );
+    }
+
+    #[test]
+    fn trocar_tipo_ou_propriedade_limpa_o_valor_embutido() {
+        let mut g = Graph::default();
+        let sp = propriedade(&mut g, "SetProperty", "Sprite2D", "modulate");
+        g.set_value(sp, "value", Value::String("#ff0000".into())).unwrap();
+        // Mesmo nome: nada muda, o valor fica.
+        g.set_value(sp, "name", Value::String("modulate".into())).unwrap();
+        assert!(g.node(sp).unwrap().values.contains_key("value"));
+        // Outro tipo: o valor sai, porque pode ser de outro tipo.
+        g.set_value(sp, "type", Value::String("Node2D".into())).unwrap();
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+        g.set_value(sp, "value", Value::String("#00ff00".into())).unwrap();
+        g.set_value(sp, "name", Value::String("tag".into())).unwrap();
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+        // Tirar o tipo também tira o valor: volta a decimal sem valor.
+        g.set_value(sp, "value", Value::String("gato".into())).unwrap();
+        assert!(g.remove_value(sp, "type"));
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+    }
+
+    #[test]
+    fn valor_sem_fio_usa_o_padrao_da_propriedade() {
+        let mut g = Graph::default();
+        // Propriedade colorida sem valor embutido: o padrão é o do registro, e a entrada não fica obrigatória.
+        propriedade(&mut g, "SetProperty", "Sprite2D", "modulate");
+        // Sem tipo declarado, o padrão é decimal zero, como antes.
+        let antigo = adiciona(&mut g, "SetProperty");
+        g.set_value(antigo, "name", Value::String("position_x".into()))
+            .unwrap();
+        let erros = g.validate();
+        assert!(!erros.iter().any(|e| e.message.contains("'value'")), "{erros:?}");
+        let padrao = g.node(antigo).unwrap();
+        let input = def_of(padrao).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
+        assert_eq!(padrao_da_entrada(padrao, input), Some(Value::Float(0.0)));
     }
 }
