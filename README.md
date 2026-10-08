@@ -45,7 +45,7 @@ cargo install wasm-bindgen-cli --version 0.2.129 --locked
 cd editor
 pnpm install
 pnpm dev        # desktop app (Tauri) with hot reload
-pnpm dev:web    # UI only, in the browser at http://localhost:1420
+pnpm dev:web    # UI only, in the browser at http://localhost:1430
 pnpm build      # desktop installer
 ```
 
