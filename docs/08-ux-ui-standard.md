@@ -103,6 +103,7 @@ One color per family. The families follow the table in [05](05-editor-ui.md) (2D
 | `--node-physics` | `#e08a3c` | Physics | "Aplicar impulso" |
 | `--node-ui` | `#6bbf59` | UI | Reserved |
 | `--node-audio` | `#e5c152` | Audio | "Tocar som" |
+| `--node-script` | `#9a7fd1` | Script and timers (purple) | "Repetir a cada 1 s" |
 
 ### 3.6 Pin and wire types
 

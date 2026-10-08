@@ -40,6 +40,7 @@
   --node-physics: #e08a3c;
   --node-ui: #6bbf59;
   --node-audio: #e5c152;
+  --node-script: #9a7fd1;
 
   /* Tipos de pino: cor do fio e do conector */
   --type-exec: #d2d2d2;

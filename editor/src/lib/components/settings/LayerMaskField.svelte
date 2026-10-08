@@ -1,8 +1,10 @@
 <script lang="ts">
-  // Grade de máscara de bits (INS-003): uma caixa por camada, com o nome dado no projeto.
-  // Camada livre (sem nome) fica desabilitada. O valor é o inteiro que o registro guarda: -1 = todas.
+  // Grade de máscara de bits (PHY-020, PHY-022): uma caixa por camada nomeada, com o nome dado no projeto.
+  // O número do bit não aparece, e a camada livre (sem nome) não entra na grade: nenhum corpo fica nela, então
+  // o bit dela não muda nada. Se a camada ganhar nome depois, o bit volta com o valor guardado. O valor é o
+  // inteiro que o registro guarda: -1 = todas.
   import { projectSettings } from '$lib/state/settings.svelte';
-  import { LAYER_COUNT, hasBit, withBit } from '$lib/settings';
+  import { hasBit, namedLayers, withBit } from '$lib/settings';
 
   let {
     label,
@@ -14,7 +16,8 @@
     onchange: (mask: number) => void;
   } = $props();
 
-  const indices = Array.from({ length: LAYER_COUNT }, (_, i) => i);
+  // Só as camadas nomeadas aparecem (ver o comentário acima).
+  const visible = $derived(namedLayers(projectSettings));
 
   // withBit devolve sem sinal; o registro guarda com sinal (32 bits), então converte de volta.
   const set = (i: number, on: boolean) => onchange(withBit(value, i, on) | 0);
@@ -27,17 +30,13 @@
     <button class="link" onclick={() => onchange(0)}>Nenhuma</button>
   </div>
   <div class="grid">
-    {#each indices as i (i)}
-      {@const name = projectSettings.layers[i] ?? ''}
-      <label class="cell" class:free={!name} title={name || 'Camada livre (sem nome)'}>
-        <input
-          type="checkbox"
-          disabled={!name}
-          checked={hasBit(value, i)}
-          onchange={(e) => set(i, e.currentTarget.checked)}
-        />
-        <span class="name">{name || i}</span>
+    {#each visible as { index: i, name } (i)}
+      <label class="cell" title={name}>
+        <input type="checkbox" checked={hasBit(value, i)} onchange={(e) => set(i, e.currentTarget.checked)} />
+        <span class="name">{name}</span>
       </label>
+    {:else}
+      <p class="vazio">Nenhuma camada com nome. Nomeie as camadas em Configurações do Projeto.</p>
     {/each}
   </div>
 </div>
@@ -71,6 +70,12 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 2px 4px;
   }
+  .vazio {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: var(--fs-11);
+    color: var(--text-faint);
+  }
   .cell {
     display: flex;
     align-items: center;
@@ -80,16 +85,10 @@
     font-size: var(--fs-11);
     color: var(--text);
   }
-  .cell.free {
-    color: var(--text-faint);
-  }
   .cell input {
     flex: none;
     margin: 0;
     accent-color: var(--accent);
-  }
-  .cell input:disabled {
-    opacity: 0.4;
   }
   .name {
     min-width: 0;

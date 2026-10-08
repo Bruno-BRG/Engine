@@ -1,4 +1,5 @@
 import type { BusEffects } from './audio/types';
+import type { NameList } from './state/scene.svelte';
 // Configurações do projeto (settings.ron) no lado do TypeScript. Espelha `ProjectSettings` de
 // crates/nexo-core/src/settings.rs. Os nomes de campo são os do serde (snake_case): o JSON vai e
 // volta sem conversão. Se mudar um lado, mude o outro.
@@ -91,4 +92,18 @@ export function withValue(list: string[], value: string): string[] {
 /** Lista só com as camadas nomeadas (índice e nome). */
 export function namedLayers(s: ProjectSettings): { index: number; name: string }[] {
   return s.layers.flatMap((name, index) => (name ? [{ index, name }] : []));
+}
+
+/** Nomes da lista pedida pelo registro (`names` de um campo de texto), na ordem das configurações. */
+export function namesOf(s: ProjectSettings, list: NameList): string[] {
+  switch (list) {
+    case 'tags':
+      return s.tags;
+    case 'layers':
+      return namedLayers(s).map((l) => l.name);
+    case 'buses':
+      return s.buses.map((b) => b.name);
+    case 'physics_materials':
+      return s.physics_materials.map((m) => m.name);
+  }
 }
