@@ -5,6 +5,7 @@
   import { textures } from '$lib/state/textures.svelte';
   import { projectSettings } from '$lib/state/settings.svelte';
   import { namesOf } from '$lib/settings';
+  import { hexColorOrNull } from '$lib/hexcolor';
   import { OBJECT_PALETTE } from '$lib/palette';
   import PanelHeader from './PanelHeader.svelte';
   import NodeIcon from './NodeIcon.svelte';
@@ -325,7 +326,12 @@
                               class="hex mono"
                               value={String(v)}
                               aria-label="Cor em hexadecimal"
-                              onchange={(e) => setProp(def, e.currentTarget.value)}
+                              onchange={(e) => {
+                                const hex = hexColorOrNull(e.currentTarget.value);
+                                // The engine refuses other text: the field goes back to the current color.
+                                if (hex) setProp(def, hex);
+                                else e.currentTarget.value = String(v);
+                              }}
                             />
                           </div>
                         </div>
