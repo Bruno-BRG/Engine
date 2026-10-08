@@ -18,7 +18,7 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 - [ ] **SCN-011** (P0) `Sprite2D` (texture, region, flip, offset, centered, pixel snap). *Status (Fase 1): parcial: textura, forma de teste, espelhamento, deslocamento e centralização. Faltam região e pixel snap.*
 - [ ] **SCN-012** (P0) `Camera2D` (zoom, limits, smoothing, current). *Status (Fase 1): parcial: zoom, câmera atual e suavização. Faltam limites da câmera.*
 - [ ] **SCN-013** (P0) Physics nodes: `StaticBody2D`, `RigidBody2D`, `CharacterBody2D`, `Area2D`, `CollisionShape2D`, `CollisionPolygon2D` (see [physics.md](physics.md)). *Status (Fase 2): parcial: StaticBody2D, RigidBody2D, CharacterBody2D, Area2D e CollisionShape2D existem e têm física (ver physics.md). Faltam CollisionPolygon2D e os nós de consulta.*
-- [ ] **SCN-014** (P0) `Timer`, `AudioStreamPlayer`, `AudioStreamPlayer2D`. *Status (Fase 2): pendente: Timer, AudioStreamPlayer e AudioStreamPlayer2D dependem do runtime de áudio.*
+- [x] **SCN-014** (P0) `Timer`, `AudioStreamPlayer`, `AudioStreamPlayer2D`. *Status (Fase 2): feito. `Timer` (wait_time, one_shot, autostart) conta na reprodução e emite o sinal `timeout` pela fila de sinais (`SceneEditor::timer_events`, em `nexo-core/src/timer.rs`). Ainda não há lógica visual para consumir o sinal. Os players estão em AUD-001.*
 - [ ] **SCN-015** (P1) `AnimatedSprite2D`, `AnimationPlayer`, `TileMapLayer`, `Marker2D`, `Path2D`/`PathFollow2D`, `Line2D`, `Polygon2D`, `GPUParticles2D`, `CanvasLayer`, `ParallaxBackground`.
 - [ ] **SCN-016** (P1) Control nodes for game UI (see [game-ui.md](game-ui.md)).
 

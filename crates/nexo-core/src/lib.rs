@@ -1,13 +1,16 @@
 //! Tipos base compartilhados entre o runtime, o renderizador e o editor.
 //! A cena (árvore de nós, registro de tipos, arquivo RON e consultas) também vive aqui.
 
+pub mod audio;
 pub mod input;
 pub mod io;
 pub mod query;
 pub mod registry;
 pub mod scene;
 pub mod settings;
+pub mod timer;
 
+pub use audio::{AudioCommand, AudioPlayback};
 pub use input::{Input, InputMap};
 pub use settings::ProjectSettings;
 pub use io::FORMAT as SCENE_FORMAT;

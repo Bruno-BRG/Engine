@@ -106,6 +106,24 @@ fn collision_mask() -> PropDef {
     PropDef::new("collision_mask", "Máscara de colisão", "Colisão", PropKind::Int, json!(-1))
 }
 
+/// Propriedades de reprodução do áudio (AUD-001), iguais em AudioStreamPlayer e AudioStreamPlayer2D.
+/// O barramento é texto: os nomes vêm das configurações do projeto, que o registro não conhece.
+fn audio_player_props() -> Vec<PropDef> {
+    vec![
+        PropDef::new("stream", "Áudio", "Reprodução", PropKind::Uid, json!("")).asset("audio"),
+        PropDef::new("volume_db", "Volume", "Reprodução", PropKind::Float, json!(0.0))
+            .range(-80.0, 24.0)
+            .step(0.5)
+            .unit("dB"),
+        PropDef::new("pitch_scale", "Tom", "Reprodução", PropKind::Float, json!(1.0))
+            .range(0.01, 4.0)
+            .step(0.01),
+        PropDef::new("autoplay", "Tocar ao iniciar", "Reprodução", PropKind::Bool, json!(false)),
+        PropDef::new("loop", "Repetir", "Reprodução", PropKind::Bool, json!(false)),
+        PropDef::new("bus", "Barramento", "Reprodução", PropKind::Str, json!("Master")),
+    ]
+}
+
 fn build() -> Vec<NodeType> {
     vec![
         NodeType {
@@ -237,6 +255,51 @@ fn build() -> Vec<NodeType> {
                     .step(0.1),
             ],
         },
+        // ---- Áudio e temporizadores (AUD-001, SCN-014). Bloco próprio: não misturar com outros tipos. ----
+        NodeType {
+            name: "AudioStreamPlayer",
+            base: Some("Node"),
+            category: "Áudio",
+            description: "Toca um áudio sem posição: o volume é o mesmo em toda a cena.",
+            props: audio_player_props(),
+        },
+        // Base Node2D (e não AudioStreamPlayer), para ter posição: a atenuação 2D mede a distância até a
+        // câmera. O registro tem herança simples, então as propriedades de áudio são repetidas pelo helper.
+        NodeType {
+            name: "AudioStreamPlayer2D",
+            base: Some("Node2D"),
+            category: "Áudio",
+            description: "Toca um áudio com posição: o volume cai com a distância até a câmera, até a distância máxima.",
+            props: {
+                let mut props = audio_player_props();
+                props.push(
+                    PropDef::new("max_distance", "Distância máxima", "Atenuação", PropKind::Float, json!(2000.0))
+                        .range(1.0, 100000.0)
+                        .step(10.0)
+                        .unit("px"),
+                );
+                props.push(
+                    PropDef::new("attenuation", "Curva de atenuação", "Atenuação", PropKind::Float, json!(1.0))
+                        .range(0.0, 4.0)
+                        .step(0.1),
+                );
+                props
+            },
+        },
+        NodeType {
+            name: "Timer",
+            base: Some("Node"),
+            category: "Tempo",
+            description: "Conta a espera e emite o sinal timeout. Com disparo único, para no primeiro sinal.",
+            props: vec![
+                PropDef::new("wait_time", "Espera", "Temporizador", PropKind::Float, json!(1.0))
+                    .range(0.01, 3600.0)
+                    .step(0.05)
+                    .unit("s"),
+                PropDef::new("one_shot", "Disparo único", "Temporizador", PropKind::Bool, json!(false)),
+                PropDef::new("autostart", "Iniciar ao jogar", "Temporizador", PropKind::Bool, json!(false)),
+            ],
+        },
     ]
 }
 
@@ -303,5 +366,20 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), node_types().len());
+    }
+
+    #[test]
+    fn players_de_audio_e_timer_registrados() {
+        // O player 2D tem posição (é Node2D); o player simples não tem.
+        assert!(is_2d("AudioStreamPlayer2D"));
+        assert!(!is_2d("AudioStreamPlayer"));
+        assert!(prop_def("AudioStreamPlayer2D", "max_distance").is_some());
+        assert!(prop_def("AudioStreamPlayer2D", "bus").is_some());
+        assert!(prop_def("AudioStreamPlayer", "max_distance").is_none());
+        assert_eq!(default_value("AudioStreamPlayer", "bus"), Some(json!("Master")));
+        assert_eq!(default_value("AudioStreamPlayer", "pitch_scale"), Some(json!(1.0)));
+        assert_eq!(default_value("Timer", "wait_time"), Some(json!(1.0)));
+        assert_eq!(default_value("Timer", "one_shot"), Some(json!(false)));
+        assert_eq!(prop_def("AudioStreamPlayer", "stream").and_then(|p| p.asset), Some("audio"));
     }
 }

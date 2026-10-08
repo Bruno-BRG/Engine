@@ -15,8 +15,8 @@ use tauri::{AppHandle, Emitter, State};
 
 type CmdResult<T> = Result<T, String>;
 
-/// Extensões aceitas pelo import (AST-003). Outras são recusadas com uma mensagem clara.
-const IMPORTABLE: &[&str] = &["png", "jpg", "jpeg", "webp", "wav", "ogg", "ttf", "otf"];
+/// Extensões aceitas pelo import (AST-003, AUD-002). Outras são recusadas com uma mensagem clara.
+const IMPORTABLE: &[&str] = &["png", "jpg", "jpeg", "webp", "wav", "ogg", "mp3", "ttf", "otf"];
 /// Evento enviado ao frontend quando algo muda na pasta do projeto.
 const FS_EVENT: &str = "project-fs-changed";
 /// Espera do vigia: uma rajada de escritas vira um único aviso.
@@ -290,7 +290,7 @@ fn import_into(root: &Path, dest_rel: &str, sources: &[String]) -> CmdResult<Vec
         }
         if !IMPORTABLE.contains(&ext_of(&name).as_str()) {
             return Err(format!(
-                "Formato não suportado: “{name}”. Use PNG, JPG, WEBP, WAV, OGG, TTF ou OTF."
+                "Formato não suportado: “{name}”. Use PNG, JPG, WEBP, WAV, OGG, MP3, TTF ou OTF."
             ));
         }
         if !path.is_file() {
@@ -523,7 +523,7 @@ pub async fn trash_entry(project: String, rel: String) -> CmdResult<()> {
     Ok(())
 }
 
-/// Importa arquivos PNG, JPG, WEBP, WAV, OGG, TTF ou OTF. `dir` é a pasta de destino (padrão `assets`).
+/// Importa arquivos PNG, JPG, WEBP, WAV, OGG, MP3, TTF ou OTF. `dir` é a pasta de destino (padrão `assets`).
 #[tauri::command]
 pub async fn import_files(
     project: String,
@@ -672,6 +672,27 @@ mod tests {
         assert!(import_into(&dir, "assets", &bad).is_err());
         assert!(!dir.join("assets/notas.txt").exists());
 
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&src_dir).ok();
+    }
+
+    #[test]
+    fn importar_mp3_grava_kind_audio_no_sidecar_e_na_listagem() {
+        let dir = projeto("mp3");
+        let src_dir = pasta_temporaria("origem-mp3");
+        let src = src_dir.join("musica.mp3");
+        fs::write(&src, b"fake-mp3").unwrap();
+        let sources = vec![src.to_string_lossy().into_owned()];
+
+        let res = import_into(&dir, "assets", &sources).unwrap();
+        assert_eq!(res[0].rel, "assets/musica.mp3");
+        assert_eq!(res[0].kind, "audio");
+        let side = fs::read_to_string(dir.join("assets/musica.mp3.import")).unwrap();
+        assert!(side.contains("kind = \"audio\""), "sidecar: {side}");
+
+        let inside = list_dir(dir.to_string_lossy().into_owned(), "assets".into()).unwrap();
+        assert_eq!(inside[0].kind, "audio");
+        assert_eq!(inside[0].uid.as_deref(), Some(res[0].uid.as_str()));
         fs::remove_dir_all(&dir).ok();
         fs::remove_dir_all(&src_dir).ok();
     }
