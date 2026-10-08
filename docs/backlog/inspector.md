@@ -16,3 +16,4 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 - [ ] **INS-010** (P1) Property tooltips from node docs; right-click "Copy property path" for visual scripting.
 - [ ] **INS-011** (P1) Inspector for assets (texture import settings, audio import settings).
 - [ ] **INS-012** (P2) Debug mode showing private/runtime fields during play. *U: Debug inspector.*
+- [ ] **INS-013** (P1) Placeholder da seção de script diz "Nenhum script. Disponível na Fase 2, com a programação visual.", mas o slot de script (INS-005) já funciona, no bloco de identificação. *U: Inspector, seção Script (Inspector.svelte, linhas 384-385).* *Status: pendente. Achado na revisão de VIS-022, fora do escopo daquela entrega.*

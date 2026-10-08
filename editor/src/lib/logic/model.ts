@@ -61,6 +61,11 @@ export interface Variable {
   name: string;
   ty: PinType;
   default: Value;
+  /**
+   * Node variables only: the default as up to 16 hex digits, "" for no node. Read this, not `default.Node`, which
+   * loses the low digits above 2^53 when JSON is parsed.
+   */
+  default_node?: string;
   exported: boolean;
 }
 

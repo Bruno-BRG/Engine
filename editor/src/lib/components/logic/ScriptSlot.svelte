@@ -19,55 +19,55 @@
   import NodeRefField from '../inspector/NodeRefField.svelte';
   import { Workflow, ExternalLink, Plus, RotateCcw } from '@lucide/svelte';
 
-  // Slot de script do Inspector (INS-005): anexa um script existente ou novo, abre no workspace de Lógica e
-  // lista as variáveis exportadas dele. Cada variável pode ter um valor neste nó (VIS-022). Só este bloco mexe
-  // com as propriedades `script` e `script_vars`.
+  // Script slot of the Inspector (INS-005): attaches an existing or a new script, opens it in the Logic workspace and
+  // lists its exported variables. Each variable can have its own value on this node (VIS-022). Only this block writes
+  // the `script` and `script_vars` properties.
   let { node }: { node: NodeView } = $props();
 
-  const atual = $derived(String(node.props.script ?? ''));
-  const valores = $derived(scriptVarsOf(node.props));
-  let exportadas = $state<Variable[]>([]);
+  const current = $derived(String(node.props.script ?? ''));
+  const stored = $derived(scriptVarsOf(node.props));
+  let exported = $state<Variable[]>([]);
 
   $effect(() => {
-    const nome = atual;
+    const name = current;
     // Com o script aberto, a lista acompanha as edições; os demais são lidos do disco.
-    if (nome && logic.active === nome) void logic.snap;
-    if (!nome) {
-      exportadas = [];
+    if (name && logic.active === name) void logic.snap;
+    if (!name) {
+      exported = [];
       return;
     }
-    let cancelado = false;
+    let cancelled = false;
     logic
-      .exportedOf(nome)
+      .exportedOf(name)
       .then((v) => {
-        if (!cancelado) exportadas = v;
+        if (!cancelled) exported = v;
       })
       .catch(() => {
-        if (!cancelado) exportadas = [];
+        if (!cancelled) exported = [];
       });
     return () => {
-      cancelado = true;
+      cancelled = true;
     };
   });
 
   /**
-   * Troca o script do nó. Os valores eram das variáveis do script antigo, então saem junto: um só passo de
-   * desfazer.
+   * Switches the node to another script. The values belonged to the old script's variables, so they leave with it,
+   * as one undo step. Choosing the script that is already attached does nothing.
    */
-  function anexa(nome: string) {
-    if (nome === atual) return;
-    scene.setProps(node.uid, { script: nome, script_vars: {} }, 'attach:' + node.uid);
+  function attach(name: string) {
+    if (name === current) return;
+    scene.setProps(node.uid, { script: name, script_vars: {} }, 'attach:' + node.uid);
     scene.endGroup();
   }
 
   /**
-   * Grava o valor de uma variável neste nó. Com `coalesce`, alterações seguidas (arrastar um número) viram um passo.
+   * Stores a variable's value on this node. With `coalesce`, consecutive changes (dragging a number) become one step.
    */
-  function setVar(variable: Variable, value: StoredValue, coalesce = false) {
+  function setVariable(variable: Variable, value: StoredValue, coalesce = false) {
     scene.setProp(
       node.uid,
       'script_vars',
-      withValue(valores, variable, value),
+      withValue(stored, variable, value),
       coalesce ? 'vars:' + node.uid + ':' + variable.name : undefined,
     );
   }
@@ -76,60 +76,66 @@
     scene.endGroup();
   }
 
-  async function novo() {
-    const nome = await logic.create();
-    if (nome) anexa(nome);
+  /** Default shown in the reset tooltip. A node default is shown from its hex text, which keeps every digit. */
+  function defaultText(variable: Variable): string {
+    if (variable.ty !== 'Node') return textOf(variable.default);
+    return `nó ${variable.default_node || 0}`;
+  }
+
+  async function createScript() {
+    const name = await logic.create();
+    if (name) attach(name);
   }
 </script>
 
 <div class="slot">
   <label class="campo">
     <span class="rotulo">Script</span>
-    <select class="sel" value={atual} onchange={(e) => anexa(e.currentTarget.value)} aria-label="Script do nó">
+    <select class="sel" value={current} onchange={(e) => attach(e.currentTarget.value)} aria-label="Script do nó">
       <option value="">Nenhum</option>
-      {#each logic.names as nome (nome)}
-        <option value={nome}>{nome}</option>
+      {#each logic.names as name (name)}
+        <option value={name}>{name}</option>
       {/each}
-      {#if atual && !logic.names.includes(atual)}
-        <option value={atual}>{atual} (arquivo ausente)</option>
+      {#if current && !logic.names.includes(current)}
+        <option value={current}>{current} (arquivo ausente)</option>
       {/if}
     </select>
   </label>
 
   <div class="acoes">
-    <button class="btn" disabled={!logic.project} onclick={novo} title="Cria um script vazio e anexa a este nó">
+    <button class="btn" disabled={!logic.project} onclick={createScript} title="Cria um script vazio e anexa a este nó">
       <Plus size={12} /> Novo
     </button>
-    <button class="btn" disabled={!atual || !logic.project} onclick={() => logic.openIn(atual)} title="Abre o script no workspace de Lógica">
+    <button class="btn" disabled={!current || !logic.project} onclick={() => logic.openIn(current)} title="Abre o script no workspace de Lógica">
       <ExternalLink size={12} /> Abrir no Lógica
     </button>
   </div>
 
-  {#if atual}
+  {#if current}
     <div class="exportadas">
       <div class="cab"><Workflow size={11} /> Variáveis exportadas</div>
-      {#if exportadas.length}
+      {#if exported.length}
         <ul>
-          {#each exportadas as v (v.name)}
-            {@const valor = valueOf(v, valores)}
-            {@const mudou = isOverridden(v, valores)}
-            <li class="var" class:mudou title="{TIPO_NOME[v.ty]}, padrão do script: {textOf(v.default)}">
+          {#each exported as v (v.name)}
+            {@const shown = valueOf(v, stored)}
+            {@const overridden = isOverridden(v, stored)}
+            <li class="var" class:overridden title="{TIPO_NOME[v.ty]}, padrão do script: {defaultText(v)}">
               <div class="corpo">
                 {#if v.ty === 'Float' || v.ty === 'Int'}
                   <NumberField
                     label={v.name}
-                    value={asNumber(valor)}
+                    value={asNumber(shown)}
                     step={v.ty === 'Int' ? 1 : 0.1}
                     precision={v.ty === 'Int' ? 0 : 2}
-                    onchange={(x) => setVar(v, v.ty === 'Int' ? { Int: Math.round(x) } : { Float: x }, true)}
+                    onchange={(x) => setVariable(v, v.ty === 'Int' ? { Int: Math.round(x) } : { Float: x }, true)}
                     onend={endEdit}
                   />
                 {:else if v.ty === 'Bool'}
                   <label class="check">
                     <input
                       type="checkbox"
-                      checked={asBool(valor)}
-                      onchange={(e) => setVar(v, { Bool: e.currentTarget.checked })}
+                      checked={asBool(shown)}
+                      onchange={(e) => setVariable(v, { Bool: e.currentTarget.checked })}
                     />
                     <span>{v.name}</span>
                   </label>
@@ -138,47 +144,47 @@
                     <span class="flabel">{v.name}</span>
                     <input
                       class="txt"
-                      value={asText(valor)}
-                      onchange={(e) => setVar(v, { String: e.currentTarget.value })}
+                      value={asText(shown)}
+                      onchange={(e) => setVariable(v, { String: e.currentTarget.value })}
                     />
                   </label>
                 {:else if v.ty === 'Vec2'}
-                  {@const par = asVec2(valor)}
+                  {@const pair = asVec2(shown)}
                   <div class="vec">
                     <span class="flabel">{v.name}</span>
                     <NumberField
                       label="X"
-                      value={par[0]}
-                      step={1}
-                      precision={0}
-                      onchange={(x) => setVar(v, { Vec2: [x, par[1]] }, true)}
+                      value={pair[0]}
+                      step={0.1}
+                      precision={2}
+                      onchange={(x) => setVariable(v, { Vec2: [x, pair[1]] }, true)}
                       onend={endEdit}
                     />
                     <NumberField
                       label="Y"
-                      value={par[1]}
-                      step={1}
-                      precision={0}
-                      onchange={(y) => setVar(v, { Vec2: [par[0], y] }, true)}
+                      value={pair[1]}
+                      step={0.1}
+                      precision={2}
+                      onchange={(y) => setVariable(v, { Vec2: [pair[0], y] }, true)}
                       onend={endEdit}
                     />
                   </div>
                 {:else if v.ty === 'Node'}
                   <NodeRefField
                     label={v.name}
-                    value={asNode(valor)}
+                    value={asNode(shown)}
                     anyNode
                     emptyLabel="Nenhum"
-                    onchange={(uid) => setVar(v, { Node: uid })}
+                    onchange={(uid) => setVariable(v, { Node: uid })}
                   />
                 {/if}
               </div>
-              {#if mudou}
+              {#if overridden}
                 <button
                   class="reset"
-                  title="Voltar ao padrão do script ({textOf(v.default)})"
+                  title="Voltar ao padrão do script ({defaultText(v)})"
                   aria-label="Voltar {v.name} ao padrão do script"
-                  onclick={() => setVar(v, defaultOf(v))}
+                  onclick={() => setVariable(v, defaultOf(v))}
                 >
                   <RotateCcw size={11} />
                 </button>
@@ -262,12 +268,12 @@
     flex: 1;
     min-width: 0;
   }
-  .var.mudou :global(.lbl),
-  .var.mudou .flabel {
+  .var.overridden :global(.lbl),
+  .var.overridden .flabel {
     font-weight: 600;
     color: var(--text);
   }
-  /* Campos de texto e vetor usam a mesma coluna de rótulo que os campos numéricos do Inspector. */
+  /* Text and vector fields use the same label column as the number fields in the Inspector. */
   .linha {
     display: grid;
     grid-template-columns: 84px minmax(0, 1fr);

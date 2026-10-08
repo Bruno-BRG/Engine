@@ -195,8 +195,8 @@ fn build() -> Vec<NodeType> {
                 // Script anexado ao nó (VIS-003, INS-005): o nome do arquivo `scripts/<nome>.logic.ron`, sem pasta
                 // e sem extensão. Vazio = nenhum. O Inspector mostra um slot próprio, não um campo de texto.
                 PropDef::new("script", "Script", "Lógica", PropKind::Str, json!("")),
-                // Valores das variáveis exportadas do script (VIS-022), só os que diferem do padrão. Chave: nome da
-                // variável. Valor: formato do grafo, com UID de nó em hexadecimal (ADR 0012). Vazio = padrão do script.
+                // Exported variable values of the script (VIS-022), only those that differ from the default. Key: the
+                // variable name. Value: the graph's format, with node UIDs in hexadecimal (ADR 0012). Empty = script default.
                 PropDef::new("script_vars", "Valores exportados", "Lógica", PropKind::Map, json!({})),
             ],
         },
@@ -635,8 +635,8 @@ mod tests {
     }
 
     #[test]
-    fn valores_exportados_sao_um_mapa_com_padrao_vazio() {
-        // VIS-022: todo nó tem o mapa; o padrão é objeto vazio, e a interface o vê como "map".
+    fn script_vars_is_a_map_with_empty_default() {
+        // VIS-022: every node has the map; its default is an empty object, and the editor sees it as "map".
         let def = prop_def("Sprite2D", "script_vars").expect("Node.script_vars");
         assert_eq!(def.kind, PropKind::Map);
         assert_eq!(def.default, json!({}));

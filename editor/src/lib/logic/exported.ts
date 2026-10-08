@@ -1,11 +1,11 @@
-// Valores exportados de um script, por nó (VIS-022). O nó guarda só as diferenças do padrão do script, em
-// props.script_vars: nome da variável -> valor no formato do grafo. Um UID de nó vai como texto hexadecimal
-// ({Node: "00ab..."}), porque um número de 64 bits perde precisão em JavaScript. Texto vazio é nenhum nó (Node(0)).
-// Quem confere o mapa é o Rust, ao iniciar a reprodução (nexo-graph, ir.rs). Ver docs/adr/0012.
+// Exported script values, per node (VIS-022). A node keeps only the differences from the script's default, in
+// props.script_vars: variable name -> value in the graph's format. A node UID travels as hexadecimal text
+// ({Node: "00ab..."}), because a 64-bit number loses precision in JavaScript. Empty text is no node (Node(0)).
+// Rust checks the map when a play starts (nexo-graph, ir.rs). See docs/adr/0012.
 import type { PinType, Variable } from './model';
 
 /**
- * Valor de uma variável exportada, como o nó o guarda: igual ao `Value` do grafo, exceto Node (texto hexadecimal).
+ * Value of an exported variable, as the node stores it: the graph's `Value`, except that Node is hexadecimal text.
  */
 export type StoredValue =
   | { Bool: boolean }
@@ -15,35 +15,38 @@ export type StoredValue =
   | { Vec2: [number, number] }
   | { Node: string };
 
-/** Mapa `props.script_vars` de um nó: só as variáveis com valor diferente do padrão. */
+/** The `props.script_vars` map of a node: only the variables whose value differs from the default. */
 export type ScriptVars = Record<string, StoredValue>;
 
-/** O mapa de valores de um nó. Valor que não é objeto vale como vazio. */
+/** The value map of a node. A value that is not an object counts as empty. */
 export function scriptVarsOf(props: Record<string, unknown>): ScriptVars {
   const raw = props.script_vars;
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ScriptVars) : {};
 }
 
-/** Valor padrão da variável no script, no formato guardado. */
+/**
+ * Default value of the variable in the script, in the stored format. A node default is read from `default_node`
+ * (hex text), not from the number in `default`, which loses digits above 2^53.
+ */
 export function defaultOf(variable: Variable): StoredValue {
   const value = variable.default;
-  if ('Node' in value) return { Node: value.Node ? value.Node.toString(16).padStart(16, '0') : '' };
+  if ('Node' in value) return { Node: variable.default_node ?? '' };
   return value;
 }
 
-/** Tipo de um valor guardado, pela etiqueta: o mesmo nome do tipo de pino. */
+/** Type of a stored value, from its tag: the same name as the pin type. */
 export function typeOf(value: StoredValue): PinType {
   return Object.keys(value)[0] as PinType;
 }
 
-/** Igualdade de valores guardados: mesmo tipo e mesmo conteúdo. */
+/** Equality of stored values: same type and same content. */
 export function sameValue(a: StoredValue, b: StoredValue): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**
- * Valor que a interface mostra para a variável: o guardado no nó, se for do tipo atual da variável; senão o padrão
- * do script. Um valor de outro tipo (o script mudou depois) é ignorado, como no Rust.
+ * The value the interface shows for the variable: the one stored on the node, if it has the variable's current type;
+ * otherwise the script's default. A value of another type (the script changed later) is ignored, as in Rust.
  */
 export function valueOf(variable: Variable, vars: ScriptVars): StoredValue {
   const stored = vars[variable.name];
@@ -59,8 +62,8 @@ export function isOverridden(variable: Variable, vars: ScriptVars): boolean {
 }
 
 /**
- * Mapa com a variável em `value`. Um valor igual ao padrão do script não é guardado: a chave sai do mapa, e o nó
- * volta a seguir o script.
+ * Map with the variable set to `value`. A value equal to the script's default is not stored: the key leaves the map,
+ * and the node follows the script again.
  */
 export function withValue(vars: ScriptVars, variable: Variable, value: StoredValue): ScriptVars {
   const next: ScriptVars = { ...vars };
@@ -69,7 +72,7 @@ export function withValue(vars: ScriptVars, variable: Variable, value: StoredVal
   return next;
 }
 
-// Leitura do valor para cada campo. Só se chama com o valor já do tipo da variável (ver `valueOf`).
+// Reading the value for each field. Only called with a value already of the variable's type (see `valueOf`).
 
 export function asNumber(value: StoredValue): number {
   if ('Float' in value) return value.Float;

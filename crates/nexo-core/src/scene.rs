@@ -1059,8 +1059,8 @@ mod tests {
     }
 
     #[test]
-    fn valores_exportados_so_aceitam_objeto() {
-        // VIS-022: o mapa é um objeto. Cada valor é conferido por quem lê (nexo-graph, ir.rs).
+    fn script_vars_accepts_only_an_object() {
+        // VIS-022: the map must be an object. Each value is checked by the reader (nexo-graph, ir.rs).
         let mut s = cena();
         let root = s.roots()[0];
         let a = s.add_node(Some(root), "Node2D", None).unwrap();
@@ -1071,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn valores_exportados_iguais_ao_padrao_nao_sao_guardados() {
+    fn script_vars_empty_map_is_not_stored() {
         let mut s = cena();
         let root = s.roots()[0];
         let a = s.add_node(Some(root), "Node2D", None).unwrap();
@@ -1081,13 +1081,13 @@ mod tests {
     }
 
     #[test]
-    fn valores_exportados_vao_na_copia_e_voltam_com_desfazer() {
+    fn script_vars_go_with_the_copy_and_come_back_on_undo() {
         let mut s = cena();
         let root = s.roots()[0];
         let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
         s.set_prop(a, "script_vars", json!({"vida": {"Float": 3.0}}), None).unwrap();
-        let copia = s.duplicate_node(a).unwrap();
-        assert_eq!(value_of(s.node(copia).unwrap(), "script_vars"), json!({"vida": {"Float": 3.0}}));
+        let copy = s.duplicate_node(a).unwrap();
+        assert_eq!(value_of(s.node(copy).unwrap(), "script_vars"), json!({"vida": {"Float": 3.0}}));
         assert_eq!(s.undo().as_deref(), Some("Duplicar Sprite2D"));
         assert!(s.node(a).unwrap().props.contains_key("script_vars"));
         assert_eq!(s.undo().as_deref(), Some("Editar Valores exportados"));

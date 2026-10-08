@@ -245,16 +245,18 @@ mod tests {
 
     #[test]
     fn exported_values_round_trip_in_ron() {
-        // VIS-022: o mapa vai no arquivo como propriedade comum; o UID de nó segue como texto hexadecimal.
+        // VIS-022: the map is written to the file as a common property; a node UID stays as hexadecimal text, so
+        // a value above 2^53 survives the round trip.
         let mut s = Scene::new_default("Principal", 3);
         let root = s.roots()[0];
-        let no = s.add_node(Some(root), "Node2D", None).unwrap();
-        let valores = json!({"vida": {"Float": 3.5}, "alvo": {"Node": "00000000000000ff"}});
-        s.set_prop(no, "script_vars", valores.clone(), None).unwrap();
+        let node = s.add_node(Some(root), "Node2D", None).unwrap();
+        let values = json!({"vida": {"Float": 3.5}, "alvo": {"Node": "fedcba9876543210"}});
+        s.set_prop(node, "script_vars", values.clone(), None).unwrap();
         let text = s.to_ron().unwrap();
         assert!(text.contains("script_vars"));
+        assert!(text.contains("fedcba9876543210"));
         let back = Scene::from_text(&text, 9).unwrap();
-        assert_eq!(crate::scene::value_of(back.node(no).unwrap(), "script_vars"), valores);
+        assert_eq!(crate::scene::value_of(back.node(node).unwrap(), "script_vars"), values);
         assert_eq!(back.to_ron().unwrap(), text);
     }
 

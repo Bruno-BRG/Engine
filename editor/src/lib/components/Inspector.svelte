@@ -87,8 +87,8 @@
   function restoreSection(t: NodeType) {
     if (!node) return;
     const patch: Record<string, unknown> = {};
-    // Mapas (valores exportados de script, VIS-022) são editados no slot de script, e não entram aqui.
-    for (const p of t.props) if (p.kind !== 'map') patch[p.name] = p.default;
+    // Script and exported-value maps (VIS-022) are edited in the script slot, so restoring the section leaves them alone.
+    for (const p of t.props) if (p.name !== 'script' && p.kind !== 'map') patch[p.name] = p.default;
     scene.setProps(node.uid, patch);
   }
 
@@ -122,8 +122,8 @@
   function groupsOf(t: NodeType) {
     const groups: { name: string; props: PropDef[] }[] = [];
     for (const p of t.props) {
-      // O script tem slot próprio (INS-005), no bloco de identificação, em vez de um campo de texto. Os valores
-      // exportados (mapa) também ficam no slot (VIS-022).
+      // The script has its own slot (INS-005) in the identification block, instead of a text field. Exported values
+      // (the map) are in that slot too (VIS-022).
       if (HEADER_GROUPS.has(p.group) || p.name === 'script' || p.kind === 'map') continue;
       const g = groups.at(-1);
       if (g && g.name === p.group) g.props.push(p);

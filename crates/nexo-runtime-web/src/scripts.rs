@@ -635,9 +635,9 @@ mod tests {
     fn malformed_exported_value_refuses_the_play() {
         let (scene, node, text) = scene_with_node(json!({"vida": {"Float": "quatro"}}));
         let texts = BTreeMap::from([(node, text)]);
-        let erro = iniciar(&scene, &texts).err().expect("a malformed value must refuse the play");
-        assert!(erro.contains("Script de 'Node2D'"), "{erro}");
-        assert!(erro.contains("vida"), "{erro}");
+        let error = iniciar(&scene, &texts).err().expect("a malformed value must refuse the play");
+        assert!(error.contains("Script de 'Node2D'"), "{error}");
+        assert!(error.contains("vida"), "{error}");
     }
 
     #[test]

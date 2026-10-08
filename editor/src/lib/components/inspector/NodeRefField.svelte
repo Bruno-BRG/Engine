@@ -14,11 +14,11 @@
   }: {
     label: string;
     value: string;
-    /** UID do nó que está sendo editado: não entra na lista. Vazio: a lista tem todos os nós. */
+    /** UID of the node being edited: it is left out of the list. Empty: the list has every node. */
     self?: string;
-    /** Lista qualquer nó da cena, não só corpos. Os valores exportados de script usam isto (VIS-022). */
+    /** List any node in the scene, not only bodies. Script exported values use this (VIS-022). */
     anyNode?: boolean;
-    /** Texto da opção vazia. */
+    /** Text of the empty option. */
     emptyLabel?: string;
     onchange: (uid: string) => void;
   } = $props();
