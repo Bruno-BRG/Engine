@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn propriedade_tipada_tem_registrador_e_leitura_do_proprio_tipo() {
+    fn typed_property_has_register_of_own_type() {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         let gp = adiciona(&mut g, "GetProperty");

@@ -1,11 +1,12 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
   import { logicDebug } from '$lib/logic/debug.svelte';
+  import { scene } from '$lib/state/scene.svelte';
   import { focus, focusPanel } from '$lib/state/focus.svelte';
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { log } from '$lib/state/log.svelte';
   import { familyOf, type PinFilter } from '$lib/logic/library';
-  import { ehNoDePropriedade, propriedadeDoTipo, propriedadesDoTipo, valorPadrao } from '$lib/logic/propriedades';
+  import { isPropertyNode, propertyOfType, propertiesOfType, defaultValue } from '$lib/logic/propriedades';
   import {
     COMMENT_MIN,
     ROW_H,
@@ -25,11 +26,13 @@
     TIPO_NOME,
     pinKey,
     pinStyle,
+    refusalText,
     textOf,
     type GraphNode,
     type PinDef,
     type PinRef,
     type PinType,
+    type Refusal,
     type Value,
     type Wire,
   } from '$lib/logic/model';
@@ -98,6 +101,8 @@
   let drag = $state.raw<Drag | null>(null);
   let busca = $state<Busca | null>(null);
   let espaco = $state(false);
+  /** For each pin: the refusal of the dragged wire there, or null when the link is valid (VIS-013). */
+  let targets = $state.raw<Map<string, Refusal | null>>(new Map());
 
   const cam = $derived(logic.camera);
   const nodes = $derived(logic.snap.nodes);
@@ -112,14 +117,21 @@
     const out = new Map<number, string>();
     for (const e of logic.errors) {
       if (e.node === null) continue;
-      out.set(e.node, out.has(e.node) ? `${out.get(e.node)}\n${e.message}` : e.message);
+      const texto = refusalText(e);
+      out.set(e.node, out.has(e.node) ? `${out.get(e.node)}\n${texto}` : texto);
     }
     return out;
   });
   const ativo = $derived(logic.active);
-  const executados = $derived(new Set(ativo ? (logicDebug.executados[ativo] ?? []) : []));
+  // The trace is per instance: the open graph shows the trace of the chosen instance, if it runs this script.
+  const uidRastro = $derived(
+    ativo && logicDebug.selecionada && scene.byUid.get(logicDebug.selecionada)?.props.script === ativo
+      ? logicDebug.selecionada
+      : null,
+  );
+  const executados = $derived(new Set(uidRastro ? (logicDebug.executados[uidRastro] ?? []) : []));
   const pontosDeParada = $derived(new Set(ativo ? logicDebug.breakpointsOf(ativo) : []));
-  const valores = $derived<Record<number, Value>>(ativo ? (logicDebug.valores[ativo] ?? {}) : {});
+  const valores = $derived<Record<number, Value>>(uidRastro ? (logicDebug.valores[uidRastro] ?? {}) : {});
 
   /** Ponto de um pino no mundo, ou null se o nó não existe. */
   function pinoNoMundo(ref: PinRef, saida: boolean): Vec | null {
@@ -168,12 +180,52 @@
     };
   });
 
-  /** Realce dos pinos durante um arrasto: os do tipo do fio aceitam, os demais ficam apagados. */
+  /** Highlight of a pin during a drag: 'aceita' if the link is valid, 'recusa' if not, '' outside a drag. */
   function alvoDoArrasto(node: number, pin: string, saida: boolean): 'aceita' | 'recusa' | '' {
-    if (drag?.kind !== 'fio' || drag.saida === saida) return '';
-    const ty = tipoDe.get(pinKey(node, (saida ? 'o:' : 'i:') + pin)) ?? null;
-    if (drag.tipo === null) return '';
-    return ty === drag.tipo || ty === null ? 'aceita' : 'recusa';
+    const refusal = targets.get(pinKey(node, (saida ? 'o:' : 'i:') + pin));
+    if (refusal === undefined) return '';
+    return refusal === null ? 'aceita' : 'recusa';
+  }
+
+  /** Title of a refused pin during a drag: the refusal and its suggestion (VIS-013). */
+  function refusalOnPin(node: number, pin: string, output: boolean): string | undefined {
+    const refusal = targets.get(pinKey(node, (output ? 'o:' : 'i:') + pin));
+    return refusal ? refusalText(refusal) : undefined;
+  }
+
+  /** Refusal for a link between two pins on the same side: output to output, or input to input (VIS-013). */
+  function sameSideRefusal(fromOutput: boolean): Refusal {
+    return fromOutput
+      ? { message: 'Uma saída só liga a uma entrada', suggestion: 'Solte numa entrada' }
+      : { message: 'Uma entrada só liga a uma saída', suggestion: 'Solte numa saída' };
+  }
+
+  /**
+   * Tests the dragged wire against every pin with the rules of the link: the opposite side is checked for types,
+   * occupied inputs and cycles; the same side is refused by direction. Done once per drag: the graph does not change
+   * while the wire is dragged.
+   */
+  function evaluateTargets(d: Extract<Drag, { kind: 'fio' }>): Map<string, Refusal | null> {
+    const out = new Map<string, Refusal | null>();
+    for (const p of logic.snap.pins) {
+      const key = pinKey(p.node, (p.output ? 'o:' : 'i:') + p.pin);
+      // The pin the wire starts from is not a target.
+      if (p.output === d.saida && p.node === d.de.node && p.pin === d.de.pin) continue;
+      if (p.output === d.saida) {
+        out.set(key, sameSideRefusal(d.saida));
+        continue;
+      }
+      const outro: PinRef = { node: p.node, pin: p.pin };
+      // Dropping the wire back on the input it already fills changes nothing, so that input is not occupied.
+      const volta = d.existente?.node === p.node && d.existente.pin === p.pin;
+      const refusal = volta
+        ? undefined
+        : d.saida
+          ? logic.checkConnection(d.de, outro)
+          : logic.checkConnection(outro, d.de);
+      out.set(key, refusal ?? null);
+    }
+    return out;
   }
 
   /** Dica do pino: o último valor que o nó produziu, quando a reprodução com depurador mandou. */
@@ -334,6 +386,7 @@
       }
     } else if (d.kind === 'fio') {
       if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 3) return;
+      if (!d.moved) targets = evaluateTargets(d);
       const [wx, wy] = toWorld(logic.camera, sx, sy);
       drag = { ...d, moved: true, wx, wy };
     } else if (d.kind === 'caixa') {
@@ -364,6 +417,7 @@
   function solta(e: PointerEvent) {
     const d = drag;
     drag = null;
+    targets = new Map();
     if (!d) return;
     if (d.kind === 'pan' && !d.moved) logic.clearSelection();
     if ((d.kind === 'mover' || d.kind === 'redim') && d.moved) logic.endGroup();
@@ -375,24 +429,24 @@
     // Um clique numa entrada ligada não mexe no fio.
     if (d.existente && !d.moved) return;
     const pinoAlvo = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-pin]');
-    if (d.existente) logic.disconnectInput(d.existente.node, d.existente.pin);
-    if (pinoAlvo) {
-      const outro: PinRef = { node: Number(pinoAlvo.dataset.node), pin: pinoAlvo.dataset.pin ?? '' };
-      const outroSaida = pinoAlvo.dataset.dir === 'out';
-      if (outroSaida === d.saida) {
-        log.toast(
-          'warn',
-          'Ligação recusada',
-          d.saida ? 'Uma saída só liga a uma entrada.' : 'Uma entrada só liga a uma saída.',
-        );
-        return;
-      }
-      if (d.saida) logic.connect(d.de, outro);
-      else logic.connect(outro, d.de);
+    if (!pinoAlvo) {
+      // On empty space, the wire that reached the input is removed and the search opens filtered by its type.
+      if (d.existente) logic.disconnectInput(d.existente.node, d.existente.pin);
+      const [sx, sy] = localDe(e);
+      busca = { x: sx, y: sy, wx: d.wx, wy: d.wy, de: d.de, saida: d.saida, tipo: d.tipo };
       return;
     }
-    const [sx, sy] = localDe(e);
-    busca = { x: sx, y: sy, wx: d.wx, wy: d.wy, de: d.de, saida: d.saida, tipo: d.tipo };
+    const outro: PinRef = { node: Number(pinoAlvo.dataset.node), pin: pinoAlvo.dataset.pin ?? '' };
+    const outroSaida = pinoAlvo.dataset.dir === 'out';
+    // Dropped back on the pin the wire starts from: nothing to do.
+    if (outro.node === d.de.node && outro.pin === d.de.pin && outroSaida === d.saida) return;
+    if (outroSaida === d.saida) {
+      log.toast('warn', 'Ligação recusada', refusalText(sameSideRefusal(d.saida)));
+      return;
+    }
+    // The old wire into the input leaves only after the new link is accepted: if it is refused, the old wire stays.
+    const [from, to] = d.saida ? [d.de, outro] : [outro, d.de];
+    logic.connect(from, to, d.existente);
   }
 
   function roda(e: WheelEvent) {
@@ -464,39 +518,39 @@
   }
 
   /** Texto de um valor embutido ('' quando o pino não tem valor de texto). */
-  function textoEmbutido(n: GraphNode, pin: string): string {
-    const v = n.values[pin];
+  function embeddedText(n: GraphNode, pin: string): string {
+    const v = n.values?.[pin];
     return v && 'String' in v ? v.String : '';
   }
 
   /** Propriedade do registro escolhida num nó de propriedade (pelo tipo e pelo nome embutidos), ou undefined. */
-  function propDoNo(n: GraphNode) {
-    const tipo = textoEmbutido(n, 'type');
-    return tipo ? propriedadeDoTipo(logic.tipos, tipo, textoEmbutido(n, 'name')) : undefined;
+  function propOfNode(n: GraphNode) {
+    const nodeType = embeddedText(n, 'type');
+    return nodeType ? propertyOfType(logic.tipos, nodeType, embeddedText(n, 'name')) : undefined;
   }
 
   /** Tipo do campo de um pino de entrada. Nos nós de propriedade, o pino de valor é o tipo que o grafo resolveu. */
-  function tipoDoCampo(n: GraphNode, pi: PinDef): PinType | null {
-    return ehNoDePropriedade(n.kind) ? (tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? null) : pi.ty;
+  function fieldType(n: GraphNode, pi: PinDef): PinType | null {
+    return isPropertyNode(n.kind) ? (tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? null) : pi.ty;
   }
 
   /** Valor mostrado no campo do pino: o embutido, ou o padrão da propriedade escolhida. */
-  function valorDoCampo(n: GraphNode, pi: PinDef): Value | undefined {
-    const embutido = n.values[pi.name];
-    if (embutido) return embutido;
-    if (ehNoDePropriedade(n.kind) && pi.name === 'value') {
-      const def = propDoNo(n);
-      return (def && valorPadrao(def)) ?? undefined;
+  function fieldValue(n: GraphNode, pi: PinDef): Value | undefined {
+    const embedded = n.values?.[pi.name];
+    if (embedded) return embedded;
+    if (isPropertyNode(n.kind) && pi.name === 'value') {
+      const def = propOfNode(n);
+      return (def && defaultValue(def)) ?? undefined;
     }
     return pi.default ?? undefined;
   }
 
   /** Opções do seletor de tipo: todos os tipos do registro. */
-  const opcoesDeTipo = $derived(logic.tipos.map((t) => ({ value: t.name, label: t.name })));
+  const typeOptions = $derived(logic.tipos.map((t) => ({ value: t.name, label: t.name })));
 
   /** Opções do seletor de nome: as propriedades do tipo escolhido no nó (com as herdadas). */
-  function opcoesDeNome(n: GraphNode) {
-    return propriedadesDoTipo(logic.tipos, textoEmbutido(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
+  function nameOptions(n: GraphNode) {
+    return propertiesOfType(logic.tipos, embeddedText(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
   }
 
   function temPontoDeParada(id: number) {
@@ -598,8 +652,17 @@
             data-pin="in"
             data-dir="in"
             data-node={n.id}
+            title={refusalOnPin(n.id, 'in', false)}
           ></span>
-          <span class="pino saida" data-pin="out" data-dir="out" data-node={n.id} title={dicaDoPino(n.id, true)}></span>
+          <span
+            class="pino saida"
+            class:aceita={alvoDoArrasto(n.id, 'out', true) === 'aceita'}
+            class:recusa={alvoDoArrasto(n.id, 'out', true) === 'recusa'}
+            data-pin="out"
+            data-dir="out"
+            data-node={n.id}
+            title={refusalOnPin(n.id, 'out', true) ?? dicaDoPino(n.id, true)}
+          ></span>
         </div>
       {:else if def}
         {@const altura = nodeSize(n.kind, def)}
@@ -622,7 +685,7 @@
             {@const po = def.outputs[i]}
             <div class="linha" style="height: {ROW_H}px">
               {#if pi}
-                {@const tyCampo = tipoDoCampo(n, pi)}
+                {@const fieldPinType = fieldType(n, pi)}
                 <span
                   class="pino entrada"
                   class:aceita={alvoDoArrasto(n.id, pi.name, false) === 'aceita'}
@@ -630,31 +693,31 @@
                   data-pin={pi.name}
                   data-dir="in"
                   data-node={n.id}
-                  title={pi.label}
+                  title={refusalOnPin(n.id, pi.name, false) ?? pi.label}
                 >
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? pi.ty} />
                 </span>
                 <span class="rotulo">{pi.label}</span>
                 {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name))}
-                  {#if ehNoDePropriedade(n.kind) && pi.name === 'type'}
+                  {#if isPropertyNode(n.kind) && pi.name === 'type'}
                     <PropSelect
-                      valor={textoEmbutido(n, 'type')}
-                      opcoes={opcoesDeTipo}
-                      vazio="Sem tipo (decimal)"
+                      selected={embeddedText(n, 'type')}
+                      options={typeOptions}
+                      emptyLabel="Sem tipo (decimal)"
                       onchange={(v) => logic.setValue(n.id, 'type', { String: v })}
                     />
-                  {:else if ehNoDePropriedade(n.kind) && pi.name === 'name'}
+                  {:else if isPropertyNode(n.kind) && pi.name === 'name'}
                     <PropSelect
-                      valor={textoEmbutido(n, 'name')}
-                      opcoes={opcoesDeNome(n)}
-                      vazio="Escolha a propriedade"
+                      selected={embeddedText(n, 'name')}
+                      options={nameOptions(n)}
+                      emptyLabel="Escolha a propriedade"
                       onchange={(v) => logic.setValue(n.id, 'name', { String: v })}
                     />
-                  {:else if tyCampo && tyCampo !== 'Flow' && tyCampo !== 'Node'}
+                  {:else if fieldPinType && fieldPinType !== 'Flow' && fieldPinType !== 'Node'}
                     <PinValue
-                      ty={tyCampo}
-                      valor={valorDoCampo(n, pi)}
-                      prop={ehNoDePropriedade(n.kind) ? propDoNo(n) : undefined}
+                      ty={fieldPinType}
+                      valor={fieldValue(n, pi)}
+                      prop={isPropertyNode(n.kind) ? propOfNode(n) : undefined}
                       onchange={(v) => logic.setValue(n.id, pi.name, v)}
                     />
                   {/if}
@@ -669,7 +732,7 @@
                   data-pin={po.name}
                   data-dir="out"
                   data-node={n.id}
-                  title={dicaDoPino(n.id, true) ?? po.label}
+                  title={refusalOnPin(n.id, po.name, true) ?? dicaDoPino(n.id, true) ?? po.label}
                 >
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'o:' + po.name)) ?? po.ty} />
                 </span>

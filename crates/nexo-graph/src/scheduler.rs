@@ -66,6 +66,11 @@ impl Scheduler {
         }
     }
 
+    /// Replaces all breakpoints with the given set (VIS-031).
+    pub fn definir_pontos_de_parada(&mut self, pontos: BTreeSet<u64>) {
+        self.pontos = pontos;
+    }
+
     pub fn pontos_de_parada(&self) -> &BTreeSet<u64> {
         &self.pontos
     }
@@ -92,10 +97,7 @@ impl Scheduler {
         if self.pausa.is_some() {
             return Ok(());
         }
-        ctx.delta = dt;
-        self.acordar_sinais();
-        self.inicio = 0;
-        self.dt_pendente = dt;
+        self.abrir_quadro(ctx, dt);
         self.rodar(compiled, ctx, host, None)
     }
 
@@ -106,18 +108,50 @@ impl Scheduler {
         ctx: &mut Context,
         host: &mut dyn Host,
     ) -> Result<(), VmError> {
+        if self.pausa.is_none() {
+            return Ok(());
+        }
         self.rodar(compiled, ctx, host, None)
     }
 
     /// Roda uma op e pausa de novo na op seguinte (VIS-031, passo a passo). Pode atravessar tarefas: a pausa cai
     /// na próxima op da instância, qualquer que seja a tarefa.
+    /// Without a pause, it does nothing.
     pub fn passo(
         &mut self,
         compiled: &Compiled,
         ctx: &mut Context,
         host: &mut dyn Host,
     ) -> Result<(), VmError> {
+        if self.pausa.is_none() {
+            return Ok(());
+        }
         self.rodar(compiled, ctx, host, Some(1))
+    }
+
+    /// Starts a frame with time `dt` and pauses before the first op of the tasks created with `iniciar`, without running
+    /// any. Step by step uses it to stop at the start of an event (VIS-031). Does nothing while a pause is active.
+    pub fn parar_antes(
+        &mut self,
+        compiled: &Compiled,
+        ctx: &mut Context,
+        host: &mut dyn Host,
+        dt: f64,
+    ) -> Result<(), VmError> {
+        if self.pausa.is_some() {
+            return Ok(());
+        }
+        self.abrir_quadro(ctx, dt);
+        self.rodar(compiled, ctx, host, Some(0))
+    }
+
+    /// Marks the start of a frame with time `dt`: the context gets the `delta`, the pending signals are delivered, and
+    /// the tasks run from the start of the queue.
+    fn abrir_quadro(&mut self, ctx: &mut Context, dt: f64) {
+        ctx.delta = dt;
+        self.acordar_sinais();
+        self.inicio = 0;
+        self.dt_pendente = dt;
     }
 
     /// Troca o script por uma recompilação (VIS-023, recarga a quente). As variáveis de mesmo nome e mesmo tipo
@@ -293,7 +327,7 @@ mod tests {
     use nexo_core::{AudioCommand, Uid};
     use crate::ir::compile;
     use crate::types::{LogLevel, PinType, Value};
-    use crate::vm::tests::{Mock, decimal, grafo_de_movimento};
+    use crate::vm::tests::{Mock, float_prop, grafo_de_movimento};
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
         g.add_node(kind, [0.0, 0.0]).unwrap()
@@ -341,14 +375,14 @@ mod tests {
         // Sem ação: nada se mexe.
         sched.iniciar(&compiled, "OnProcess");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(decimal(&host, 7, "position_x"), 10.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 10.0);
         assert_eq!(ctx.vars[0], Value::Float(0.0));
 
         // Com ação: move 0.5 * 100 e incrementa.
         host.pressionadas.push("ui_right".into());
         sched.iniciar(&compiled, "OnProcess");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(decimal(&host, 7, "position_x"), 60.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 60.0);
         assert_eq!(ctx.vars[0], Value::Float(1.0));
     }
 
@@ -457,10 +491,10 @@ mod tests {
         sched.iniciar(&compiled, "OnReady");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert!((decimal(&host, 7, "position_x") - 55.0).abs() < 1e-9);
+        assert!((float_prop(&host, 7, "position_x") - 55.0).abs() < 1e-9);
         assert!(host.impressos.is_empty());
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(decimal(&host, 7, "position_x"), 100.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 100.0);
         assert_eq!(host.impressos.len(), 1);
     }
 
@@ -563,6 +597,36 @@ mod tests {
             node: pa
         }));
         assert!(rastro.iter().any(|e| matches!(e, TraceEvent::Valor { node, valor } if *node == pa && *valor == Value::String("a".into()))));
+    }
+
+    #[test]
+    fn continuar_e_passo_sem_pausa_nao_rodam_nada_e_parar_antes_para_na_primeira_op() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let pa = imprime(&mut g, (ev, "exec"), "a");
+        imprime(&mut g, (pa, "exec"), "b");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+
+        // Without a pause, continue and step run nothing: neither old nor new tasks.
+        sched.continuar(&compiled, &mut ctx, &mut host).unwrap();
+        sched.passo(&compiled, &mut ctx, &mut host).unwrap();
+        assert!(host.impressos.is_empty());
+
+        // Park: no op runs, and the following steps reach the first Print without going past the second one.
+        sched.iniciar(&compiled, "OnReady");
+        sched.parar_antes(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert!(sched.pausa().is_some());
+        assert!(host.impressos.is_empty());
+        for _ in 0..10 {
+            if !host.impressos.is_empty() {
+                break;
+            }
+            sched.passo(&compiled, &mut ctx, &mut host).unwrap();
+        }
+        assert_eq!(host.impressos, [(LogLevel::Info, "a".to_string())]);
     }
 
     #[test]

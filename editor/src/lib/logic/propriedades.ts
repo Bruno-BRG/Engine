@@ -1,43 +1,43 @@
-// Propriedades do registro para os nós de propriedade da lógica (VIS-021): as opções de tipo e de nome que a
-// interface mostra, e o padrão de cada propriedade. As regras (o tipo do pino, a validação) estão em nexo-graph;
-// aqui só se monta a lista que o usuário escolhe.
+// Registry properties for the logic property nodes (VIS-021): the type and name options the UI shows, and the default
+// value of each property. The rules (the value pin type, validation) live in nexo-graph; here we only build the lists
+// the user picks from.
 
 import type { NodeType, PropDef } from '$lib/state/scene.svelte';
 import type { Value } from './model';
 
-/** Nós que leem ou gravam uma propriedade do registro. Os pinos "type" e "name" deles são escolhas. */
-export const NOS_DE_PROPRIEDADE = ['GetProperty', 'SetProperty'];
+/** Nodes that read or write a registry property. Their "type" and "name" pins are choices. */
+export const PROPERTY_NODES = ['GetProperty', 'SetProperty'];
 
-export const ehNoDePropriedade = (kind: string): boolean => NOS_DE_PROPRIEDADE.includes(kind);
+export const isPropertyNode = (kind: string): boolean => PROPERTY_NODES.includes(kind);
 
-/** Propriedades de um tipo: as dele e as herdadas (cadeia `base`), na ordem do registro. Sem repetir nomes. */
-export function propriedadesDoTipo(tipos: NodeType[], tipo: string): PropDef[] {
+/** Properties of a type: its own and the inherited ones (the `base` chain), in registry order, without repeats. */
+export function propertiesOfType(types: NodeType[], nodeType: string): PropDef[] {
   const out: PropDef[] = [];
-  const vistos = new Set<string>();
-  let atual = tipos.find((t) => t.name === tipo);
-  while (atual) {
-    for (const p of atual.props) {
-      if (!vistos.has(p.name)) {
-        vistos.add(p.name);
+  const seen = new Set<string>();
+  let current = types.find((t) => t.name === nodeType);
+  while (current) {
+    for (const p of current.props) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name);
         out.push(p);
       }
     }
-    const pai: string | null = atual.base;
-    atual = pai ? tipos.find((t) => t.name === pai) : undefined;
+    const parent: string | null = current.base;
+    current = parent ? types.find((t) => t.name === parent) : undefined;
   }
   return out;
 }
 
-/** Propriedade de um tipo pelo nome, ou undefined quando o tipo não a tem. */
-export function propriedadeDoTipo(tipos: NodeType[], tipo: string, nome: string): PropDef | undefined {
-  return propriedadesDoTipo(tipos, tipo).find((p) => p.name === nome);
+/** Property of a type by name, or undefined when the type does not have it. */
+export function propertyOfType(types: NodeType[], nodeType: string, name: string): PropDef | undefined {
+  return propertiesOfType(types, nodeType).find((p) => p.name === name);
 }
 
 /**
- * Valor padrão de uma propriedade no formato do pino (o mesmo que o grafo usa quando o pino não tem valor).
- * Null quando a propriedade não tem pino (lista de pontos).
+ * Default value of a property in the pin's format (the one the graph uses when the pin has no value).
+ * Null when the property has no pin (a list of points).
  */
-export function valorPadrao(def: PropDef): Value | null {
+export function defaultValue(def: PropDef): Value | null {
   switch (def.kind) {
     case 'float':
       return { Float: Number(def.default) };
@@ -52,8 +52,8 @@ export function valorPadrao(def: PropDef): Value | null {
     case 'uid':
       return { String: typeof def.default === 'string' ? def.default : '' };
     case 'vec2': {
-      const par = Array.isArray(def.default) ? def.default : [];
-      return { Vec2: [Number(par[0] ?? 0), Number(par[1] ?? 0)] };
+      const pair = Array.isArray(def.default) ? def.default : [];
+      return { Vec2: [Number(pair[0] ?? 0), Number(pair[1] ?? 0)] };
     }
     default:
       return null;

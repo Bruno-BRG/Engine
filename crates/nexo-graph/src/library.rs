@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 /// Pino de um nó. `ty` vazio quer dizer "o tipo que o próprio nó decide": o da variável nomeada (GetVariable e
 /// SetVariable), o da propriedade nomeada (GetProperty e SetProperty) ou o do fio que chega (Reroute). `default`
 /// vazio torna a entrada obrigatória: sem fio e sem valor embutido, a validação falha. Nos pinos de propriedade o
-/// padrão vem do registro (ver `graph::padrao_da_entrada`).
+/// padrão vem do registro (ver `graph::input_default`).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinDef {
@@ -56,7 +56,7 @@ impl PinDef {
     }
 
     /// Pino cujo tipo segue a propriedade nomeada pelo próprio nó (VIS-021): o tipo dela no registro. Como o de
-    /// variável, não tem `ty` nem padrão fixo; a resolução está em `graph::tipo_da_propriedade`.
+    /// variável, não tem `ty` nem padrão fixo; a resolução está em `graph::property_pin_type`.
     fn of_property(name: &'static str, label: &'static str) -> Self {
         Self {
             name,
@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn propriedades_tem_tipo_embutido_e_valor_de_tipo_do_registro() {
+    fn property_nodes_embed_type_and_registry_value_type() {
         // O tipo do nó é texto embutido, com padrão vazio (= sem tipo, decimal). O valor segue o registro.
         for kind in ["GetProperty", "SetProperty"] {
             let def = find(kind).unwrap();

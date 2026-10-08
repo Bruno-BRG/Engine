@@ -3,7 +3,7 @@
 //! saltos. Nós latentes (Wait, Tween, Move To, Await Signal, Timer) viram ops que a VM suspende e retoma. Os
 //! erros são reunidos pela validação do grafo e devolvidos ao editor, cada um com o id do nó onde foi achado.
 
-use crate::graph::{Graph, GraphNode, REROUTE, def_of, padrao_da_entrada};
+use crate::graph::{Graph, GraphNode, REROUTE, def_of, error_from_refusal, input_default};
 use crate::library;
 use crate::types::{LogLevel, PinType, Value, Variable};
 use crate::vm::Context;
@@ -309,6 +309,7 @@ fn err(node: u64, message: impl Into<String>) -> CompileError {
     CompileError {
         node: Some(node),
         message: message.into(),
+        suggestion: None,
     }
 }
 
@@ -471,7 +472,10 @@ impl<'g> Emitter<'g> {
             }
             "SetProperty" => {
                 let r = self.entradas(node, &["node", "name", "value"])?;
-                let ty = self.graph.input_type(node, "value").map_err(|m| err(id, m))?;
+                let ty = self
+                    .graph
+                    .input_type(node, "value")
+                    .map_err(|m| error_from_refusal(id, &m))?;
                 self.emit(
                     Op::SetProp {
                         node: r[0],
@@ -753,13 +757,15 @@ impl<'g> Emitter<'g> {
         {
             return self.output(w.from.node, &w.from.pin);
         }
-        let expected = graph.input_type(node, pin).map_err(|m| err(node.id, m))?;
-        let def = def_of(node).map_err(|m| err(node.id, m))?;
+        let expected = graph
+            .input_type(node, pin)
+            .map_err(|m| error_from_refusal(node.id, &m))?;
+        let def = def_of(node).map_err(|m| error_from_refusal(node.id, &m))?;
         let default = def
             .inputs
             .iter()
             .find(|p| p.name == pin)
-            .and_then(|p| padrao_da_entrada(node, p));
+            .and_then(|p| input_default(node, p));
         let value = node.values.get(pin).cloned().or(default).ok_or_else(|| {
             err(
                 node.id,
@@ -935,7 +941,10 @@ impl<'g> Emitter<'g> {
             }
             ("GetProperty", "value") => {
                 let r = self.entradas(node, &["node", "name"])?;
-                let ty = self.graph.output_type(node, "value").map_err(|m| err(id, m))?;
+                let ty = self
+                    .graph
+                    .output_type(node, "value")
+                    .map_err(|m| error_from_refusal(id, &m))?;
                 let dst = self.reg();
                 self.emit(
                     Op::GetProp {
@@ -1121,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn propriedade_tipada_leva_o_tipo_ao_ir() {
+    fn typed_property_carries_type_into_ir() {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         // Lê o z_index (inteiro) do próprio nó e grava no mesmo pino: a IR carrega o tipo nas duas ops.

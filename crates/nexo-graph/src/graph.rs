@@ -87,11 +87,13 @@ pub struct Fragment {
     pub variables: Vec<Variable>,
 }
 
-/// Erro de validação ou de compilação. `node` é o nó onde o problema foi achado, quando há um.
+/// Validation or compile error. `node` is the node where the problem was found, when there is one. `suggestion`
+/// says how to fix it, when the error is a connection refusal with a clear fix (VIS-013).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompileError {
     pub node: Option<u64>,
     pub message: String,
+    pub suggestion: Option<&'static str>,
 }
 
 impl fmt::Display for CompileError {
@@ -106,6 +108,190 @@ pub(crate) fn erro(node: u64, message: impl Into<String>) -> CompileError {
     CompileError {
         node: Some(node),
         message: message.into(),
+        suggestion: None,
+    }
+}
+
+/// Validation error built from a refusal: the message and the suggestion both come from it.
+pub(crate) fn error_from_refusal(node: u64, refusal: &Refusal) -> CompileError {
+    CompileError {
+        node: Some(node),
+        message: refusal.message(),
+        suggestion: Some(refusal.suggestion()),
+    }
+}
+
+/// Why a connection is refused, or why the graph is invalid (VIS-013). `message()` says what happened and is the
+/// text the editor shows, in Portuguese. `suggestion()` says how to fix it. The messages are the ones the editor
+/// already showed: `collapse_to_function` and the tests compare them by substring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The node does not exist in the graph.
+    MissingNode { node: u64 },
+    /// The node has no output (`output` is true) or no input (`output` is false) called `pin`. `label` is the
+    /// node label, for example "Add#3".
+    MissingPin {
+        label: String,
+        pin: String,
+        output: bool,
+    },
+    /// The node kind is not in the library.
+    UnknownKind { kind: String },
+    /// The two ends have different types. `from` and `to` are "node.pin", with the node label.
+    IncompatibleTypes {
+        from: String,
+        ty_from: PinType,
+        to: String,
+        ty_to: PinType,
+    },
+    /// The input already has a wire. Applies to flow and data inputs.
+    InputOccupied { node: u64, pin: String },
+    /// The connection would close a cycle of the given class (flow or data). `from` is the output, `to` the input.
+    CycleOnConnect { flow: bool, from: u64, to: u64 },
+    /// Validation found a cycle that is already in the graph.
+    CycleInGraph { flow: bool, node: u64 },
+    /// Reroute with no wire into its input, so its type is still undefined.
+    RerouteWithoutInput { node: u64 },
+    /// A chain of reroutes that loops back on itself.
+    RerouteCycle { node: u64 },
+    /// Variable node without its name set.
+    VariableWithoutName { label: String },
+    /// The name points to a variable the script does not declare.
+    UnknownVariable { name: String },
+    /// Input with more than one wire (only possible in a graph edited by hand).
+    DuplicateInput { node: u64, pin: String },
+    /// Required input with no wire and no value. `field` is true when the node shows an inline field for it.
+    RequiredInputMissing {
+        label: String,
+        pin: String,
+        field: bool,
+    },
+    /// Property node whose declared type is not in the registry.
+    UnknownNodeType { label: String, node_type: String },
+    /// Property node whose property is not in its declared type, nor in the ancestors of that type.
+    UnknownProperty {
+        label: String,
+        node_type: String,
+        name: String,
+    },
+    /// Property node whose property is a list of points, which property nodes do not read yet.
+    PointsProperty { label: String, name: String },
+    /// Property node with a declared type and no embedded property name.
+    PropertyWithoutName { label: String },
+    /// Type or name of a property node comes from a wire. The compiler needs them as embedded values.
+    WiredPropertyPin { label: String, pin: String },
+}
+
+/// Name of a cycle class, as it appears in the messages.
+fn cycle_class(flow: bool) -> &'static str {
+    if flow { "de fluxo" } else { "de dados" }
+}
+
+impl Refusal {
+    /// What happened, in Portuguese. This is the text the editor shows.
+    pub fn message(&self) -> String {
+        match self {
+            Refusal::MissingNode { node } => format!("nó {node} não existe no grafo"),
+            Refusal::MissingPin {
+                label,
+                pin,
+                output: true,
+            } => format!("{label} não tem a saída '{pin}'"),
+            Refusal::MissingPin {
+                label,
+                pin,
+                output: false,
+            } => format!("{label} não tem a entrada '{pin}'"),
+            Refusal::UnknownKind { kind } => format!("tipo de nó desconhecido: '{kind}'"),
+            Refusal::IncompatibleTypes {
+                from,
+                ty_from,
+                to,
+                ty_to,
+            } => format!(
+                "tipos incompatíveis: {from} ({}) não pode ligar em {to} ({})",
+                ty_from.nome(),
+                ty_to.nome()
+            ),
+            Refusal::InputOccupied { node, pin } => {
+                format!("a entrada '{pin}' do nó {node} já está conectada")
+            }
+            Refusal::CycleOnConnect { flow, from, to } => format!(
+                "ligação criaria um ciclo {}: o nó {to} já alcança o nó {from}",
+                cycle_class(*flow)
+            ),
+            Refusal::CycleInGraph { flow, node } => {
+                format!("ciclo {} no nó {node}", cycle_class(*flow))
+            }
+            Refusal::RerouteWithoutInput { node } => {
+                format!("reroute {node} sem fio de entrada: tipo indefinido")
+            }
+            Refusal::RerouteCycle { node } => format!("ciclo de reroute no nó {node}"),
+            Refusal::VariableWithoutName { label } => {
+                format!("{label} precisa do nome da variável embutido")
+            }
+            Refusal::UnknownVariable { name } => format!("variável '{name}' não existe"),
+            Refusal::DuplicateInput { node, pin } => {
+                format!("a entrada '{pin}' do nó {node} está ligada mais de uma vez")
+            }
+            Refusal::RequiredInputMissing { label, pin, .. } => {
+                format!("entrada obrigatória '{pin}' de {label} não está conectada")
+            }
+            Refusal::UnknownNodeType { label, node_type } => {
+                format!("{label}: o tipo de nó '{node_type}' não existe")
+            }
+            Refusal::UnknownProperty {
+                label,
+                node_type,
+                name,
+            } => format!("{label}: {node_type} não tem a propriedade '{name}'"),
+            Refusal::PointsProperty { label, name } => {
+                format!("{label}: '{name}' é uma lista de pontos, que os nós de propriedade ainda não leem")
+            }
+            Refusal::PropertyWithoutName { label } => {
+                format!("{label} precisa do nome da propriedade embutido")
+            }
+            Refusal::WiredPropertyPin { label, pin } => {
+                format!("{label}: '{pin}' precisa ser um valor embutido, não pode vir de fio")
+            }
+        }
+    }
+
+    /// How to fix it, in Portuguese, using the labels the editor shows. Every refusal has one.
+    pub fn suggestion(&self) -> &'static str {
+        match self {
+            Refusal::MissingNode { .. }
+            | Refusal::MissingPin { .. }
+            | Refusal::UnknownKind { .. } => "Recrie o nó pela busca",
+            Refusal::IncompatibleTypes { .. } => {
+                "Ligue a um pino da mesma cor e forma, ou solte no vazio para buscar um compatível (fluxo só liga a fluxo)"
+            }
+            Refusal::InputOccupied { .. } => "Remova o fio atual antes",
+            Refusal::CycleOnConnect { flow: true, .. }
+            | Refusal::CycleInGraph { flow: true, .. } => {
+                "Para repetir, use Enquanto (While) ou Para cada (For Each) em vez de um fio de volta"
+            }
+            Refusal::CycleOnConnect { flow: false, .. }
+            | Refusal::CycleInGraph { flow: false, .. } => {
+                "Guarde com Definir variável e leia com Ler variável"
+            }
+            Refusal::RerouteWithoutInput { .. } => "Ligue a entrada do reroute primeiro",
+            Refusal::RerouteCycle { .. } => "Remova um dos fios da cadeia de reroutes",
+            Refusal::VariableWithoutName { .. } => "Escreva o nome da variável no campo do nó",
+            Refusal::UnknownVariable { .. } => "Crie no painel Variáveis ou escolha outra",
+            Refusal::DuplicateInput { .. } => "Remova um dos fios que chegam nela",
+            Refusal::RequiredInputMissing { field: true, .. } => {
+                "Ligue um fio ou escreva o valor no campo do nó"
+            }
+            Refusal::RequiredInputMissing { field: false, .. } => "Ligue um fio a essa entrada",
+            Refusal::UnknownNodeType { .. } => "Escolha um tipo da lista do nó",
+            Refusal::UnknownProperty { .. } => "Escolha uma propriedade da lista do nó",
+            Refusal::PointsProperty { .. } => "Escolha uma propriedade que não seja lista de pontos",
+            Refusal::PropertyWithoutName { .. } => "Escolha a propriedade no campo do nó",
+            Refusal::WiredPropertyPin { .. } => {
+                "Escreva o valor no campo do nó, em vez de ligar um fio"
+            }
+        }
     }
 }
 
@@ -146,62 +332,65 @@ fn pin_ref((node, pin): (u64, &str)) -> PinRef {
 }
 
 /// Definição do tipo do nó na biblioteca, ou erro quando o tipo não existe.
-pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, String> {
-    library::find(&node.kind).ok_or_else(|| format!("tipo de nó desconhecido: '{}'", node.kind))
+pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, Refusal> {
+    library::find(&node.kind).ok_or_else(|| Refusal::UnknownKind {
+        kind: node.kind.clone(),
+    })
 }
 
-/// Nós que leem ou gravam uma propriedade do registro (VIS-021). O pino de valor deles segue o tipo da propriedade.
-pub(crate) fn e_no_de_propriedade(kind: &str) -> bool {
+/// Nodes that read or write a registry property (VIS-021). Their value pin follows the property's type.
+pub(crate) fn is_property_node(kind: &str) -> bool {
     matches!(kind, "GetProperty" | "SetProperty")
 }
 
-/// Propriedade que um nó de propriedade declara, pelo tipo e pelo nome embutidos, e o tipo do pino dela. Erro se o
-/// tipo não existe no registro, se a propriedade não é dele nem dos seus ancestrais, ou se é uma lista de pontos.
-fn propriedade_declarada(node: &GraphNode) -> Result<(&'static PropDef, PinType), String> {
-    let tipo = texto_do(node, "type");
-    let nome = texto_do(node, "name");
-    if registry::find(&tipo).is_none() {
-        return Err(format!("{}: o tipo de nó '{tipo}' não existe", node.etiqueta()));
+/// The registry property a property node declares, and the type of its value pin. Refuses when the type is not in
+/// the registry, when the property is not in that type or its ancestors, when no name is embedded, and when the
+/// property is a list of points.
+fn declared_property(node: &GraphNode) -> Result<(&'static PropDef, PinType), Refusal> {
+    let node_type = texto_do(node, "type");
+    let name = texto_do(node, "name");
+    let label = node.etiqueta();
+    if registry::find(&node_type).is_none() {
+        return Err(Refusal::UnknownNodeType { label, node_type });
     }
-    let def = registry::prop_def(&tipo, &nome)
-        .ok_or_else(|| format!("{}: {tipo} não tem a propriedade '{nome}'", node.etiqueta()))?;
-    let ty = PinType::of_prop(def.kind).ok_or_else(|| {
-        format!(
-            "{}: '{nome}' é uma lista de pontos, que os nós de propriedade ainda não leem",
-            node.etiqueta()
-        )
+    if name.is_empty() {
+        return Err(Refusal::PropertyWithoutName { label });
+    }
+    let def = registry::prop_def(&node_type, &name).ok_or_else(|| Refusal::UnknownProperty {
+        label: label.clone(),
+        node_type: node_type.clone(),
+        name: name.clone(),
     })?;
+    let ty = PinType::of_prop(def.kind).ok_or(Refusal::PointsProperty { label, name })?;
     Ok((def, ty))
 }
 
-/// Tipo do pino de valor de um nó de propriedade (VIS-021). Sem tipo declarado é decimal, como antes da tipagem,
-/// para os grafos antigos. Com tipo, o pino segue o tipo da propriedade no registro.
-pub(crate) fn tipo_da_propriedade(node: &GraphNode) -> Result<PinType, String> {
+/// Type of the value pin of a property node (VIS-021). Without a declared type it is decimal, as before typed
+/// properties, so old graphs keep working. With a declared type, it is the type of the property in the registry.
+pub(crate) fn property_pin_type(node: &GraphNode) -> Result<PinType, Refusal> {
     if texto_do(node, "type").is_empty() {
         return Ok(PinType::Float);
     }
-    propriedade_declarada(node).map(|(_, ty)| ty)
+    declared_property(node).map(|(_, ty)| ty)
 }
 
-/// Valor que uma entrada usa quando não tem fio nem valor embutido (VIS-021). No pino de valor de um nó de
-/// propriedade é o padrão da propriedade declarada, e decimal zero sem tipo declarado. Nos demais pinos, o padrão
-/// da biblioteca.
-pub(crate) fn padrao_da_entrada(node: &GraphNode, pin: &PinDef) -> Option<Value> {
-    if e_no_de_propriedade(&node.kind) && pin.name == "value" {
+/// Value an input uses when it has no wire and no embedded value (VIS-021). The value pin of a property node uses
+/// the default of the declared property, or decimal zero without a declared type. Other pins use the library default.
+pub(crate) fn input_default(node: &GraphNode, pin: &PinDef) -> Option<Value> {
+    if is_property_node(&node.kind) && pin.name == "value" {
         if texto_do(node, "type").is_empty() {
             return Some(Value::Float(0.0));
         }
-        return propriedade_declarada(node)
+        return declared_property(node)
             .ok()
             .and_then(|(def, _)| Value::from_json(def.kind, &def.default));
     }
     pin.default.clone()
 }
 
-/// Trocar o tipo ou a propriedade de um nó de propriedade tira o valor embutido do pino de valor: ele pode ser de
-/// outro tipo, e o nó não aceitaria mais (VIS-021).
-fn limpa_valor_de_propriedade(node: &mut GraphNode, pin: &str) {
-    if e_no_de_propriedade(&node.kind) && (pin == "type" || pin == "name") {
+/// Changing the type or the name of a property node drops its embedded value, which may be of another type (VIS-021).
+fn clear_property_value(node: &mut GraphNode, pin: &str) {
+    if is_property_node(&node.kind) && (pin == "type" || pin == "name") {
         node.values.remove("value");
     }
 }
@@ -317,13 +506,17 @@ impl Graph {
         self.wires.len() != antes
     }
 
-    /// Grava o valor embutido de uma entrada de dados. O tipo do valor tem de ser o do pino.
-    pub fn set_value(&mut self, node: u64, pin: &str, value: Value) -> Result<(), String> {
+    /// Grava o valor embutido de uma entrada de dados. O tipo do valor tem de ser o do pino. Trocar o tipo ou o nome
+    /// de um nó de propriedade tira os fios do pino de valor que deixam de bater, e eles são devolvidos (VIS-021).
+    pub fn set_value(&mut self, node: u64, pin: &str, value: Value) -> Result<Vec<Wire>, String> {
         let (ty, etiqueta) = {
             let n = self
                 .node(node)
                 .ok_or_else(|| format!("nó {node} não existe no grafo"))?;
-            (self.input_type(n, pin)?, n.etiqueta())
+            (
+                self.input_type(n, pin).map_err(|e| e.message())?,
+                n.etiqueta(),
+            )
         };
         if value.ty() != ty {
             return Err(format!(
@@ -332,14 +525,21 @@ impl Graph {
                 value.ty().nome()
             ));
         }
-        if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node) {
-            let mudou = n.values.get(pin) != Some(&value);
-            n.values.insert(pin.to_string(), value);
-            if mudou {
-                limpa_valor_de_propriedade(n, pin);
+        let changed = match self.nodes.iter_mut().find(|n| n.id == node) {
+            Some(n) => {
+                let changed = n.values.get(pin) != Some(&value);
+                n.values.insert(pin.to_string(), value);
+                if changed {
+                    clear_property_value(n, pin);
+                }
+                changed
             }
+            None => false,
+        };
+        if changed && (pin == "type" || pin == "name") {
+            return Ok(self.drop_stale_value_wires(node));
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     /// Declara uma variável do script. O padrão tem de ser do mesmo tipo da variável.
@@ -444,13 +644,55 @@ impl Graph {
     }
 
     /// Tira o valor embutido de uma entrada: ela volta ao padrão da biblioteca. Devolve se havia valor.
-    pub fn remove_value(&mut self, node: u64, pin: &str) -> bool {
-        self.nodes.iter_mut().find(|n| n.id == node).is_some_and(|n| {
-            let tirou = n.values.remove(pin).is_some();
-            if tirou {
-                limpa_valor_de_propriedade(n, pin);
+    pub fn remove_value(&mut self, node: u64, pin: &str) -> Vec<Wire> {
+        let existed = match self.nodes.iter_mut().find(|n| n.id == node) {
+            Some(n) => {
+                let existed = n.values.remove(pin).is_some();
+                if existed {
+                    clear_property_value(n, pin);
+                }
+                existed
             }
-            tirou
+            None => false,
+        };
+        if existed && (pin == "type" || pin == "name") {
+            return self.drop_stale_value_wires(node);
+        }
+        Vec::new()
+    }
+
+    /// Removes the wires of a property node's value pin that no longer type-check after its type or name changed
+    /// (VIS-021), and returns them. Does nothing for other nodes.
+    fn drop_stale_value_wires(&mut self, node: u64) -> Vec<Wire> {
+        let mut removed = Vec::new();
+        if !self.node(node).is_some_and(|n| is_property_node(&n.kind)) {
+            return removed;
+        }
+        while let Some(i) = self.stale_value_wire(node) {
+            removed.push(self.wires.remove(i));
+        }
+        removed
+    }
+
+    /// Index of the first wire that is tied to the value of `node` and no longer type-checks. Tied wires are the
+    /// input wire into `value`, the output wires from `value`, and the wires that leave the reroutes it feeds.
+    fn stale_value_wire(&self, node: u64) -> Option<usize> {
+        // (node, pin) pairs that carry the value of `node`: its `value` output, and the outputs of the reroutes it feeds.
+        let mut carriers: HashSet<(u64, String)> = HashSet::from([(node, "value".to_string())]);
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for w in &self.wires {
+                let feeds_reroute = self.node(w.to.node).is_some_and(|n| n.kind == REROUTE);
+                if feeds_reroute && carriers.contains(&(w.from.node, w.from.pin.clone())) {
+                    grew |= carriers.insert((w.to.node, "out".to_string()));
+                }
+            }
+        }
+        self.wires.iter().position(|w| {
+            let into_value = w.to.node == node && w.to.pin == "value";
+            let from_value = carriers.contains(&(w.from.node, w.from.pin.clone()));
+            (into_value || from_value) && self.endpoint_type(&w.from, &w.to).is_err()
         })
     }
 
@@ -632,7 +874,7 @@ impl Graph {
             return Err("nenhum nó selecionado".into());
         }
         for n in &dentro {
-            let def = def_of(n)?;
+            let def = def_of(n).map_err(|e| e.message())?;
             if def.event || n.kind == "Function" {
                 return Err(format!("{} não pode entrar numa função", n.etiqueta()));
             }
@@ -711,7 +953,7 @@ impl Graph {
     /// Liga a saída `from` (nó, pino) à entrada `to`. Recusa pino inexistente, tipos diferentes, entrada já
     /// ligada e ciclo. Em caso de erro, o grafo fica como estava.
     pub fn connect(&mut self, from: (u64, &str), to: (u64, &str)) -> Result<(), String> {
-        self.can_connect(from, to)?;
+        self.can_connect(from, to).map_err(|e| e.message())?;
         self.wires.push(Wire {
             from: pin_ref(from),
             to: pin_ref(to),
@@ -719,27 +961,27 @@ impl Graph {
         Ok(())
     }
 
-    /// Diz se `connect` aceitaria a ligação, sem mudar o grafo. Devolve o tipo do fio, ou o motivo da recusa
-    /// (VIS-013): o editor mostra o motivo ao soltar o fio e ao passar sobre a entrada.
-    pub fn can_connect(&self, from: (u64, &str), to: (u64, &str)) -> Result<PinType, String> {
+    /// Whether `connect` would accept the link, without changing the graph. Returns the wire type, or the refusal
+    /// (VIS-013). The editor shows the refusal and its suggestion when a wire is dropped on a pin.
+    pub fn can_connect(&self, from: (u64, &str), to: (u64, &str)) -> Result<PinType, Refusal> {
         let from = pin_ref(from);
         let to = pin_ref(to);
         let ty = self.endpoint_type(&from, &to)?;
         // Cada entrada aceita um fio só. Vale para fluxo e para dados.
         if self.wires.iter().any(|w| w.to == to) {
-            return Err(format!(
-                "a entrada '{}' do nó {} já está conectada",
-                to.pin, to.node
-            ));
+            return Err(Refusal::InputOccupied {
+                node: to.node,
+                pin: to.pin,
+            });
         }
         // Há ciclo se o nó de destino já alcança o de origem pelos fios da mesma classe.
         let flow = ty == PinType::Flow;
         if self.reaches(to.node, from.node, flow) {
-            let classe = if flow { "de fluxo" } else { "de dados" };
-            return Err(format!(
-                "ligação criaria um ciclo {classe}: o nó {} já alcança o nó {}",
-                to.node, from.node
-            ));
+            return Err(Refusal::CycleOnConnect {
+                flow,
+                from: from.node,
+                to: to.node,
+            });
         }
         Ok(ty)
     }
@@ -772,13 +1014,13 @@ impl Graph {
 
     /// Tipo do fio de `from` até `to`, se as duas pontas existem, têm o pino e o tipo bate. A entrada de um
     /// reroute aceita qualquer tipo: o reroute copia o tipo da saída que o alimenta.
-    pub(crate) fn endpoint_type(&self, from: &PinRef, to: &PinRef) -> Result<PinType, String> {
+    pub(crate) fn endpoint_type(&self, from: &PinRef, to: &PinRef) -> Result<PinType, Refusal> {
         let a = self
             .node(from.node)
-            .ok_or_else(|| format!("nó {} não existe no grafo", from.node))?;
+            .ok_or(Refusal::MissingNode { node: from.node })?;
         let b = self
             .node(to.node)
-            .ok_or_else(|| format!("nó {} não existe no grafo", to.node))?;
+            .ok_or(Refusal::MissingNode { node: to.node })?;
         let out = self.output_type(a, &from.pin)?;
         let inp = if b.kind == REROUTE && to.pin == "in" {
             out
@@ -786,69 +1028,74 @@ impl Graph {
             self.input_type(b, &to.pin)?
         };
         if out != inp {
-            return Err(format!(
-                "tipos incompatíveis: {}.{} ({}) não pode ligar em {}.{} ({})",
-                a.etiqueta(),
-                from.pin,
-                out.nome(),
-                b.etiqueta(),
-                to.pin,
-                inp.nome()
-            ));
+            return Err(Refusal::IncompatibleTypes {
+                from: format!("{}.{}", a.etiqueta(), from.pin),
+                ty_from: out,
+                to: format!("{}.{}", b.etiqueta(), to.pin),
+                ty_to: inp,
+            });
         }
         Ok(out)
     }
 
     /// Tipo de uma saída. Nós de variável seguem o tipo da variável que nomeiam; reroutes seguem o fio.
-    pub(crate) fn output_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, String> {
+    pub(crate) fn output_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, Refusal> {
         let def = def_of(node)?;
         let p = def
             .outputs
             .iter()
             .find(|p| p.name == pin)
-            .ok_or_else(|| format!("{} não tem a saída '{pin}'", node.etiqueta()))?;
+            .ok_or_else(|| Refusal::MissingPin {
+                label: node.etiqueta(),
+                pin: pin.to_string(),
+                output: true,
+            })?;
         self.resolve(node, p)
     }
 
     /// Tipo de uma entrada. Nós de variável seguem o tipo da variável que nomeiam; reroutes seguem o fio.
-    pub(crate) fn input_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, String> {
+    pub(crate) fn input_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, Refusal> {
         let def = def_of(node)?;
         let p = def
             .inputs
             .iter()
             .find(|p| p.name == pin)
-            .ok_or_else(|| format!("{} não tem a entrada '{pin}'", node.etiqueta()))?;
+            .ok_or_else(|| Refusal::MissingPin {
+                label: node.etiqueta(),
+                pin: pin.to_string(),
+                output: false,
+            })?;
         self.resolve(node, p)
     }
 
-    fn resolve(&self, node: &GraphNode, pin: &PinDef) -> Result<PinType, String> {
+    fn resolve(&self, node: &GraphNode, pin: &PinDef) -> Result<PinType, Refusal> {
         if node.kind == REROUTE {
             return self.tipo_do_reroute(node);
         }
         match pin.ty {
             Some(ty) => Ok(ty),
-            None if e_no_de_propriedade(&node.kind) => tipo_da_propriedade(node),
+            None if is_property_node(&node.kind) => property_pin_type(node),
             None => Ok(self.variable_of(node)?.ty),
         }
     }
 
     /// Tipo que um reroute passa adiante: o da saída que o alimenta, seguindo a cadeia de reroutes. Erro se a
     /// cadeia não tem origem (entrada sem fio) ou se ela dá a volta sobre si mesma.
-    fn tipo_do_reroute(&self, node: &GraphNode) -> Result<PinType, String> {
+    fn tipo_do_reroute(&self, node: &GraphNode) -> Result<PinType, Refusal> {
         let mut vistos = HashSet::new();
         let mut atual = node.id;
         loop {
             if !vistos.insert(atual) {
-                return Err(format!("ciclo de reroute no nó {atual}"));
+                return Err(Refusal::RerouteCycle { node: atual });
             }
             let w = self
                 .wires
                 .iter()
                 .find(|w| w.to.node == atual && w.to.pin == "in")
-                .ok_or_else(|| format!("reroute {atual} sem fio de entrada: tipo indefinido"))?;
+                .ok_or(Refusal::RerouteWithoutInput { node: atual })?;
             let origem = self
                 .node(w.from.node)
-                .ok_or_else(|| format!("nó {} não existe no grafo", w.from.node))?;
+                .ok_or(Refusal::MissingNode { node: w.from.node })?;
             if origem.kind == REROUTE {
                 atual = origem.id;
                 continue;
@@ -859,18 +1106,18 @@ impl Graph {
 
     /// Variável nomeada pelo nó. O nome é um valor embutido: não pode vir de fio, porque a variável é fixa na
     /// compilação.
-    pub(crate) fn variable_of(&self, node: &GraphNode) -> Result<&Variable, String> {
+    pub(crate) fn variable_of(&self, node: &GraphNode) -> Result<&Variable, Refusal> {
         let name = match node.values.get("name") {
             Some(Value::String(s)) => s.as_str(),
             _ => {
-                return Err(format!(
-                    "{} precisa do nome da variável embutido",
-                    node.etiqueta()
-                ));
+                return Err(Refusal::VariableWithoutName {
+                    label: node.etiqueta(),
+                });
             }
         };
-        self.variable(name)
-            .ok_or_else(|| format!("variável '{name}' não existe"))
+        self.variable(name).ok_or_else(|| Refusal::UnknownVariable {
+            name: name.to_string(),
+        })
     }
 
     /// True se `goal` é alcançável a partir de `start`, seguindo só os fios de fluxo (`flow` = true) ou só os
@@ -945,6 +1192,7 @@ impl Graph {
                 erros.push(CompileError {
                     node: Some(id),
                     message: format!("id repetido: {id}"),
+                    suggestion: None,
                 });
             }
         }
@@ -952,8 +1200,8 @@ impl Graph {
         for node in &self.nodes {
             let def = match def_of(node) {
                 Ok(def) => def,
-                Err(msg) => {
-                    erros.push(erro(node.id, msg));
+                Err(refusal) => {
+                    erros.push(error_from_refusal(node.id, &refusal));
                     continue;
                 }
             };
@@ -969,71 +1217,76 @@ impl Graph {
                         ),
                     )),
                     Ok(_) => {}
-                    Err(msg) => erros.push(erro(node.id, msg)),
+                    Err(refusal) => erros.push(error_from_refusal(node.id, &refusal)),
                 }
             }
-            // Num nó de propriedade, um tipo ou nome inválido vira erro próprio, abaixo: não repete como obrigatório.
-            let propriedade_invalida = e_no_de_propriedade(&node.kind) && tipo_da_propriedade(node).is_err();
+            // On a property node, an invalid type or name is reported below, once. It is not repeated as a missing value.
+            let invalid_property = is_property_node(&node.kind) && property_pin_type(node).is_err();
             for p in &def.inputs {
-                let ligada = self
+                let wired = self
                     .wires
                     .iter()
                     .any(|w| w.to.node == node.id && w.to.pin == p.name);
-                let valor_de_propriedade_invalido = propriedade_invalida && p.name == "value";
-                if !ligada
+                let invalid_property_value = invalid_property && p.name == "value";
+                if !wired
                     && !node.values.contains_key(p.name)
-                    && padrao_da_entrada(node, p).is_none()
-                    && !valor_de_propriedade_invalido
+                    && input_default(node, p).is_none()
+                    && !invalid_property_value
                 {
-                    erros.push(erro(
-                        node.id,
-                        format!(
-                            "entrada obrigatória '{}' de {} não está conectada",
-                            p.name,
-                            node.etiqueta()
-                        ),
-                    ));
+                    // Value inputs show an inline field on the node; flow and node inputs do not.
+                    let field =
+                        matches!(p.ty, Some(ty) if !matches!(ty, PinType::Flow | PinType::Node));
+                    let refusal = Refusal::RequiredInputMissing {
+                        label: node.etiqueta(),
+                        pin: p.name.to_string(),
+                        field,
+                    };
+                    erros.push(error_from_refusal(node.id, &refusal));
                 }
             }
             if (node.kind == "GetVariable" || node.kind == "SetVariable")
-                && let Err(msg) = self.variable_of(node)
+                && let Err(refusal) = self.variable_of(node)
             {
-                erros.push(erro(node.id, msg));
+                erros.push(error_from_refusal(node.id, &refusal));
             }
-            if e_no_de_propriedade(&node.kind) {
-                // O compilador não vê a cena: tipo e nome têm de ser valores embutidos, não fios.
-                let mut com_fio = false;
+            if is_property_node(&node.kind) {
+                // The compiler does not see the scene, so the type must be an embedded value. The name must be one too,
+                // but only once a type is declared: a graph from before typed properties may read the name from a wire.
+                let typed = !texto_do(node, "type").is_empty();
+                let mut wired_pin_refused = false;
                 for pin in ["type", "name"] {
-                    if self.wires.iter().any(|w| w.to.node == node.id && w.to.pin == pin) {
-                        com_fio = true;
-                        erros.push(erro(
-                            node.id,
-                            format!(
-                                "{}: '{pin}' precisa ser um valor embutido, não pode vir de fio",
-                                node.etiqueta()
-                            ),
-                        ));
+                    let wired = self
+                        .wires
+                        .iter()
+                        .any(|w| w.to.node == node.id && w.to.pin == pin);
+                    if wired && (pin == "type" || typed) {
+                        wired_pin_refused = true;
+                        let refusal = Refusal::WiredPropertyPin {
+                            label: node.etiqueta(),
+                            pin: pin.to_string(),
+                        };
+                        erros.push(error_from_refusal(node.id, &refusal));
                     }
                 }
-                if !com_fio && let Err(msg) = tipo_da_propriedade(node) {
-                    erros.push(erro(node.id, msg));
+                if !wired_pin_refused && let Err(refusal) = property_pin_type(node) {
+                    erros.push(error_from_refusal(node.id, &refusal));
                 }
             }
         }
 
         let mut ligadas = HashSet::new();
         for w in &self.wires {
-            if let Err(msg) = self.endpoint_type(&w.from, &w.to) {
-                erros.push(erro(w.to.node, msg));
+            if let Err(refusal) = self.endpoint_type(&w.from, &w.to) {
+                erros.push(error_from_refusal(w.to.node, &refusal));
                 continue;
             }
             if !ligadas.insert(&w.to) {
-                erros.push(erro(
+                erros.push(error_from_refusal(
                     w.to.node,
-                    format!(
-                        "a entrada '{}' do nó {} está ligada mais de uma vez",
-                        w.to.pin, w.to.node
-                    ),
+                    &Refusal::DuplicateInput {
+                        node: w.to.node,
+                        pin: w.to.pin.clone(),
+                    },
                 ));
             }
         }
@@ -1044,17 +1297,20 @@ impl Graph {
                 erros.push(CompileError {
                     node: None,
                     message: "nome de variável vazio".into(),
+                    suggestion: None,
                 });
             } else if !nomes.insert(&v.name) {
                 erros.push(CompileError {
                     node: None,
                     message: format!("variável '{}' declarada mais de uma vez", v.name),
+                    suggestion: None,
                 });
             }
             if v.ty == PinType::Flow {
                 erros.push(CompileError {
                     node: None,
                     message: format!("variável '{}' não pode ser do tipo fluxo", v.name),
+                    suggestion: None,
                 });
             }
             if v.default.ty() != v.ty {
@@ -1066,15 +1322,24 @@ impl Graph {
                         v.default.ty().nome(),
                         v.ty.nome()
                     ),
+                    suggestion: None,
                 });
             }
         }
 
         if let Some(id) = self.ciclo(true) {
-            erros.push(erro(id, format!("ciclo de fluxo no nó {id}")));
+            let refusal = Refusal::CycleInGraph {
+                flow: true,
+                node: id,
+            };
+            erros.push(error_from_refusal(id, &refusal));
         }
         if let Some(id) = self.ciclo(false) {
-            erros.push(erro(id, format!("ciclo de dados no nó {id}")));
+            let refusal = Refusal::CycleInGraph {
+                flow: false,
+                node: id,
+            };
+            erros.push(error_from_refusal(id, &refusal));
         }
 
         // Funções e estados (VIS-026, VIS-027): nomes únicos, sem vazio, e referências que apontam para algo.
@@ -1393,10 +1658,315 @@ mod tests {
         let cmp = adiciona(&mut g, "Greater");
         let soma = adiciona(&mut g, "Add");
         let erro = g.can_connect((cmp, "result"), (soma, "a")).unwrap_err();
-        assert!(erro.contains("incompatíveis"), "{erro}");
+        assert!(erro.message().contains("incompatíveis"), "{erro:?}");
         let mult = adiciona(&mut g, "Multiply");
         assert_eq!(g.can_connect((soma, "result"), (mult, "a")), Ok(PinType::Float));
         assert!(g.wires.is_empty());
+    }
+
+    /// Every refusal has a non-empty message and suggestion: that is what the editor shows.
+    fn assert_refusal_complete(refusal: &Refusal) {
+        assert!(!refusal.message().trim().is_empty(), "{refusal:?}");
+        assert!(!refusal.suggestion().trim().is_empty(), "{refusal:?}");
+    }
+
+    #[test]
+    fn refusal_missing_node_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let refusal = g.can_connect((ev, "exec"), (99, "exec")).unwrap_err();
+        assert_eq!(refusal, Refusal::MissingNode { node: 99 });
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_missing_input_pin_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g
+            .can_connect((ev, "exec"), (soma, "entrada_falsa"))
+            .unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::MissingPin { output: false, .. }),
+            "{refusal:?}"
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_missing_output_pin_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let soma = adiciona(&mut g, "Add");
+        let mult = adiciona(&mut g, "Multiply");
+        let refusal = g
+            .can_connect((soma, "saida_falsa"), (mult, "a"))
+            .unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::MissingPin { output: true, .. }),
+            "{refusal:?}"
+        );
+        assert!(
+            refusal.message().contains("não tem a saída 'saida_falsa'"),
+            "{refusal:?}"
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_unknown_kind_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        // A node kind the library does not have: it only reaches the graph from a hand-edited file.
+        g.nodes.push(GraphNode {
+            id: 50,
+            kind: "NaoExiste".into(),
+            position: [0.0, 0.0],
+            values: BTreeMap::new(),
+        });
+        let refusal = g.can_connect((ev, "exec"), (50, "exec")).unwrap_err();
+        assert_eq!(
+            refusal,
+            Refusal::UnknownKind {
+                kind: "NaoExiste".into()
+            }
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_incompatible_types_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let cmp = adiciona(&mut g, "Greater");
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g.can_connect((cmp, "result"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::IncompatibleTypes { .. }),
+            "{refusal:?}"
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_input_occupied_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        g.connect((a, "result"), (m, "a")).unwrap();
+        let refusal = g.can_connect((b, "result"), (m, "a")).unwrap_err();
+        assert_eq!(
+            refusal,
+            Refusal::InputOccupied {
+                node: m,
+                pin: "a".into()
+            }
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_cycle_on_connect_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Sequence");
+        let b = adiciona(&mut g, "Sequence");
+        g.connect((a, "then_0"), (b, "exec")).unwrap();
+        let flow = g.can_connect((b, "then_0"), (a, "exec")).unwrap_err();
+        assert!(
+            matches!(flow, Refusal::CycleOnConnect { flow: true, .. }),
+            "{flow:?}"
+        );
+        assert_refusal_complete(&flow);
+        let soma = adiciona(&mut g, "Add");
+        let data = g.can_connect((soma, "result"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(data, Refusal::CycleOnConnect { flow: false, .. }),
+            "{data:?}"
+        );
+        assert_refusal_complete(&data);
+    }
+
+    #[test]
+    fn refusal_cycle_in_graph_flow_has_suggestion() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Sequence");
+        let b = adiciona(&mut g, "Sequence");
+        // Flow cycle built by hand: validation points at the node, with the suggestion.
+        g.wires.push(Wire {
+            from: pin_ref((a, "then_0")),
+            to: pin_ref((b, "exec")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((b, "then_0")),
+            to: pin_ref((a, "exec")),
+        });
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("ciclo de fluxo"))
+            .expect("a validação acha o ciclo de fluxo");
+        assert!(erro.node.is_some());
+        assert_eq!(
+            erro.suggestion,
+            Some(
+                "Para repetir, use Enquanto (While) ou Para cada (For Each) em vez de um fio de volta"
+            )
+        );
+    }
+
+    #[test]
+    fn refusal_cycle_in_graph_data_has_suggestion() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        // Data cycle built by hand: validation points at the node, with the suggestion.
+        g.wires.push(Wire {
+            from: pin_ref((a, "result")),
+            to: pin_ref((b, "a")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((b, "result")),
+            to: pin_ref((a, "a")),
+        });
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("ciclo de dados"))
+            .expect("a validação acha o ciclo de dados");
+        assert!(erro.node.is_some());
+        assert_eq!(
+            erro.suggestion,
+            Some("Guarde com Definir variável e leia com Ler variável")
+        );
+    }
+
+    #[test]
+    fn refusal_reroute_without_input_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let r = g.add_reroute([0.0, 0.0]);
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g.can_connect((r, "out"), (soma, "a")).unwrap_err();
+        assert_eq!(refusal, Refusal::RerouteWithoutInput { node: r });
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_reroute_cycle_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let r1 = g.add_reroute([0.0, 0.0]);
+        let r2 = g.add_reroute([0.0, 0.0]);
+        // Two reroutes feeding each other: built by hand, because connect would refuse it.
+        g.wires.push(Wire {
+            from: pin_ref((r1, "out")),
+            to: pin_ref((r2, "in")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((r2, "out")),
+            to: pin_ref((r1, "in")),
+        });
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g.can_connect((r1, "out"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::RerouteCycle { .. }),
+            "{refusal:?}"
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_variable_without_name_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let le = adiciona(&mut g, "GetVariable");
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g.can_connect((le, "value"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(refusal, Refusal::VariableWithoutName { .. }),
+            "{refusal:?}"
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_unknown_variable_has_message_and_suggestion() {
+        let mut g = Graph::default();
+        let le = adiciona(&mut g, "GetVariable");
+        g.set_value(le, "name", Value::String("nada".into()))
+            .unwrap();
+        let soma = adiciona(&mut g, "Add");
+        let refusal = g.can_connect((le, "value"), (soma, "a")).unwrap_err();
+        assert_eq!(
+            refusal,
+            Refusal::UnknownVariable {
+                name: "nada".into()
+            }
+        );
+        assert_refusal_complete(&refusal);
+    }
+
+    #[test]
+    fn refusal_duplicate_input_has_suggestion() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        // Two wires into the same input: only possible in a hand-edited graph.
+        g.wires.push(Wire {
+            from: pin_ref((a, "result")),
+            to: pin_ref((m, "a")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((b, "result")),
+            to: pin_ref((m, "a")),
+        });
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("mais de uma vez"))
+            .expect("a validação acha a entrada dupla");
+        assert_eq!(erro.node, Some(m));
+        assert!(erro.suggestion.is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn refusal_required_input_missing_has_suggestion() {
+        let mut g = Graph::default();
+        // A Sequence with no flow wire into its input: the input is required and has no inline field.
+        adiciona(&mut g, "Sequence");
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("entrada obrigatória"))
+            .expect("a validação acha a entrada obrigatória");
+        assert!(erro.node.is_some());
+        assert_eq!(erro.suggestion, Some("Ligue um fio a essa entrada"));
+        // A value input shows an inline field, so its suggestion points at the field.
+        let com_campo = Refusal::RequiredInputMissing {
+            label: "Soma#1".into(),
+            pin: "a".into(),
+            field: true,
+        };
+        assert_eq!(
+            com_campo.suggestion(),
+            "Ligue um fio ou escreva o valor no campo do nó"
+        );
+        assert_refusal_complete(&com_campo);
+    }
+
+    #[test]
+    fn refusal_nothing_changes_graph() {
+        let mut g = Graph::default();
+        let cmp = adiciona(&mut g, "Greater");
+        let soma = adiciona(&mut g, "Add");
+        let a = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        g.connect((a, "result"), (m, "a")).unwrap();
+        let antes = g.clone();
+        // Three refusals: incompatible types, occupied input, and a missing node.
+        assert!(g.connect((cmp, "result"), (soma, "a")).is_err());
+        assert!(g.connect((soma, "result"), (m, "a")).is_err());
+        assert!(g.connect((a, "result"), (99, "a")).is_err());
+        assert!(g.can_connect((cmp, "result"), (soma, "a")).is_err());
+        assert_eq!(g, antes);
     }
 
     #[test]
@@ -1530,8 +2100,8 @@ mod tests {
         let mut g = Graph::default();
         let soma = adiciona(&mut g, "Add");
         g.set_value(soma, "a", Value::Float(4.0)).unwrap();
-        assert!(g.remove_value(soma, "a"));
-        assert!(!g.remove_value(soma, "a"));
+        assert!(g.remove_value(soma, "a").is_empty());
+        assert!(!g.node(soma).unwrap().values.contains_key("a"));
         g.set_position(soma, [7.0, 8.0]).unwrap();
         assert_eq!(g.node(soma).unwrap().position, [7.0, 8.0]);
         let c = g.add_comment("oi", [0.0, 0.0], [10.0, 10.0]);
@@ -1581,15 +2151,15 @@ mod tests {
     }
 
     /// Nó de propriedade com o tipo e o nome embutidos, prontos para ligar.
-    fn propriedade(g: &mut Graph, kind: &str, tipo: &str, nome: &str) -> u64 {
+    fn property_node(g: &mut Graph, kind: &str, node_type: &str, name: &str) -> u64 {
         let id = adiciona(g, kind);
-        g.set_value(id, "type", Value::String(tipo.into())).unwrap();
-        g.set_value(id, "name", Value::String(nome.into())).unwrap();
+        g.set_value(id, "type", Value::String(node_type.into())).unwrap();
+        g.set_value(id, "name", Value::String(name.into())).unwrap();
         id
     }
 
     #[test]
-    fn tipo_do_pino_de_propriedade_segue_o_registro() {
+    fn property_pin_follows_registry() {
         let mut g = Graph::default();
         let casos = [
             ("modulate", PinType::String),
@@ -1600,7 +2170,7 @@ mod tests {
             ("shape", PinType::String),
         ];
         for (nome, esperado) in casos {
-            let id = propriedade(&mut g, "GetProperty", "Sprite2D", nome);
+            let id = property_node(&mut g, "GetProperty", "Sprite2D", nome);
             let no = g.node(id).unwrap();
             assert_eq!(g.output_type(no, "value"), Ok(esperado), "{nome}");
         }
@@ -1618,11 +2188,11 @@ mod tests {
     }
 
     #[test]
-    fn validar_recusa_tipo_nome_e_lista_de_pontos_desconhecidos() {
+    fn validate_refuses_unknown_type_name_and_points() {
         let mut g = Graph::default();
-        propriedade(&mut g, "GetProperty", "Tipo9", "x");
-        propriedade(&mut g, "GetProperty", "Sprite2D", "nao_existe");
-        propriedade(&mut g, "SetProperty", "CollisionPolygon2D", "points");
+        property_node(&mut g, "GetProperty", "Tipo9", "x");
+        property_node(&mut g, "GetProperty", "Sprite2D", "nao_existe");
+        property_node(&mut g, "SetProperty", "CollisionPolygon2D", "points");
         let erros = g.validate();
         assert!(
             erros.iter().any(|e| e.message.contains("'Tipo9' não existe")),
@@ -1644,10 +2214,10 @@ mod tests {
     }
 
     #[test]
-    fn tipo_e_nome_ligados_a_fio_sao_recusados() {
+    fn wired_type_and_name_are_refused() {
         let mut g = Graph::default();
         let texto = adiciona(&mut g, "Concat");
-        let gp = propriedade(&mut g, "GetProperty", "Sprite2D", "modulate");
+        let gp = property_node(&mut g, "GetProperty", "Sprite2D", "modulate");
         g.connect((texto, "result"), (gp, "type")).unwrap();
         g.connect((texto, "result"), (gp, "name")).unwrap();
         let erros = g.validate();
@@ -1662,9 +2232,9 @@ mod tests {
     }
 
     #[test]
-    fn trocar_tipo_ou_propriedade_limpa_o_valor_embutido() {
+    fn changing_type_or_name_clears_embedded_value() {
         let mut g = Graph::default();
-        let sp = propriedade(&mut g, "SetProperty", "Sprite2D", "modulate");
+        let sp = property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
         g.set_value(sp, "value", Value::String("#ff0000".into())).unwrap();
         // Mesmo nome: nada muda, o valor fica.
         g.set_value(sp, "name", Value::String("modulate".into())).unwrap();
@@ -1677,15 +2247,15 @@ mod tests {
         assert!(!g.node(sp).unwrap().values.contains_key("value"));
         // Tirar o tipo também tira o valor: volta a decimal sem valor.
         g.set_value(sp, "value", Value::String("gato".into())).unwrap();
-        assert!(g.remove_value(sp, "type"));
+        g.remove_value(sp, "type");
         assert!(!g.node(sp).unwrap().values.contains_key("value"));
     }
 
     #[test]
-    fn valor_sem_fio_usa_o_padrao_da_propriedade() {
+    fn value_without_wire_uses_property_default() {
         let mut g = Graph::default();
         // Propriedade colorida sem valor embutido: o padrão é o do registro, e a entrada não fica obrigatória.
-        propriedade(&mut g, "SetProperty", "Sprite2D", "modulate");
+        property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
         // Sem tipo declarado, o padrão é decimal zero, como antes.
         let antigo = adiciona(&mut g, "SetProperty");
         g.set_value(antigo, "name", Value::String("position_x".into()))
@@ -1694,6 +2264,58 @@ mod tests {
         assert!(!erros.iter().any(|e| e.message.contains("'value'")), "{erros:?}");
         let padrao = g.node(antigo).unwrap();
         let input = def_of(padrao).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
-        assert_eq!(padrao_da_entrada(padrao, input), Some(Value::Float(0.0)));
+        assert_eq!(input_default(padrao, input), Some(Value::Float(0.0)));
+    }
+
+    #[test]
+    fn changing_name_drops_mismatched_value_wire() {
+        let mut g = Graph::default();
+        let leitura = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let escrita = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((leitura, "value"), (escrita, "value")).unwrap();
+        // Outra propriedade do mesmo tipo: o fio fica.
+        let tirados = g
+            .set_value(escrita, "name", Value::String("centered".into()))
+            .unwrap();
+        assert!(tirados.is_empty());
+        assert_eq!(g.wires.len(), 1);
+        // Vec2 no lugar de Bool: o fio sai, e volta na resposta para o editor avisar.
+        let tirados = g
+            .set_value(escrita, "name", Value::String("position".into()))
+            .unwrap();
+        assert_eq!(tirados.len(), 1);
+        assert_eq!(tirados[0].to, PinRef { node: escrita, pin: "value".into() });
+        assert!(g.wires.is_empty());
+    }
+
+    #[test]
+    fn changing_read_type_drops_wire_behind_reroute() {
+        let mut g = Graph::default();
+        let leitura = property_node(&mut g, "GetProperty", "Node2D", "position");
+        let reroute = g.add_reroute([0.0, 0.0]);
+        let escrita = property_node(&mut g, "SetProperty", "Node2D", "position");
+        g.connect((leitura, "value"), (reroute, "in")).unwrap();
+        g.connect((reroute, "out"), (escrita, "value")).unwrap();
+        // Node2D.visible é Bool: a leitura passa a dar Bool, e o pino Vec2 da escrita já não aceita.
+        let tirados = g
+            .set_value(leitura, "name", Value::String("visible".into()))
+            .unwrap();
+        assert_eq!(tirados.len(), 1);
+        assert_eq!(tirados[0].to.node, escrita);
+        // O fio que entra no reroute fica: a leitura continua dando um valor.
+        assert_eq!(g.wires.len(), 1);
+        assert_eq!(g.wires[0].to.node, reroute);
+    }
+
+    #[test]
+    fn removing_type_returns_wires_that_turn_decimal() {
+        let mut g = Graph::default();
+        let leitura = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let escrita = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((leitura, "value"), (escrita, "value")).unwrap();
+        // Sem tipo declarado, o pino de valor vira decimal: o Bool da leitura não encaixa mais.
+        let tirados = g.remove_value(escrita, "type");
+        assert_eq!(tirados.len(), 1);
+        assert!(g.wires.is_empty());
     }
 }

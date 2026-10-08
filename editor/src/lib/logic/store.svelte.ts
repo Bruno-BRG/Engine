@@ -26,9 +26,11 @@ import {
   type NodeDef,
   type PinRef,
   type PinType,
+  type Refusal,
   type Value,
   type Variable,
   type Wire,
+  refusalText,
 } from './model';
 
 /** Eventos que só podem aparecer uma vez por script. Os de estado podem repetir, com nomes diferentes. */
@@ -385,13 +387,27 @@ class LogicState {
     return ok;
   }
 
-  /** Motivo pelo qual a ligação seria recusada, ou undefined se ela é válida. Não muda o grafo. */
-  checkConnection(from: PinRef, to: PinRef): string | undefined {
-    return this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin) ?? undefined;
+  /** Refusal and suggestion for linking `from` to `to`, or undefined when the link is valid. Changes nothing. */
+  checkConnection(from: PinRef, to: PinRef): Refusal | undefined {
+    const json = this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin);
+    return json ? (JSON.parse(json) as Refusal) : undefined;
   }
 
-  connect(from: PinRef, to: PinRef): boolean {
-    return this.#run('Ligação recusada', (ed) => ed.connect(from.node, from.pin, to.node, to.pin));
+  /**
+   * Links two pins (VIS-013). A refused link shows the refusal and its suggestion, and the graph stays as it was. With
+   * `replaces` (the input that already had a wire), that old wire leaves only after the new link is accepted: if the
+   * new link is refused, the old wire stays. Dropping the wire back on the same input changes nothing.
+   */
+  connect(from: PinRef, to: PinRef, replaces: PinRef | null = null): boolean {
+    if (replaces && replaces.node === to.node && replaces.pin === to.pin) return true;
+    const refusal = this.checkConnection(from, to);
+    if (refusal) {
+      log.toast('warn', 'Ligação recusada', refusalText(refusal));
+      return false;
+    }
+    const ok = this.#run('Ligação recusada', (ed) => ed.connect(from.node, from.pin, to.node, to.pin));
+    if (ok && replaces) this.disconnectInput(replaces.node, replaces.pin);
+    return ok;
   }
 
   disconnect(w: Wire) {
@@ -461,11 +477,31 @@ class LogicState {
 
   /** Valor embutido de uma entrada (campo do próprio nó). */
   setValue(node: number, pin: string, value: Value) {
-    this.#run('Valor recusado', (ed) => ed.set_value(node, pin, JSON.stringify(value)));
+    this.#runDroppingWires('Valor recusado', (ed) => ed.set_value(node, pin, JSON.stringify(value)));
   }
 
   removeValue(node: number, pin: string) {
-    this.#run('Não foi possível limpar o valor', (ed) => ed.remove_value(node, pin));
+    this.#runDroppingWires('Não foi possível limpar o valor', (ed) => ed.remove_value(node, pin));
+  }
+
+  /**
+   * Like `#run`, for edits that can drop wires: changing the type or the name of a property node may leave wires on its
+   * value pin that no longer match. The wires the engine returns are dropped, and the user gets a warning (VIS-021).
+   */
+  #runDroppingWires(titulo: string, fn: (ed: GraphEditor) => string): boolean {
+    let dropped: Wire[] = [];
+    const ok = this.#run(titulo, (ed) => {
+      dropped = JSON.parse(fn(ed)) as Wire[];
+    });
+    if (ok && dropped.length > 0) {
+      const summary = dropped.length === 1 ? 'Um fio foi desligado' : `${dropped.length} fios foram desligados`;
+      log.toast(
+        'warn',
+        'Fio desligado no pino de valor',
+        `${summary}: o tipo ou o nome do nó de propriedade mudou e o pino não aceita mais o valor de antes.`,
+      );
+    }
+    return ok;
   }
 
   setVariable(name: string, ty: PinType, def: Value, exported: boolean): boolean {

@@ -16,7 +16,7 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 
 - [ ] **DBG-001** (P1) Remote scene tree during play: live nodes, edit properties at runtime. *G: Remote tree.*
 - [ ] **DBG-002** (P1) Pause, step one frame, inspect.
-- [ ] **DBG-003** (P1) Visual script debugging: highlighted wires, pin values, breakpoints, call stack (see [visual-scripting.md](visual-scripting.md)). *Status (Fase 2): parcial: pontos de parada, controles e rastro no editor. Falta a pilha de chamadas.*
+- [ ] **DBG-003** (P1) Visual script debugging: highlighted wires, pin values, breakpoints, call stack (see [visual-scripting.md](visual-scripting.md)). *Status (Fase 2): parcial: pontos de parada por instância, Continuar, Próxima operação, seletor de instância e rastro da instância escolhida, ainda sem verificação no app desktop. Falta a pilha de chamadas.*
 - [x] **DBG-004** (P1) Physics debug draw toggle (shapes, contacts, velocities). *Status (Fase 2): feito: botão Bug na barra da Cena, só na reprodução; mostra formas, contatos e velocidades. Validado no navegador.*
 
 ## Profiler

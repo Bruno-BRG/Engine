@@ -36,7 +36,8 @@ export interface GraphNode {
   id: number;
   kind: string;
   position: [number, number];
-  values: Record<string, Value>;
+  /** Values embedded in the node. Absent when the node has none: Rust omits the empty field. */
+  values?: Record<string, Value>;
 }
 
 export interface PinRef {
@@ -80,9 +81,22 @@ export interface GraphSnapshot {
   pins: ResolvedPin[];
 }
 
+/** Graph validation error. `suggestion` is null when there is no clear fix. */
 export interface GraphError {
   node: number | null;
   message: string;
+  suggestion: string | null;
+}
+
+/** Why a connection is refused (VIS-013): what happened and, when there is one, how to fix it. */
+export interface Refusal {
+  message: string;
+  suggestion: string | null;
+}
+
+/** Text of a refusal for the toast and the pin titles: what happened, followed by the suggestion. */
+export function refusalText(r: Refusal): string {
+  return r.suggestion ? `${r.message}. ${r.suggestion}` : r.message;
 }
 
 /** Trecho copiado (copy_fragment): o que vai para a área de transferência, no mesmo formato do Rust. */

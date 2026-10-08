@@ -115,7 +115,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn mapa_de_tipos_do_registro_para_pinos() {
+    fn registry_types_map_to_pins() {
         assert_eq!(PinType::of_prop(PropKind::Float), Some(PinType::Float));
         assert_eq!(PinType::of_prop(PropKind::Int), Some(PinType::Int));
         assert_eq!(PinType::of_prop(PropKind::Mask), Some(PinType::Int));
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn valor_de_json_do_registro_no_tipo_do_pino() {
+    fn registry_json_becomes_pin_type_value() {
         assert_eq!(Value::from_json(PropKind::Float, &json!(0.5)), Some(Value::Float(0.5)));
         assert_eq!(Value::from_json(PropKind::Mask, &json!(-1)), Some(Value::Int(-1)));
         assert_eq!(Value::from_json(PropKind::Bool, &json!(true)), Some(Value::Bool(true)));

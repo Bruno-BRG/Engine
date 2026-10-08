@@ -59,7 +59,7 @@ fn e_vetor(kind: &str, prop: &str) -> bool {
 }
 
 /// Valor decimal: um decimal, ou um inteiro (que se converte).
-fn decimal(value: &Value) -> Option<f64> {
+fn as_decimal(value: &Value) -> Option<f64> {
     match value {
         Value::Float(f) => Some(*f),
         Value::Int(n) => Some(*n as f64),
@@ -70,7 +70,7 @@ fn decimal(value: &Value) -> Option<f64> {
 /// JSON que o registro guarda para uma propriedade do tipo `kind`, a partir do valor do script (VIS-021). `None`
 /// quando o valor não é desse tipo: a gravação é recusada. Decimal e inteiro se convertem; `coerce` do núcleo
 /// arredonda e limita o número.
-fn json_de(kind: PropKind, value: &Value) -> Option<serde_json::Value> {
+fn json_for_kind(kind: PropKind, value: &Value) -> Option<serde_json::Value> {
     match (kind, value) {
         (PropKind::Float, Value::Float(f)) => Some(json!(f)),
         (PropKind::Float, Value::Int(n)) => Some(json!(*n as f64)),
@@ -127,7 +127,7 @@ impl Host for Mundo<'_> {
             if !e_vetor(&n.kind, prop) {
                 return false;
             }
-            let Some(x) = decimal(&value) else {
+            let Some(x) = as_decimal(&value) else {
                 return false;
             };
             let mut v = as_vec2(&value_of(n, prop));
@@ -137,7 +137,7 @@ impl Host for Mundo<'_> {
             let Some(def) = registry::prop_def(&n.kind, name) else {
                 return false;
             };
-            let Some(valor) = json_de(def.kind, &value) else {
+            let Some(valor) = json_for_kind(def.kind, &value) else {
                 return false;
             };
             (name, valor)
@@ -253,7 +253,7 @@ mod tests {
     use super::*;
 
     /// Partes da reprodução que o host usa, com uma cena de um Sprite2D.
-    struct Partes {
+    struct Parts {
         cena: Scene,
         fisica: Physics,
         audio: AudioPlayback,
@@ -263,13 +263,13 @@ mod tests {
         uid: Uid,
     }
 
-    impl Partes {
-        fn novas() -> Partes {
+    impl Parts {
+        fn create() -> Parts {
             let mut cena = Scene::new("teste", 1);
             let uid = cena.add_node(None, "Sprite2D", None).unwrap();
             let ajustes = ProjectSettings::default();
             let fisica = Physics::build(&cena, &ajustes);
-            Partes {
+            Parts {
                 cena,
                 fisica,
                 audio: AudioPlayback::default(),
@@ -295,8 +295,8 @@ mod tests {
     }
 
     #[test]
-    fn leitura_devolve_o_tipo_da_propriedade() {
-        let mut p = Partes::novas();
+    fn read_returns_property_type() {
+        let mut p = Parts::create();
         let uid = p.uid.0;
         let mut m = p.mundo();
         assert_eq!(m.get_property(uid, "modulate"), Some(Value::String("#ffffff".into())));
@@ -308,8 +308,8 @@ mod tests {
     }
 
     #[test]
-    fn escrita_de_tipo_errado_devolve_false() {
-        let mut p = Partes::novas();
+    fn wrong_type_write_returns_false() {
+        let mut p = Parts::create();
         let uid = p.uid.0;
         let mut m = p.mundo();
         assert!(m.set_property(uid, "modulate", Value::String("#ff0000".into())));
@@ -327,8 +327,8 @@ mod tests {
     }
 
     #[test]
-    fn componente_de_vetor_continua_decimal() {
-        let mut p = Partes::novas();
+    fn vector_component_stays_decimal() {
+        let mut p = Parts::create();
         let uid = p.uid.0;
         let mut m = p.mundo();
         assert!(m.set_property(uid, "position_x", Value::Float(12.0)));

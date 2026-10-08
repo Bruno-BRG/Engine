@@ -1,34 +1,36 @@
 <script lang="ts">
-  // Seletor do tipo ou do nome de um nó de propriedade (VIS-021). O valor é o que está gravado no nó, mesmo quando
-  // ele não está na lista (um nome que o tipo não tem), para o usuário ver o que precisa corrigir.
+  // Picker for the type or the name of a property node (VIS-021). The value is what the node stores, even when it is
+  // not in the list (a name the type does not have), so the user sees what to fix.
   let {
-    valor,
-    opcoes,
-    vazio,
+    selected,
+    options,
+    emptyLabel,
     onchange,
   }: {
-    valor: string;
-    opcoes: { value: string; label: string }[];
-    /** Texto da opção vazia: "sem tipo" para o tipo, "escolha" para o nome. */
-    vazio: string;
+    selected: string;
+    options: { value: string; label: string }[];
+    /** Text of the empty option: "no type" for the type, "pick one" for the name. */
+    emptyLabel: string;
     onchange: (v: string) => void;
   } = $props();
 
-  const pare = (e: Event) => e.stopPropagation();
-  const lista = $derived(
-    valor && !opcoes.some((o) => o.value === valor) ? [...opcoes, { value: valor, label: valor }] : opcoes,
+  const stopPointer = (e: Event) => e.stopPropagation();
+  const list = $derived(
+    selected && !options.some((o) => o.value === selected)
+      ? [...options, { value: selected, label: selected }]
+      : options,
   );
 </script>
 
 <select
   class="campo"
-  value={valor}
-  onpointerdown={pare}
+  value={selected}
+  onpointerdown={stopPointer}
   onchange={(e) => onchange(e.currentTarget.value)}
-  aria-label={vazio}
+  aria-label={emptyLabel}
 >
-  <option value="">{vazio}</option>
-  {#each lista as o (o.value)}
+  <option value="">{emptyLabel}</option>
+  {#each list as o (o.value)}
     <option value={o.value}>{o.label}</option>
   {/each}
 </select>
