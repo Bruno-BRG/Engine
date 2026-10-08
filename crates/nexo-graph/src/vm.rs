@@ -986,7 +986,7 @@ pub(crate) mod tests {
     pub(crate) fn float_prop(host: &Mock, node: u64, name: &str) -> f64 {
         match host.props.get(&(node, name.to_string())) {
             Some(Value::Float(f)) => *f,
-            outro => panic!("{name} do nó {node}: {outro:?}"),
+            other => panic!("{name} do nó {node}: {other:?}"),
         }
     }
 
