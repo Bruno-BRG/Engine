@@ -87,7 +87,8 @@
   function restoreSection(t: NodeType) {
     if (!node) return;
     const patch: Record<string, unknown> = {};
-    for (const p of t.props) patch[p.name] = p.default;
+    // Script and exported-value maps (VIS-022) are edited in the script slot, so restoring the section leaves them alone.
+    for (const p of t.props) if (p.name !== 'script' && p.kind !== 'map') patch[p.name] = p.default;
     scene.setProps(node.uid, patch);
   }
 
@@ -121,8 +122,9 @@
   function groupsOf(t: NodeType) {
     const groups: { name: string; props: PropDef[] }[] = [];
     for (const p of t.props) {
-      // O script tem slot próprio (INS-005), no bloco de identificação, em vez de um campo de texto.
-      if (HEADER_GROUPS.has(p.group) || p.name === 'script') continue;
+      // The script has its own slot (INS-005) in the identification block, instead of a text field. Exported values
+      // (the map) are in that slot too (VIS-022).
+      if (HEADER_GROUPS.has(p.group) || p.name === 'script' || p.kind === 'map') continue;
       const g = groups.at(-1);
       if (g && g.name === p.group) g.props.push(p);
       else groups.push({ name: p.group, props: [p] });
@@ -344,6 +346,7 @@
                           points={pointsOf(v)}
                           onset={(pts, coalesce) => setProp(def, pts, coalesce)}
                           onend={endEdit}
+                          purpose={node?.kind === 'Path2D' ? 'caminho' : 'colisao'}
                         />
                       {:else if def.kind === 'uid' && def.asset}
                         <AssetField

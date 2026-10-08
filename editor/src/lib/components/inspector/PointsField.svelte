@@ -12,13 +12,28 @@
     points,
     onset,
     onend,
+    purpose = 'colisao',
   }: {
     label: string;
     points: Point[];
     /** Grava a lista inteira. `coalesce` junta a alteração com a anterior no desfazer. */
     onset: (points: Point[], coalesce: boolean) => void;
     onend: () => void;
+    /** What the list is for: a collision polygon needs three points, a path needs two (VPT-005). */
+    purpose?: 'colisao' | 'caminho';
   } = $props();
+
+  const minimo = $derived(purpose === 'caminho' ? 2 : 3);
+  const semPontos = $derived(
+    purpose === 'caminho'
+      ? 'Sem pontos. Adicione pelo menos dois para formar o caminho.'
+      : 'Sem pontos. Adicione pelo menos três para formar a colisão.',
+  );
+  const poucosPontos = $derived(
+    purpose === 'caminho'
+      ? 'Com menos de dois pontos, o caminho não aparece.'
+      : 'Com menos de três pontos, o polígono não colide.',
+  );
 
   function edit(i: number, axis: 0 | 1, v: number) {
     const next = points.map((p, j): Point => {
@@ -72,11 +87,11 @@
       </button>
     </div>
   {:else}
-    <p class="none">Sem pontos. Adicione pelo menos três para formar a colisão.</p>
+    <p class="none">{semPontos}</p>
   {/each}
 
-  {#if points.length > 0 && points.length < 3}
-    <p class="aviso">Com menos de três pontos, o polígono não colide.</p>
+  {#if points.length > 0 && points.length < minimo}
+    <p class="aviso">{poucosPontos}</p>
   {/if}
 </div>
 

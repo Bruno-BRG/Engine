@@ -4,7 +4,7 @@
 import { createSceneEditor, randomSeed, readNodeRegistry, type SceneEditor } from '$lib/runtime/engine';
 import { log } from './log.svelte';
 
-export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask' | 'points';
+export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask' | 'points' | 'map';
 
 /** Lista das Configurações do Projeto de onde vêm os nomes de um campo de texto (`NameList` do registro). */
 export type NameList = 'tags' | 'layers' | 'buses' | 'physics_materials';
@@ -52,6 +52,12 @@ export interface Connection {
 export interface ShapeOutline {
   uid: string;
   owner: string;
+  points: [number, number][];
+}
+
+/** Path2D in world space: an open polyline, in path order (VPT-005). */
+export interface PathOutline {
+  uid: string;
   points: [number, number][];
 }
 
@@ -249,6 +255,12 @@ class SceneState {
   shapeOutlines(): ShapeOutline[] {
     if (!this.#ed) return [];
     return JSON.parse(this.#ed.shape_outlines() as unknown as string) as ShapeOutline[];
+  }
+
+  /** Path2D polylines in world space (VPT-005). */
+  pathOutlines(): PathOutline[] {
+    if (!this.#ed) return [];
+    return JSON.parse(this.#ed.path_outlines() as unknown as string) as PathOutline[];
   }
 
   /** Câmera atual [x, y, zoom] ou null. */

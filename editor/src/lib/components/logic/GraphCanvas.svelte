@@ -114,8 +114,8 @@
     const out = new Map<number, string>();
     for (const e of logic.errors) {
       if (e.node === null) continue;
-      const texto = refusalText(e);
-      out.set(e.node, out.has(e.node) ? `${out.get(e.node)}\n${texto}` : texto);
+      const message = refusalText(e);
+      out.set(e.node, out.has(e.node) ? `${out.get(e.node)}\n${message}` : message);
     }
     return out;
   });
@@ -217,8 +217,8 @@
       }
       const outro: PinRef = { node: p.node, pin: p.pin };
       // Dropping the wire back on the input it already fills changes nothing, so that input is not occupied.
-      const volta = d.existente?.node === p.node && d.existente.pin === p.pin;
-      const refusal = volta
+      const backToSameInput = d.existente?.node === p.node && d.existente.pin === p.pin;
+      const refusal = backToSameInput
         ? undefined
         : d.saida
           ? logic.checkConnection(d.de, outro)

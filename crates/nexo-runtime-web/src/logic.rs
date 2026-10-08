@@ -3,7 +3,7 @@
 //! este arquivo só traduz para o JavaScript. Os ids de nós e de caixas são números (`f64`): cabem sem perda, e um
 //! `u64` viraria BigInt no wasm-bindgen.
 
-use nexo_graph::{Fragment, Graph, PinType, Value, library};
+use nexo_graph::{Fragment, Graph, PinType, Value, Variable, library};
 use serde::Serialize;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -27,6 +27,21 @@ fn js_err(e: impl std::fmt::Display) -> JsError {
 
 fn to_json(v: &impl Serialize) -> Result<String, JsError> {
     serde_json::to_string(v).map_err(js_err)
+}
+
+/// Variables as JSON. A node-reference default also goes as `default_node`, hex text in the same format as the
+/// exported values (ADR 0012): a JSON number above 2^53 loses its low digits when JavaScript reads it.
+fn variables_json(variables: &[Variable]) -> Result<serde_json::Value, serde_json::Error> {
+    let mut items = Vec::with_capacity(variables.len());
+    for variable in variables {
+        let mut item = serde_json::to_value(variable)?;
+        if let (Value::Node(id), Some(object)) = (&variable.default, item.as_object_mut()) {
+            let text = if *id == 0 { String::new() } else { format!("{id:016x}") };
+            object.insert("default_node".into(), serde_json::Value::String(text));
+        }
+        items.push(item);
+    }
+    Ok(serde_json::Value::Array(items))
 }
 
 impl GraphEditor {
@@ -98,11 +113,12 @@ impl GraphEditor {
 
     /// Estado do grafo em JSON: `nodes`, `wires`, `comments`, `variables` e `pins` (tipo resolvido de cada pino).
     pub fn snapshot(&self) -> Result<String, JsError> {
+        let variables = variables_json(&self.graph.variables).map_err(js_err)?;
         to_json(&json!({
             "nodes": self.graph.nodes,
             "wires": self.graph.wires,
             "comments": self.graph.comments,
-            "variables": self.graph.variables,
+            "variables": variables,
             "pins": self.graph.pins(),
         }))
     }
@@ -271,5 +287,27 @@ impl GraphEditor {
 
     pub fn can_redo(&self) -> bool {
         !self.futuro.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexo_core::scene::Uid;
+
+    #[test]
+    fn node_default_is_also_sent_as_hex_text() {
+        let variables = vec![
+            Variable { name: "alvo".into(), ty: PinType::Node, default: Value::Node((1 << 53) + 1), exported: true },
+            Variable { name: "vazio".into(), ty: PinType::Node, default: Value::Node(0), exported: false },
+            Variable { name: "vida".into(), ty: PinType::Float, default: Value::Float(1.5), exported: true },
+        ];
+        let items = variables_json(&variables).unwrap();
+        assert_eq!(items[0]["default_node"], "0020000000000001");
+        assert_eq!(items[1]["default_node"], "");
+        assert!(items[2].get("default_node").is_none());
+        // The text reads back to the same id. A JSON number above 2^53 would not survive JavaScript.
+        let text = items[0]["default_node"].as_str().unwrap();
+        assert_eq!(text.parse::<Uid>().unwrap(), Uid((1 << 53) + 1));
     }
 }

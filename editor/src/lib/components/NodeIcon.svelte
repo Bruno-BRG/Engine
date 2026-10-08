@@ -21,6 +21,7 @@
     Volume2,
     Speaker,
     Timer as TimerIcon,
+    Spline,
   } from '@lucide/svelte';
   let { kind, size = 13 }: { kind: string; size?: number } = $props();
 
@@ -30,6 +31,7 @@
     Node2D: Move,
     Sprite2D: ImageIcon,
     Camera2D: Camera,
+    Path2D: Spline,
     StaticBody2D: Square,
     RigidBody2D: Circle,
     CharacterBody2D: User,
@@ -62,6 +64,7 @@
     Node2D: '2d',
     Sprite2D: '2d',
     Camera2D: '2d',
+    Path2D: '2d',
     StaticBody2D: 'fisica',
     RigidBody2D: 'fisica',
     CharacterBody2D: 'fisica',
