@@ -454,10 +454,22 @@
     logic.connect(from, to, d.existente);
   }
 
+  /**
+   * Blurs the text field being typed in, if it is a comment or pin field. The blur fires its change event, which
+   * confirms the typed text (VIS-014).
+   */
+  function leaveTextField() {
+    const active = document.activeElement as HTMLElement | null;
+    if (estaDigitando(active) && active?.closest('.caixa, [data-node]')) active.blur();
+  }
+
   function roda(e: WheelEvent) {
     if (!logic.active) return;
     const [sx, sy] = localDe(e);
-    logic.camera = zoomAt(logic.camera, Math.exp(-e.deltaY * 0.0015), sx, sy);
+    const next = zoomAt(logic.camera, Math.exp(-e.deltaY * 0.0015), sx, sy);
+    // Below the detail threshold the comment and pin fields are unmounted: their typed text is confirmed first.
+    if (!showsDetail(next.zoom)) leaveTextField();
+    logic.camera = next;
   }
 
   /** Botão direito: sobre um nó ou caixa, o menu de contexto; no vazio, a busca de nós (VIS-011). */
@@ -598,7 +610,7 @@
           ></textarea>
         {:else}
           <!-- Zoomed out, the text is only a preview: the box still moves and selects through its body (VIS-014). -->
-          <div class="corpo resumo" data-comment={c.id}>{c.text}</div>
+          <div class="corpo summary" data-comment={c.id}>{c.text}</div>
         {/if}
         <span class="alca" data-resize={c.id} aria-hidden="true"></span>
       </div>
@@ -976,7 +988,7 @@
     user-select: text;
   }
   /* Zoomed out (semantic zoom, VIS-014): the text is a read-only preview, cut at the box edge. */
-  .corpo.resumo {
+  .corpo.summary {
     overflow: hidden;
     white-space: pre-wrap;
     user-select: none;

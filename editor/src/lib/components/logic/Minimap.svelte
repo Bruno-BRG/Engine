@@ -1,6 +1,14 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
-  import { boundsOf, centerCamera, fitMap, normRect, toWorld, type Rect } from '$lib/logic/geometry';
+  import {
+    boundsOf,
+    fitMap,
+    minimapToCamera,
+    normRect,
+    toWorld,
+    type MapTransform,
+    type Rect,
+  } from '$lib/logic/geometry';
 
   /** Size of the map in pixels, and the space kept free around the graph inside it (VIS-014). */
   const W = 168;
@@ -29,50 +37,64 @@
   );
   const fit = $derived(fitMap(bounds, W, H, MARGIN));
 
+  /** The fit taken when a drag begins: the map does not move during the drag, so it does not drift. Null when idle. */
+  let dragFit = $state.raw<MapTransform | null>(null);
+  /** The fit the map is drawn with: the drag's own while dragging, otherwise the live one. */
+  const shownFit = $derived(dragFit ?? fit);
+
   /** A world rectangle as the map draws it. Items under 2 px stay visible. */
   function onMap(r: Rect) {
     return {
-      x: r[0] * fit.scale + fit.x,
-      y: r[1] * fit.scale + fit.y,
-      w: Math.max(r[2] * fit.scale, 2),
-      h: Math.max(r[3] * fit.scale, 2),
+      x: r[0] * shownFit.scale + shownFit.x,
+      y: r[1] * shownFit.scale + shownFit.y,
+      w: Math.max(r[2] * shownFit.scale, 2),
+      h: Math.max(r[3] * shownFit.scale, 2),
     };
   }
   /** The view box on the map. */
   const frame = $derived(onMap(view));
 
   let svg = $state<SVGSVGElement>();
-  let arrastando = $state(false);
+  let dragging = $state(false);
 
   /** Puts the world point under the pointer at the centre of the canvas. The zoom does not change. */
   function centerAt(e: PointerEvent) {
     if (!svg) return;
     const r = svg.getBoundingClientRect();
-    const wx = (e.clientX - r.left - fit.x) / fit.scale;
-    const wy = (e.clientY - r.top - fit.y) / fit.scale;
-    logic.camera = centerCamera(logic.camera, wx, wy, logic.viewW, logic.viewH);
+    logic.camera = minimapToCamera(
+      logic.camera,
+      dragFit ?? fit,
+      e.clientX - r.left,
+      e.clientY - r.top,
+      logic.viewW,
+      logic.viewH,
+    );
   }
 
   // The map sits over the canvas: its pointer, wheel and menu events stop here, so they do not pan or zoom the graph.
   function pointerDown(e: PointerEvent) {
     e.stopPropagation();
-    arrastando = true;
-    svg?.setPointerCapture(e.pointerId);
+    if (!svg) return;
+    // The view box moves with the camera, so the fit used for the whole drag is the one taken now.
+    dragFit = fit;
+    dragging = true;
+    svg.setPointerCapture(e.pointerId);
     centerAt(e);
   }
 
   function pointerMove(e: PointerEvent) {
     e.stopPropagation();
-    if (arrastando) centerAt(e);
+    if (dragging) centerAt(e);
   }
 
   function pointerUp(e: PointerEvent) {
     e.stopPropagation();
-    arrastando = false;
+    dragging = false;
+    dragFit = null;
   }
 </script>
 
-<div class="mapa">
+<div class="map">
   <svg
     bind:this={svg}
     width={W}
@@ -89,18 +111,18 @@
   >
     {#each nodeRects as n (`n${n.id}`)}
       {@const p = onMap(n.rect)}
-      <rect class="no" class:sel={n.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
+      <rect class="node" class:sel={n.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
     {/each}
     {#each commentRects as c (`c${c.id}`)}
       {@const p = onMap(c.rect)}
-      <rect class="caixa" class:sel={c.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
+      <rect class="box" class:sel={c.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
     {/each}
-    <rect class="janela" x={frame.x} y={frame.y} width={frame.w} height={frame.h} />
+    <rect class="view" x={frame.x} y={frame.y} width={frame.w} height={frame.h} />
   </svg>
 </div>
 
 <style>
-  .mapa {
+  .map {
     position: absolute;
     right: 8px;
     bottom: 8px;
@@ -116,24 +138,24 @@
     display: block;
     cursor: crosshair;
   }
-  .no {
+  .node {
     fill: var(--text-faint);
     opacity: 0.6;
   }
-  .no.sel {
+  .node.sel {
     fill: var(--accent);
     opacity: 1;
   }
-  .caixa {
+  .box {
     fill: none;
     stroke: var(--text-faint);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
-  .caixa.sel {
+  .box.sel {
     stroke: var(--accent);
   }
-  .janela {
+  .view {
     fill: var(--accent-soft);
     stroke: var(--accent);
     stroke-width: 1;

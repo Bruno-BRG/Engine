@@ -8,9 +8,11 @@ import {
   DETAIL_MIN_ZOOM,
   LAYOUT_GAP_X,
   LAYOUT_GAP_Y,
+  boundsOf,
   centerCamera,
   fitMap,
   flowLayout,
+  minimapToCamera,
   showsDetail,
   toWorld,
 } from './geometry.ts';
@@ -116,4 +118,47 @@ test('detail shows from the threshold up, and not below it', () => {
   assert.equal(showsDetail(DETAIL_MIN_ZOOM - 0.01), false);
   assert.equal(showsDetail(0.25), false);
   assert.equal(showsDetail(1), true);
+});
+
+test('a minimap drag does not drift: with the fit fixed, the camera lands on the pointer at every event', () => {
+  // The fit is the one taken when the drag began. The pointer goes six pixels right, then six back to the start.
+  const fit = fitMap([-300, -200, 900, 600], 168, 110, 6);
+  const start = { x: 120, y: 90, zoom: 1 };
+  const xs = [85, 86, 87, 88, 89, 90, 89, 88, 87, 86, 85, 84];
+  let cam = start;
+  for (const x of xs) {
+    cam = minimapToCamera(cam, fit, x, 55, 800, 500);
+    // The world point under the pointer, measured with that same fit, is the centre of the canvas.
+    const [cx, cy] = toWorld(cam, 400, 250);
+    assert.ok(Math.abs(cx - (x - fit.x) / fit.scale) < 1e-9);
+    assert.ok(Math.abs(cy - (55 - fit.y) / fit.scale) < 1e-9);
+  }
+  // Back at the first pointer position, the camera is the one that position gives from any start.
+  assert.deepEqual(cam, minimapToCamera(start, fit, 84, 55, 800, 500));
+});
+
+test('the camera a minimap pointer gives depends only on the pointer and the zoom, not on the old camera', () => {
+  const fit = fitMap([0, 0, 1000, 800], 168, 110, 6);
+  const a = minimapToCamera({ x: 0, y: 0, zoom: 0.5 }, fit, 100, 60, 800, 500);
+  const b = minimapToCamera({ x: -4000, y: 900, zoom: 0.5 }, fit, 100, 60, 800, 500);
+  assert.deepEqual(a, b);
+});
+
+test('a click at the centre of the map centres the camera on the centre of the graph', () => {
+  const graph = [200, -100, 600, 400];
+  const fit = fitMap(graph, 168, 110, 6);
+  // The centre of the map is (84, 55): fitMap puts the centre of the graph there.
+  const cam = minimapToCamera({ x: 0, y: 0, zoom: 1 }, fit, 84, 55, 800, 500);
+  const [cx, cy] = toWorld(cam, 400, 250);
+  assert.ok(Math.abs(cx - 500) < 1e-9);
+  assert.ok(Math.abs(cy - 100) < 1e-9);
+});
+
+test('an empty graph gives no bounds, and the view alone still gives a usable minimap', () => {
+  assert.equal(boundsOf([]), null);
+  // Without a graph the minimap fits the view rectangle only (the fallback in Minimap.svelte).
+  const view = [-50, -20, 800, 500];
+  const fit = fitMap(boundsOf([view]) ?? view, 168, 110, 6);
+  const cam = minimapToCamera({ x: 0, y: 0, zoom: 1 }, fit, 84, 55, 800, 500);
+  assert.ok([cam.x, cam.y, cam.zoom].every(Number.isFinite));
 });

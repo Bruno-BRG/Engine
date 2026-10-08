@@ -259,3 +259,21 @@ export function fitMap(r: Rect, w: number, h: number, margin = 0): MapTransform 
 export function centerCamera(cam: Camera, wx: number, wy: number, w: number, h: number): Camera {
   return { x: w / 2 - wx * cam.zoom, y: h / 2 - wy * cam.zoom, zoom: cam.zoom };
 }
+
+/**
+ * Camera for a pointer on the minimap (VIS-014): the world point under the pointer goes to the centre of the canvas,
+ * and the zoom is kept. `fit` must be the transform taken when the drag began, and it must stay the same for the whole
+ * drag. Then the result depends only on the pointer, so the camera does not drift from one event to the next.
+ */
+export function minimapToCamera(
+  cam: Camera,
+  fit: MapTransform,
+  mapX: number,
+  mapY: number,
+  w: number,
+  h: number,
+): Camera {
+  const wx = (mapX - fit.x) / fit.scale;
+  const wy = (mapY - fit.y) / fit.scale;
+  return centerCamera(cam, wx, wy, w, h);
+}
