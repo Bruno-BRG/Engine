@@ -48,7 +48,7 @@
     });
   }
 
-  /** Renomeia o material e os corpos que o usam, em todas as cenas (PHY-023). */
+  /** Renames the material and every body that uses it, across the project's scenes (PHY-023). */
   async function renameMaterial(i: number, el: HTMLInputElement) {
     const current = projectSettings.physics_materials[i]?.name ?? '';
     const names = projectSettings.physics_materials.map((m) => m.name);

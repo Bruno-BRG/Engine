@@ -16,7 +16,7 @@ pub fn run() {
             project::open_project,
             project::load_scene,
             project::save_scene,
-            project::rename_prop_in_scenes,
+            project::rename_material_in_scenes,
             settings::load_settings,
             settings::save_settings,
             logic::list_scripts,

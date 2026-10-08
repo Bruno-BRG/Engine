@@ -15,10 +15,11 @@ export interface RecentProject {
   openedAt: number;
 }
 
-/** Resultado de trocar um nome nas cenas do disco: caminhos alterados e falhas (cena ilegível, por exemplo). */
+/** Outcome of a material rename in the scene files on disk. `skipped` holds reasons, not errors. */
 export interface SceneRenameReport {
   changed: string[];
   failed: string[];
+  skipped: string[];
 }
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -92,12 +93,13 @@ export const platform = {
   },
 
   /**
-   * Troca um nome de referência (PHY-023: o material de física) nas cenas do projeto gravadas no disco.
-   * `skip` é a cena aberta, que o editor atualiza e grava sozinho. A versão web tem uma cena por projeto.
+   * Renames a physics material in the scene files saved on disk. The open scene is not among them: the editor
+   * changes it in memory and autosaves it. `to` must already be saved in the project settings. The web build
+   * keeps one scene per project, so it has no other scene files to change.
    */
-  async renameInSceneFiles(path: string, skip: string, key: string, from: string, to: string): Promise<SceneRenameReport> {
-    if (isTauri) return invoke('rename_prop_in_scenes', { project: path, skip, key, from, to });
-    return { changed: [], failed: [] };
+  async renameMaterialInSceneFiles(path: string, from: string, to: string): Promise<SceneRenameReport> {
+    if (isTauri) return invoke('rename_material_in_scenes', { project: path, from, to });
+    return { changed: [], failed: [], skipped: [] };
   },
 
   /** Configurações do projeto em JSON (settings.ron no disco). Sem arquivo, texto vazio (padrões). */

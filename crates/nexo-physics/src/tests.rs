@@ -1010,7 +1010,7 @@ fn material_resolve_regras_de_combinacao() {
 
 #[test]
 fn material_renomeado_vale_no_corpo() {
-    // PHY-023: renomear o material troca a referência do corpo; a física acha o material pelo nome novo.
+    // PHY-023: renaming the material switches the body's reference; the physics finds the material by the new name.
     let mut c = cfg();
     c.physics_materials.push(PhysicsMaterial {
         name: "Gelo2".into(),
@@ -1023,7 +1023,7 @@ fn material_renomeado_vale_no_corpo() {
     let root = raiz(&mut s);
     let chao = node(&mut s, Some(root), "StaticBody2D", json!({"physics_material": "Gelo"}));
     node(&mut s, Some(chao), "CollisionShape2D", json!({"size": [400.0, 32.0]}));
-    // Com o nome antigo, o corpo não acha o material.
+    // With the old name, the body finds no material.
     assert!(check_reference(&c, "physics_material", &json!("Gelo")).is_err());
 
     assert_eq!(s.rename_prop_value("physics_material", "Gelo", "Gelo2").unwrap(), 1);

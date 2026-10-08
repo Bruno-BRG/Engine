@@ -231,13 +231,17 @@ impl Scene {
         Ok(())
     }
 
-    /// Troca `from` por `to` na propriedade de texto `key` de todos os nós que a têm com esse valor, como
-    /// quando um material de física é renomeado (PHY-023). Os outros nós não mudam. A troca inteira é um
-    /// passo de desfazer; sem nenhum nó afetado, não entra no histórico. Devolve quantos nós mudaram.
+    /// Replaces `from` with `to` in the text property `key` of every node that holds exactly that value, as
+    /// when a physics material is renamed (PHY-023). Other nodes are untouched. The whole replacement is one
+    /// undo step; when no node changes, nothing enters the history. Returns how many nodes changed.
+    /// An empty `from` matches nothing: nodes without a material hold the empty default, which is not a name.
     pub fn rename_prop_value(&mut self, key: &str, from: &str, to: &str) -> Result<usize, String> {
         let to = to.trim();
         if to.is_empty() {
             return Err("O nome não pode ficar vazio".into());
+        }
+        if from.trim().is_empty() {
+            return Ok(0);
         }
         let targets: Vec<(Uid, &'static PropDef)> = self
             .nodes
@@ -250,7 +254,7 @@ impl Scene {
         if targets.is_empty() || from == to {
             return Ok(0);
         }
-        // O novo nome é validado antes da primeira mudança, para não deixar a troca pela metade.
+        // The new name is validated before the first change, so the replacement is never half-applied.
         let value = coerce(targets[0].1, &json!(to))?;
         self.begin(&format!("Renomear {}", targets[0].1.label), None);
         for (uid, def) in &targets {
@@ -949,7 +953,7 @@ mod tests {
         assert_eq!(value_of(s.node(b).unwrap(), "physics_material"), json!("Gelo2"));
         assert_eq!(value_of(s.node(c).unwrap(), "physics_material"), json!("Borracha"));
         assert!(!s.node(sem).unwrap().props.contains_key("physics_material"));
-        // Os dois nós mudam num único passo de desfazer.
+        // Both nodes change in a single undo step.
         assert_eq!(s.undo.len(), antes + 1);
         assert_eq!(s.undo_label(), Some("Renomear Material de física"));
         s.undo();
@@ -968,6 +972,22 @@ mod tests {
         assert_eq!(s.rename_prop_value("physics_material", "Gelo", "Gelo").unwrap(), 0);
         assert_eq!(s.undo.len(), antes);
         assert_eq!(value_of(s.node(a).unwrap(), "physics_material"), json!("Gelo"));
+    }
+
+    #[test]
+    fn renomear_material_vazio_nao_mexe_em_corpos_sem_material() {
+        // Bodies without a material hold the empty default, which is not a name and must never be replaced.
+        let mut s = cena();
+        let root = s.roots()[0];
+        let sem = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        let com = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        s.set_prop(com, "physics_material", json!("Gelo"), None).unwrap();
+        let antes = s.undo.len();
+        assert_eq!(s.rename_prop_value("physics_material", "", "Gelo2").unwrap(), 0);
+        assert_eq!(s.rename_prop_value("physics_material", "  ", "Gelo2").unwrap(), 0);
+        assert!(!s.node(sem).unwrap().props.contains_key("physics_material"));
+        assert_eq!(value_of(s.node(com).unwrap(), "physics_material"), json!("Gelo"));
+        assert_eq!(s.undo.len(), antes);
     }
 
     #[test]

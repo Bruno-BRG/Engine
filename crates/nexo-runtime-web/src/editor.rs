@@ -137,10 +137,11 @@ impl SceneEditor {
             .map_err(js_err)
     }
 
-    /// Troca um nome de referência (o material de física, PHY-023) em todos os nós da cena de edição, num passo de
-    /// desfazer. O novo nome é conferido contra as configurações do projeto, como em `set_prop`: as configurações
-    /// precisam trazer o nome novo antes. Devolve quantos nós mudaram.
+    /// Renames a name reference (the physics material, PHY-023) in every node of the edit scene, as one undo
+    /// step. The new name is checked against the project settings, as `set_prop` does, so the settings must
+    /// already hold it. `to` is trimmed here, the same way the core trims it. Returns how many nodes changed.
     pub fn rename_prop_value(&mut self, key: &str, from: &str, to: &str) -> Result<u32, JsError> {
+        let to = to.trim();
         check_reference(&self.settings, key, &Value::String(to.to_string())).map_err(js_err)?;
         let changed = self.scene.rename_prop_value(key, from, to).map_err(js_err)?;
         Ok(changed as u32)

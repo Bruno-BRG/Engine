@@ -223,13 +223,13 @@ export function renameInScene(prop: 'tag' | 'layer', from: string, to: string): 
   }
 }
 
-/** Cena aberta no editor: sempre a principal (`openProject` em actions.ts a carrega). Igual a MAIN_SCENE no Rust. */
-const CENA_ABERTA = 'scenes/principal.scene.ron';
-
 /**
- * Renomeia o material de física `index` em todo o projeto (PHY-023): a lista das configurações, os corpos da
- * cena aberta (um passo de desfazer) e os corpos das outras cenas no disco. As configurações vão primeiro, porque
- * o editor confere o nome novo contra elas. Nunca lança: falhas aparecem como aviso.
+ * Renames the physics material at `index` across the project (PHY-023). The order matters:
+ * 1. the settings get the new name, because the editor checks references against them;
+ * 2. the open scene is renamed in memory as one undo step; if the editor refuses, the settings change is reverted;
+ * 3. the settings are saved, so settings.ron holds the new name before the backend checks it;
+ * 4. the other scene files on disk are rewritten by the backend.
+ * Never throws: failures are shown as toasts.
  */
 export async function renameMaterialInProject(index: number, to: string): Promise<void> {
   const from = projectSettings.physics_materials[index]?.name;
@@ -238,19 +238,28 @@ export async function renameMaterialInProject(index: number, to: string): Promis
     log.toast('warn', 'Material não renomeado', 'settings.ron está ilegível. Corrija o arquivo para renomear.');
     return;
   }
-  editSettings((s) => {
-    const m = s.physics_materials[index];
-    if (m) m.name = to;
-  });
-  scene.renameRefs('physics_material', from, to);
+  const setName = (name: string) =>
+    editSettings((s) => {
+      const m = s.physics_materials[index];
+      if (m) m.name = name;
+    });
+  setName(to);
+  if (scene.renameRefs('physics_material', from, to) === null) {
+    // The open scene refused the new name: restore the old one so both sides still agree.
+    setName(from);
+    log.toast('error', 'Material não renomeado', 'A cena aberta recusou o nome novo.');
+    return;
+  }
   const path = settingsStatus.path;
   if (!path) return;
+  await flushSettings();
   try {
-    const report = await platform.renameInSceneFiles(path, CENA_ABERTA, 'physics_material', from, to);
+    const report = await platform.renameMaterialInSceneFiles(path, from, to);
     if (report.changed.length) {
       log.info(`Material "${from}" trocado por "${to}" em ${report.changed.length} cena(s) do disco.`);
     }
     if (report.failed.length) log.toast('warn', 'Cenas não atualizadas', report.failed.join('; '));
+    if (report.skipped.length) log.toast('warn', 'Cenas puladas', report.skipped.join('; '));
   } catch (e) {
     log.toast('error', 'Cenas não atualizadas', message(e));
   }
