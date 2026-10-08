@@ -13,11 +13,11 @@ use std::fmt;
 /// O mundo do jogo visto pela VM. A cena implementa este trait. Cada método abaixo é um contrato: o que
 /// significa o retorno e o que o host deve fazer está escrito em cada um.
 pub trait Host {
-    /// Lê a propriedade `name` do nó `node`, como valor do tipo dela (decimal, inteiro, booleano, texto ou vetor
-    /// 2D). `None` quando o nó ou a propriedade não existe, ou quando ela não tem tipo de pino (lista de pontos).
+    /// Reads property `name` of node `node`, as a value of its type (decimal, integer, boolean, text or vector
+    /// 2D). `None` when the node or the property does not exist, or when it has no pin type (a list of points).
     fn get_property(&mut self, node: u64, name: &str) -> Option<Value>;
-    /// Grava o valor na propriedade. `false` quando o nó ou a propriedade não existe, ou quando o valor não é do
-    /// tipo dela. Decimal e inteiro se convertem entre si, como antes da tipagem.
+    /// Writes the value to the property. `false` when the node or the property does not exist, or when the value is not of
+    /// its type. Decimal and integer convert to each other, as before typing.
     fn set_property(&mut self, node: u64, name: &str, value: Value) -> bool;
     /// Entrada: `true` enquanto a ação `action` está pressionada (qualquer quadro).
     fn action_pressed(&self, action: &str) -> bool;
@@ -83,8 +83,8 @@ pub enum VmError {
         name: String,
         write: bool,
     },
-    /// A propriedade lida é de outro tipo do que o pino espera. Acontece quando o tipo declarado no nó não bate com
-    /// a propriedade real do nó na cena (VIS-021).
+    /// The property read is of another type than the pin expects. It happens when the type declared on the node does not match
+    /// the node's real property in the scene (VIS-021).
     PropertyType {
         node: u64,
         name: String,
@@ -687,32 +687,32 @@ fn inicia_tween(
     })))
 }
 
-/// Lê uma propriedade decimal para Tween e Move To. Erro se ela não existe ou se não é decimal.
-fn read_decimal(host: &mut dyn Host, origem: u64, no: u64, nome: &str) -> Result<f64, VmError> {
+/// Reads a decimal property for Tween and Move To. Error if it does not exist or is not decimal.
+fn read_decimal(host: &mut dyn Host, origem: u64, node: u64, name: &str) -> Result<f64, VmError> {
     let read = host
-        .get_property(no, nome)
+        .get_property(node, name)
         .ok_or_else(|| VmError::PropertyFailed {
             node: origem,
-            name: nome.to_string(),
+            name: name.to_string(),
             write: false,
         })?;
     let found = read.ty();
     match adapt_value(read, PinType::Float) {
         Ok(Value::Float(f)) => Ok(f),
-        _ => Err(type_mismatch(origem, nome, PinType::Float, found)),
+        _ => Err(type_mismatch(origem, name, PinType::Float, found)),
     }
 }
 
-/// Valor lido no tipo que o pino espera. Decimal aceita inteiro, porque grafos sem tipo declarado liam as
-/// propriedades inteiras como decimal. Os outros tipos têm de bater; se não batem, devolve o tipo que chegou.
-fn adapt_value(valor: Value, esperado: PinType) -> Result<Value, PinType> {
-    if valor.ty() == esperado {
-        return Ok(valor);
+/// Value read as the type the pin expects. Decimal accepts integer, because graphs without a declared type read
+/// integer properties as decimal. The other types must match; if they do not, it returns the type that arrived.
+fn adapt_value(value: Value, expected: PinType) -> Result<Value, PinType> {
+    if value.ty() == expected {
+        return Ok(value);
     }
-    if let (Value::Int(n), PinType::Float) = (&valor, esperado) {
+    if let (Value::Int(n), PinType::Float) = (&value, expected) {
         return Ok(Value::Float(*n as f64));
     }
-    Err(valor.ty())
+    Err(value.ty())
 }
 
 fn type_mismatch(node: u64, name: &str, expected: PinType, found: PinType) -> VmError {
@@ -910,7 +910,7 @@ pub(crate) mod tests {
     use crate::types::{PinType, Value};
     use std::collections::HashMap;
 
-    /// Host de teste: propriedades tipadas num mapa, entradas simuladas e o registro das chamadas.
+    /// Test host: typed properties in a map, simulated inputs and a record of the calls.
     #[derive(Default)]
     pub(crate) struct Mock {
         pub props: HashMap<(u64, String), Value>,
@@ -922,7 +922,7 @@ pub(crate) mod tests {
         pub mouse: [f64; 2],
     }
 
-    /// Valor decimal de uma propriedade do host de teste. Panica se ela não existe ou não é decimal.
+    /// Decimal value of a property of the test host. Panics if it does not exist or is not decimal.
     pub(crate) fn float_prop(host: &Mock, node: u64, name: &str) -> f64 {
         match host.props.get(&(node, name.to_string())) {
             Some(Value::Float(f)) => *f,
@@ -934,8 +934,8 @@ pub(crate) mod tests {
         fn get_property(&mut self, node: u64, name: &str) -> Option<Value> {
             self.props.get(&(node, name.to_string())).cloned()
         }
-        /// Como o host de verdade: decimal e inteiro se convertem (inteiro vira decimal, decimal arredonda para
-        /// inteiro), e os outros tipos de valor são recusados (`false`).
+        /// Like the real host: decimal and integer convert (integer becomes decimal, decimal rounds to
+        /// integer), and the other value types are refused (`false`). Limit: unlike the host's `coerce`, it does not check enum options, uid format or mask range.
         fn set_property(&mut self, node: u64, name: &str, value: Value) -> bool {
             let Some(atual) = self.props.get_mut(&(node, name.to_string())) else {
                 return false;
@@ -1281,7 +1281,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Nó de propriedade com o tipo e o nome embutidos.
+    /// Property node with its type and name embedded.
     fn property_node(g: &mut Graph, kind: &str, node_type: &str, name: &str) -> u64 {
         let id = adiciona(g, kind);
         texto(g, id, "type", node_type);
@@ -1313,11 +1313,11 @@ pub(crate) mod tests {
             host.props[&(7, "modulate".to_string())],
             Value::String("#ff0000".into())
         );
-        // A leitura vem depois da gravação: o Print mostra a cor nova.
+        // The read comes after the write: Print shows the new colour.
         assert_eq!(host.impressos, [(LogLevel::Info, "#ff0000".to_string())]);
     }
 
-    /// Grava `valor` em `tipo.nome` por um SetProperty tipado e devolve o valor que ficou no host.
+    /// Writes `value` to `node_type.name` through a typed SetProperty and returns the value left on the host.
     fn write_typed(node_type: &str, name: &str, value: Value, initial: Value) -> Value {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
@@ -1422,11 +1422,11 @@ pub(crate) mod tests {
         let compiled = compile(&g).unwrap();
         let program = compiled.programs_for("OnReady").next().unwrap();
         let mut host = Mock::default();
-        // O registro diz texto, mas a cena tem um decimal nessa propriedade.
+        // The registry says text, but the scene has a decimal in that property.
         host.props.insert((7, "modulate".to_string()), Value::Float(1.0));
-        let erro = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
+        let error = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
         assert_eq!(
-            erro,
+            error,
             VmError::PropertyType {
                 node: gp,
                 name: "modulate".into(),
@@ -1435,8 +1435,8 @@ pub(crate) mod tests {
             }
         );
         assert!(
-            erro.to_string().contains("é decimal, mas o pino espera texto"),
-            "{erro}"
+            error.to_string().contains("é decimal, mas o pino espera texto"),
+            "{error}"
         );
     }
 
@@ -1451,11 +1451,11 @@ pub(crate) mod tests {
         let compiled = compile(&g).unwrap();
         let program = compiled.programs_for("OnReady").next().unwrap();
         let mut host = Mock::default();
-        // A cena tem decimal nessa propriedade: o host não aceita o texto.
+        // The scene has a decimal in that property: the host does not accept the text.
         host.props.insert((7, "modulate".to_string()), Value::Float(1.0));
-        let erro = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
+        let error = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
         assert_eq!(
-            erro,
+            error,
             VmError::PropertyFailed {
                 node: sp,
                 name: "modulate".into(),
@@ -1466,7 +1466,7 @@ pub(crate) mod tests {
 
     #[test]
     fn untyped_graph_reads_integer_property_as_decimal() {
-        // Grafos de antes da tipagem não declaram tipo: liam decimal, inclusive de uma propriedade inteira.
+        // Graphs from before typing declare no type: they read decimal, even from an integer property.
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         let gp = adiciona(&mut g, "GetProperty");
@@ -1488,13 +1488,13 @@ pub(crate) mod tests {
 
     #[test]
     fn tween_interpolates_only_decimal() {
-        // Tween segue decimal: uma propriedade de texto é erro de tipo, não uma interpolação.
+        // Tween stays decimal: a text property is a type error, not an interpolation.
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         let tw = adiciona(&mut g, "Tween");
         texto(&mut g, tw, "property", "modulate");
         g.set_value(tw, "to", Value::Float(0.0)).unwrap();
-        // Duração zero: o valor final é gravado na hora, e a leitura do inicial vem antes.
+        // Zero duration: the final value is written at once, and the initial read comes first.
         g.set_value(tw, "seconds", Value::Float(0.0)).unwrap();
         g.connect((ev, "exec"), (tw, "exec")).unwrap();
         g.connect((ev, "self"), (tw, "node")).unwrap();
@@ -1503,17 +1503,17 @@ pub(crate) mod tests {
         let mut host = Mock::default();
         host.props
             .insert((7, "modulate".to_string()), Value::String("#ffffff".into()));
-        let erro = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
+        let error = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
         assert!(
             matches!(
-                erro,
+                error,
                 VmError::PropertyType {
                     expected: PinType::Float,
                     found: PinType::String,
                     ..
                 }
             ),
-            "{erro:?}"
+            "{error:?}"
         );
     }
 }

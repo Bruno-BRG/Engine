@@ -6,7 +6,7 @@
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { log } from '$lib/state/log.svelte';
   import { familyOf, type PinFilter } from '$lib/logic/library';
-  import { isPropertyNode, propertyOfType, propertiesOfType, defaultValue } from '$lib/logic/propriedades';
+  import { isPropertyNode, propertyOfType, propertiesOfType, defaultValue } from '$lib/logic/properties';
   import {
     COMMENT_MIN,
     ROW_H,
@@ -517,24 +517,24 @@
     return logic.defsByKind.get(n.kind)?.label ?? n.kind;
   }
 
-  /** Texto de um valor embutido ('' quando o pino não tem valor de texto). */
+  /** Text of an embedded value ('' when the pin has no text value). */
   function embeddedText(n: GraphNode, pin: string): string {
     const v = n.values?.[pin];
     return v && 'String' in v ? v.String : '';
   }
 
-  /** Propriedade do registro escolhida num nó de propriedade (pelo tipo e pelo nome embutidos), ou undefined. */
+  /** Registry property chosen on a property node (by its embedded type and name), or undefined. */
   function propOfNode(n: GraphNode) {
     const nodeType = embeddedText(n, 'type');
     return nodeType ? propertyOfType(logic.tipos, nodeType, embeddedText(n, 'name')) : undefined;
   }
 
-  /** Tipo do campo de um pino de entrada. Nos nós de propriedade, o pino de valor é o tipo que o grafo resolveu. */
+  /** Type of an input pin's field. On property nodes, the value pin has the type the graph resolved. */
   function fieldType(n: GraphNode, pi: PinDef): PinType | null {
     return isPropertyNode(n.kind) ? (tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? null) : pi.ty;
   }
 
-  /** Valor mostrado no campo do pino: o embutido, ou o padrão da propriedade escolhida. */
+  /** Value shown in the pin's field: the embedded one, or the default of the chosen property. */
   function fieldValue(n: GraphNode, pi: PinDef): Value | undefined {
     const embedded = n.values?.[pi.name];
     if (embedded) return embedded;
@@ -545,10 +545,10 @@
     return pi.default ?? undefined;
   }
 
-  /** Opções do seletor de tipo: todos os tipos do registro. */
+  /** Options of the type picker: every type in the registry. */
   const typeOptions = $derived(logic.tipos.map((t) => ({ value: t.name, label: t.name })));
 
-  /** Opções do seletor de nome: as propriedades do tipo escolhido no nó (com as herdadas). */
+  /** Options of the name picker: the properties of the type chosen on the node (inherited ones included). */
   function nameOptions(n: GraphNode) {
     return propertiesOfType(logic.tipos, embeddedText(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
   }

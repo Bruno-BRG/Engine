@@ -178,7 +178,7 @@ fn tipos_dos_registradores(compiled: &Compiled, programa: &Program) -> Vec<PinTy
             | Op::Div { dst, .. }
             | Op::VecLength { dst, .. }
             | Op::GetAxis { dst, .. } => (*dst, PinType::Float),
-            // Propriedade lida: o registrador tem o tipo da propriedade (VIS-021), não decimal fixo.
+            // Property read: the register takes the property's type (VIS-021), not a fixed decimal.
             Op::GetProp { dst, ty, .. } => (*dst, *ty),
             Op::GetVar { dst, var } => (
                 *dst,
@@ -556,7 +556,7 @@ mod tests {
         g.connect((ev, "self"), (gp, "node")).unwrap();
         g.connect((gp, "value"), (pr, "msg")).unwrap();
         let texto = generate_csharp(&compile(&g).unwrap(), "Teste");
-        // O registrador da leitura é texto, e a chamada pede texto: não é mais decimal fixo.
+        // The read register is text, and the call asks for text: it is no longer a fixed decimal.
         assert!(
             texto.lines().any(|l| l.trim_start().starts_with("string r")),
             "{texto}"

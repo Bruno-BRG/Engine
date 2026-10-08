@@ -179,14 +179,14 @@ pub enum Op {
     MouseScreen {
         dst: Reg,
     },
-    /// `dst` = propriedade `name` do nó `node`, do tipo `ty` (VIS-021). O host tem de devolver esse tipo.
+    /// `dst` = property `name` of node `node`, of type `ty` (VIS-021). The host must return that type.
     GetProp {
         dst: Reg,
         node: Reg,
         name: Reg,
         ty: PinType,
     },
-    /// Grava `value`, do tipo `ty`, na propriedade `name` do nó `node` (VIS-021).
+    /// Writes `value`, of type `ty`, to property `name` of node `node` (VIS-021).
     SetProp {
         node: Reg,
         name: Reg,
@@ -1133,14 +1133,14 @@ mod tests {
     fn typed_property_carries_type_into_ir() {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
-        // Lê o z_index (inteiro) do próprio nó e grava no mesmo pino: a IR carrega o tipo nas duas ops.
+        // Reads the z_index (integer) of the node itself and writes it to the same property: the IR carries the type in both ops.
         let le = adiciona(&mut g, "GetProperty");
         g.set_value(le, "type", Value::String("Sprite2D".into())).unwrap();
         g.set_value(le, "name", Value::String("z_index".into())).unwrap();
         let grava = adiciona(&mut g, "SetProperty");
         g.set_value(grava, "type", Value::String("Sprite2D".into())).unwrap();
         g.set_value(grava, "name", Value::String("z_index".into())).unwrap();
-        // Cor (texto) gravada com um valor embutido.
+        // Colour (text) written with an embedded value.
         let cor = adiciona(&mut g, "SetProperty");
         g.set_value(cor, "type", Value::String("Sprite2D".into())).unwrap();
         g.set_value(cor, "name", Value::String("modulate".into())).unwrap();

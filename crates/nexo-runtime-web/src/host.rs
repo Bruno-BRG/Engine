@@ -58,7 +58,7 @@ fn e_vetor(kind: &str, prop: &str) -> bool {
     registry::prop_def(kind, prop).is_some_and(|d| d.kind == PropKind::Vec2)
 }
 
-/// Valor decimal: um decimal, ou um inteiro (que se converte).
+/// Decimal value: a decimal, or an integer (which converts).
 fn as_decimal(value: &Value) -> Option<f64> {
     match value {
         Value::Float(f) => Some(*f),
@@ -67,9 +67,9 @@ fn as_decimal(value: &Value) -> Option<f64> {
     }
 }
 
-/// JSON que o registro guarda para uma propriedade do tipo `kind`, a partir do valor do script (VIS-021). `None`
-/// quando o valor não é desse tipo: a gravação é recusada. Decimal e inteiro se convertem; `coerce` do núcleo
-/// arredonda e limita o número.
+/// JSON the registry stores for a property of kind `kind`, from the script's value (VIS-021). `None`
+/// when the value is not of that kind: the write is refused. Decimal and integer convert; the core's `coerce`
+/// rounds and clamps the number.
 fn json_for_kind(kind: PropKind, value: &Value) -> Option<serde_json::Value> {
     match (kind, value) {
         (PropKind::Float, Value::Float(f)) => Some(json!(f)),
@@ -103,7 +103,7 @@ impl Mundo<'_> {
 }
 
 impl Host for Mundo<'_> {
-    /// Lê a propriedade como valor do tipo dela. Uma componente de vetor ("position_x") é decimal.
+    /// Reads the property as a value of its type. A vector component ("position_x") is decimal.
     fn get_property(&mut self, node: u64, name: &str) -> Option<Value> {
         let n = self.cena.node(Uid(node))?;
         if let Some((prop, i)) = componente(name) {
@@ -116,8 +116,8 @@ impl Host for Mundo<'_> {
         Value::from_json(def.kind, &value_of(n, name))
     }
 
-    /// Grava sem histórico: a reprodução tem a sua própria cópia da cena, que não entra no desfazer. Recusa o valor
-    /// de outro tipo que o da propriedade.
+    /// Writes without history: playback has its own copy of the scene, which is not part of undo. Refuses a value
+    /// of another type than the property's.
     fn set_property(&mut self, node: u64, name: &str, value: Value) -> bool {
         let uid = Uid(node);
         let Some(n) = self.cena.node(uid) else {
@@ -252,7 +252,7 @@ impl Host for Mundo<'_> {
 mod tests {
     use super::*;
 
-    /// Partes da reprodução que o host usa, com uma cena de um Sprite2D.
+    /// Parts of the playback the host uses, with a Sprite2D scene.
     struct Parts {
         cena: Scene,
         fisica: Physics,
@@ -313,13 +313,13 @@ mod tests {
         let uid = p.uid.0;
         let mut m = p.mundo();
         assert!(m.set_property(uid, "modulate", Value::String("#ff0000".into())));
-        // Decimal numa cor, texto num booleano, decimal num vetor e propriedade inexistente: recusados.
+        // Decimal into a colour, text into a boolean, decimal into a vector, and a missing property: all refused.
         assert!(!m.set_property(uid, "modulate", Value::Float(1.0)));
         assert!(!m.set_property(uid, "centered", Value::String("sim".into())));
         assert!(!m.set_property(uid, "position", Value::Float(3.0)));
         assert!(!m.set_property(uid, "nao_existe", Value::Float(1.0)));
         assert_eq!(m.get_property(uid, "modulate"), Some(Value::String("#ff0000".into())));
-        // Decimal e inteiro se convertem, como antes da tipagem; o núcleo arredonda o inteiro.
+        // Decimal and integer convert, as before typing; the core rounds the integer.
         assert!(m.set_property(uid, "z_index", Value::Float(4.6)));
         assert_eq!(m.get_property(uid, "z_index"), Some(Value::Int(5)));
         assert!(m.set_property(uid, "rotation", Value::Int(90)));
@@ -335,5 +335,53 @@ mod tests {
         assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([12.0, 0.0])));
         assert_eq!(m.get_property(uid, "position_x"), Some(Value::Float(12.0)));
         assert!(!m.set_property(uid, "position_x", Value::String("x".into())));
+    }
+
+    #[test]
+    fn write_bool_succeeds() {
+        let mut p = Parts::create();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        assert!(m.set_property(uid, "centered", Value::Bool(false)));
+        assert_eq!(m.get_property(uid, "centered"), Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn write_vec2_succeeds() {
+        let mut p = Parts::create();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        assert!(m.set_property(uid, "position", Value::Vec2([3.0, 4.0])));
+        assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([3.0, 4.0])));
+        assert_eq!(m.get_property(uid, "position_y"), Some(Value::Float(4.0)));
+    }
+
+    #[test]
+    fn write_enum_succeeds() {
+        let mut p = Parts::create();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        // "circle" is one of the options of `shape`; the core refuses the others.
+        assert!(m.set_property(uid, "shape", Value::String("circle".into())));
+        assert_eq!(m.get_property(uid, "shape"), Some(Value::String("circle".into())));
+    }
+
+    #[test]
+    fn write_uid_succeeds() {
+        let mut p = Parts::create();
+        let uid = p.uid.0;
+        let mut m = p.mundo();
+        // A uid is a hexadecimal asset id, so "ff" is valid.
+        assert!(m.set_property(uid, "texture", Value::String("ff".into())));
+        assert_eq!(m.get_property(uid, "texture"), Some(Value::String("ff".into())));
+    }
+
+    #[test]
+    fn write_mask_succeeds() {
+        let mut p = Parts::create();
+        let body = p.cena.add_node(None, "RigidBody2D", None).unwrap().0;
+        let mut m = p.mundo();
+        assert!(m.set_property(body, "collision_mask", Value::Int(5)));
+        assert_eq!(m.get_property(body, "collision_mask"), Some(Value::Int(5)));
     }
 }

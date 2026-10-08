@@ -3,8 +3,8 @@
   import type { PropDef } from '$lib/state/scene.svelte';
 
   // Campo do valor embutido de uma entrada sem fio. Só para os tipos que se digitam (decimal, inteiro,
-  // booleano, texto e vetor 2D). Os demais recebem o valor por fio. Num nó de propriedade, a propriedade do
-  // registro escolhe o campo de texto: opções para um enum, seletor para uma cor (VIS-021).
+  // boolean, text and 2D vector). The others take their value from a wire. On a property node, the property's
+  // registry picks the text field: options for an enum, a picker for a colour (VIS-021).
   let {
     ty,
     valor,

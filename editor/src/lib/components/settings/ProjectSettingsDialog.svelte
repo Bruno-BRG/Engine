@@ -8,6 +8,7 @@
     finishCapture,
     type SettingsTab,
   } from '$lib/state/settings.svelte';
+  import { watchGamepad } from '$lib/runtime/devices';
   import GeneralTab from './GeneralTab.svelte';
   import InputTab from './InputTab.svelte';
   import PhysicsTab from './PhysicsTab.svelte';
@@ -72,6 +73,13 @@
       returnFocus?.focus();
     };
   });
+
+  // Gamepad capture (INP-001): while a capture is pending, wait for a button, trigger or stick. The keyboard
+  // path is still `onkey`. Whichever arrives first wins, and finishCapture clears the capture, which stops the wait.
+  $effect(() => {
+    if (!settingsUi.capture) return;
+    return watchGamepad((code) => finishCapture(code));
+  });
 </script>
 
 <div class="scrim" role="presentation" onpointerdown={(e) => e.target === e.currentTarget && close()}>
@@ -100,7 +108,11 @@
             aria-selected={settingsUi.tab === t.id}
             aria-controls="ps-panel"
             class:on={settingsUi.tab === t.id}
-            onclick={() => (settingsUi.tab = t.id)}
+            onclick={() => {
+              // Changing tab cancels a pending capture, so the next key or button does not bind to the old tab's action.
+              cancelCapture();
+              settingsUi.tab = t.id;
+            }}
           >
             {t.label}
           </button>

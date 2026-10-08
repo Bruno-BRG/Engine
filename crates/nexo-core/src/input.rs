@@ -7,6 +7,7 @@
 //! - botões do controle: "gamepad_a" a "gamepad_back" e "dpad_up" a "dpad_right" (mapeamento padrão);
 //! - eixos do controle: os de `GAMEPAD_AXES`. Com sinal, "gamepad_left_x-" é o lado negativo (esquerda,
 //!   cima) e "gamepad_left_x+" o positivo (direita, baixo). Sem sinal, vale o módulo, para os dois lados.
+//!   The triggers "gamepad_lt" and "gamepad_rt" are unsigned axes, from 0 to 1 (INP-001).
 //!
 //! Um joystick de toque (INP-004) não tem código: empurra a força da ação direto (`Input::set_stick`).
 
@@ -14,7 +15,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Eixos analógicos do controle, pelo nome sem sinal. É o nome que o TypeScript envia (`set_axis`).
-pub const GAMEPAD_AXES: [&str; 4] = ["gamepad_left_x", "gamepad_left_y", "gamepad_right_x", "gamepad_right_y"];
+/// The last two are the triggers LT and RT: unsigned axes, from 0 to 1 (INP-001).
+pub const GAMEPAD_AXES: [&str; 6] = [
+    "gamepad_left_x",
+    "gamepad_left_y",
+    "gamepad_right_x",
+    "gamepad_right_y",
+    "gamepad_lt",
+    "gamepad_rt",
+];
 
 /// Módulo abaixo do qual o analógico conta como parado. Acima dele, a força volta de 0 a 1 sem salto.
 pub const STICK_DEADZONE: f64 = 0.2;
@@ -506,5 +515,108 @@ mod tests {
         assert_eq!(json["actions"]["jump"][0], "KeyZ");
         let back: InputMap = serde_json::from_value(json).unwrap();
         assert_eq!(back, map);
+    }
+
+    #[test]
+    fn trigger_presses_action_past_threshold() {
+        // 0.7 gives (0.7 - 0.2) / 0.8 = 0.625, above PRESS_THRESHOLD. 0.6 sits on the threshold, and floating
+        // point puts it just below, so the test does not use it.
+        let mut map = InputMap::defaults();
+        map.bind("ui_accept", "gamepad_rt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_rt", 0.7);
+        assert!(input.action_pressed(&map, "ui_accept"));
+        input.set_axis("gamepad_rt", 0.5);
+        assert!(!input.action_pressed(&map, "ui_accept"));
+        input.set_axis("gamepad_rt", 0.0);
+        assert!(!input.action_pressed(&map, "ui_accept"));
+    }
+
+    #[test]
+    fn trigger_ignores_the_dead_zone() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 0.15);
+        assert_eq!(input.action_value(&map, "fire"), 0.0);
+        // (0.5 - 0.2) / 0.8 = 0.375
+        input.set_axis("gamepad_lt", 0.5);
+        assert!((input.action_value(&map, "fire") - 0.375).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trigger_value_is_clamped_to_full() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 2.5);
+        assert!((input.action_value(&map, "fire") - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn release_all_releases_the_triggers() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 1.0);
+        assert!(input.action_pressed(&map, "fire"));
+        input.release_all();
+        assert!(!input.action_pressed(&map, "fire"));
+    }
+
+    #[test]
+    fn trigger_bindings_round_trip_through_ron() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        map.bind("boost", "gamepad_rt");
+        let text = map.to_ron().unwrap();
+        assert_eq!(InputMap::from_ron(&text).unwrap(), map);
+    }
+
+    #[test]
+    fn trigger_edges_fire_only_on_the_change_frame() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 0.7);
+        assert!(input.action_just_pressed(&map, "fire"));
+        input.latch();
+        // Still held, and pushed further: no new edge.
+        input.set_axis("gamepad_lt", 0.9);
+        assert!(!input.action_just_pressed(&map, "fire"));
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_axis("gamepad_lt", 0.0);
+        assert!(input.action_released(&map, "fire"));
+        assert!(!input.action_just_pressed(&map, "fire"));
+        input.latch();
+        assert!(!input.action_released(&map, "fire"));
+    }
+
+    #[test]
+    fn trigger_has_no_negative_side() {
+        // Triggers are unsigned: "gamepad_lt-" reads the negative side, which a trigger never reaches.
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt-");
+        map.bind("boost", "gamepad_lt+");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 1.0);
+        assert!(!input.action_pressed(&map, "fire"));
+        assert!(input.action_pressed(&map, "boost"));
+    }
+
+    #[test]
+    fn action_stays_pressed_while_any_of_its_codes_is_held() {
+        // Two controls on the same action: releasing one does not release the action while the other holds.
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_a");
+        map.bind("fire", "gamepad_rt");
+        let mut input = Input::default();
+        input.set_key("gamepad_a", true);
+        input.set_axis("gamepad_rt", 1.0);
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_key("gamepad_a", false);
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_axis("gamepad_rt", 0.0);
+        assert!(!input.action_pressed(&map, "fire"));
     }
 }

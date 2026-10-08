@@ -8,9 +8,9 @@ use serde::Serialize;
 use std::sync::OnceLock;
 
 /// Pino de um nó. `ty` vazio quer dizer "o tipo que o próprio nó decide": o da variável nomeada (GetVariable e
-/// SetVariable), o da propriedade nomeada (GetProperty e SetProperty) ou o do fio que chega (Reroute). `default`
-/// vazio torna a entrada obrigatória: sem fio e sem valor embutido, a validação falha. Nos pinos de propriedade o
-/// padrão vem do registro (ver `graph::input_default`).
+/// SetVariable), the named property's (GetProperty and SetProperty), or the incoming wire's (Reroute). `default`
+/// empty makes the input required: with no wire and no embedded value, validation fails. On property pins the
+/// default comes from the registry (see `graph::input_default`).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinDef {
@@ -55,8 +55,8 @@ impl PinDef {
         }
     }
 
-    /// Pino cujo tipo segue a propriedade nomeada pelo próprio nó (VIS-021): o tipo dela no registro. Como o de
-    /// variável, não tem `ty` nem padrão fixo; a resolução está em `graph::property_pin_type`.
+    /// Pin whose type follows the property named by the node itself (VIS-021): its type in the registry. Like a
+    /// variable, it has no fixed `ty` or default; the resolution is in `graph::property_pin_type`.
     fn of_property(name: &'static str, label: &'static str) -> Self {
         Self {
             name,
@@ -418,8 +418,8 @@ fn build() -> Vec<NodeDef> {
             vec![exec(), texto("msg", "Texto", "")],
             vec![exec()],
         ),
-        // Nós da cena. O tipo e o nome da propriedade são valores embutidos: o compilador não vê a cena, então o
-        // tipo do pino de valor sai do registro (VIS-021). Sem tipo declarado, o valor é decimal, como antes.
+        // Scene nodes. The property's type and name are embedded values: the compiler does not see the scene, so the
+        // value pin's type comes from the registry (VIS-021). No declared type: the value is decimal, as before.
         def(
             "GetProperty",
             "Propriedades",
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn property_nodes_embed_type_and_registry_value_type() {
-        // O tipo do nó é texto embutido, com padrão vazio (= sem tipo, decimal). O valor segue o registro.
+        // The node type is embedded text with an empty default (= no type, decimal). The value follows the registry.
         for kind in ["GetProperty", "SetProperty"] {
             let def = find(kind).unwrap();
             let tipo = def.inputs.iter().find(|p| p.name == "type").unwrap();

@@ -33,8 +33,8 @@ impl PinType {
         }
     }
 
-    /// Tipo de pino de uma propriedade do registro (VIS-021). Inteiro e máscara viram inteiro; enum, cor e UID
-    /// viram texto, como são escritos. A lista de pontos não tem pino: `None`.
+    /// Pin type of a registry property (VIS-021). Integer and mask become integer; enum, colour and UID
+    /// become text, as they are written. A list of points has no pin: `None`.
     pub fn of_prop(kind: PropKind) -> Option<PinType> {
         match kind {
             PropKind::Float => Some(PinType::Float),
@@ -72,8 +72,8 @@ impl Value {
         }
     }
 
-    /// Valor de uma propriedade do registro, a partir do JSON que ele guarda (o padrão, ou o valor da cena). `None`
-    /// quando o tipo não tem pino (lista de pontos) ou o JSON não tem o formato do tipo.
+    /// Value of a registry property, from the JSON it stores (the default, or the scene's value). `None`
+    /// when the type has no pin (a list of points) or the JSON does not have the type's shape.
     pub fn from_json(kind: PropKind, json: &serde_json::Value) -> Option<Value> {
         Some(match kind {
             PropKind::Float => Value::Float(json.as_f64()?),
@@ -124,7 +124,7 @@ mod tests {
             assert_eq!(PinType::of_prop(kind), Some(PinType::String), "{kind:?}");
         }
         assert_eq!(PinType::of_prop(PropKind::Vec2), Some(PinType::Vec2));
-        // Lista de pontos não tem pino: os nós de propriedade a recusam.
+        // A list of points has no pin: property nodes refuse it.
         assert_eq!(PinType::of_prop(PropKind::Points), None);
     }
 
@@ -138,7 +138,7 @@ mod tests {
             Some(Value::String("#ffffff".into()))
         );
         assert_eq!(Value::from_json(PropKind::Vec2, &json!([1.0, 2.0])), Some(Value::Vec2([1.0, 2.0])));
-        // Formato que não bate com o tipo: nada, em vez de um valor inventado.
+        // Shape that does not match the type: nothing, instead of an invented value.
         assert_eq!(Value::from_json(PropKind::Vec2, &json!([1.0])), None);
         assert_eq!(Value::from_json(PropKind::Float, &json!("x")), None);
         assert_eq!(Value::from_json(PropKind::Points, &json!([])), None);

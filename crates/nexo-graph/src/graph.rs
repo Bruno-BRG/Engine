@@ -506,8 +506,8 @@ impl Graph {
         self.wires.len() != antes
     }
 
-    /// Grava o valor embutido de uma entrada de dados. O tipo do valor tem de ser o do pino. Trocar o tipo ou o nome
-    /// de um nó de propriedade tira os fios do pino de valor que deixam de bater, e eles são devolvidos (VIS-021).
+    /// Writes the embedded value of a data input; the value must have the pin's type. Changing the type or name
+    /// of a property node drops the wires of its value pin that no longer match, and returns them (VIS-021).
     pub fn set_value(&mut self, node: u64, pin: &str, value: Value) -> Result<Vec<Wire>, String> {
         let (ty, etiqueta) = {
             let n = self
@@ -2150,7 +2150,7 @@ mod tests {
         );
     }
 
-    /// Nó de propriedade com o tipo e o nome embutidos, prontos para ligar.
+    /// Property node with its type and name embedded, ready to wire.
     fn property_node(g: &mut Graph, kind: &str, node_type: &str, name: &str) -> u64 {
         let id = adiciona(g, kind);
         g.set_value(id, "type", Value::String(node_type.into())).unwrap();
@@ -2161,7 +2161,7 @@ mod tests {
     #[test]
     fn property_pin_follows_registry() {
         let mut g = Graph::default();
-        let casos = [
+        let cases = [
             ("modulate", PinType::String),
             ("position", PinType::Vec2),
             ("centered", PinType::Bool),
@@ -2169,22 +2169,22 @@ mod tests {
             ("rotation", PinType::Float),
             ("shape", PinType::String),
         ];
-        for (nome, esperado) in casos {
-            let id = property_node(&mut g, "GetProperty", "Sprite2D", nome);
-            let no = g.node(id).unwrap();
-            assert_eq!(g.output_type(no, "value"), Ok(esperado), "{nome}");
+        for (name, expected) in cases {
+            let id = property_node(&mut g, "GetProperty", "Sprite2D", name);
+            let node = g.node(id).unwrap();
+            assert_eq!(g.output_type(node, "value"), Ok(expected), "{name}");
         }
-        // Sem tipo declarado, o nó lê decimal, como os grafos de antes da tipagem.
-        let antigo = adiciona(&mut g, "GetProperty");
-        g.set_value(antigo, "name", Value::String("position_x".into()))
+        // No declared type: the node reads decimal, as graphs from before typing did.
+        let legacy = adiciona(&mut g, "GetProperty");
+        g.set_value(legacy, "name", Value::String("position_x".into()))
             .unwrap();
         assert_eq!(
-            g.output_type(g.node(antigo).unwrap(), "value"),
+            g.output_type(g.node(legacy).unwrap(), "value"),
             Ok(PinType::Float)
         );
-        // O pino aparece com o tipo resolvido para o editor.
-        let pino = g.pins().into_iter().find(|p| p.node == antigo && p.pin == "value");
-        assert_eq!(pino.and_then(|p| p.ty), Some(PinType::Float));
+        // The pin shows with its resolved type for the editor.
+        let pin = g.pins().into_iter().find(|p| p.node == legacy && p.pin == "value");
+        assert_eq!(pin.and_then(|p| p.ty), Some(PinType::Float));
     }
 
     #[test]
@@ -2193,41 +2193,41 @@ mod tests {
         property_node(&mut g, "GetProperty", "Tipo9", "x");
         property_node(&mut g, "GetProperty", "Sprite2D", "nao_existe");
         property_node(&mut g, "SetProperty", "CollisionPolygon2D", "points");
-        let erros = g.validate();
+        let errors = g.validate();
         assert!(
-            erros.iter().any(|e| e.message.contains("'Tipo9' não existe")),
-            "{erros:?}"
+            errors.iter().any(|e| e.message.contains("'Tipo9' não existe")),
+            "{errors:?}"
         );
         assert!(
-            erros.iter().any(|e| e.message.contains("não tem a propriedade 'nao_existe'")),
-            "{erros:?}"
+            errors.iter().any(|e| e.message.contains("não tem a propriedade 'nao_existe'")),
+            "{errors:?}"
         );
         assert!(
-            erros.iter().any(|e| e.message.contains("lista de pontos")),
-            "{erros:?}"
+            errors.iter().any(|e| e.message.contains("lista de pontos")),
+            "{errors:?}"
         );
-        // Só o erro próprio aparece: o valor de uma propriedade inválida não vira "obrigatória".
+        // Only the node's own error shows: an invalid property's value is not reported as "required".
         assert!(
-            !erros.iter().any(|e| e.message.contains("obrigatória 'value'")),
-            "{erros:?}"
+            !errors.iter().any(|e| e.message.contains("obrigatória 'value'")),
+            "{errors:?}"
         );
     }
 
     #[test]
     fn wired_type_and_name_are_refused() {
         let mut g = Graph::default();
-        let texto = adiciona(&mut g, "Concat");
+        let concat = adiciona(&mut g, "Concat");
         let gp = property_node(&mut g, "GetProperty", "Sprite2D", "modulate");
-        g.connect((texto, "result"), (gp, "type")).unwrap();
-        g.connect((texto, "result"), (gp, "name")).unwrap();
-        let erros = g.validate();
+        g.connect((concat, "result"), (gp, "type")).unwrap();
+        g.connect((concat, "result"), (gp, "name")).unwrap();
+        let errors = g.validate();
         assert!(
-            erros.iter().any(|e| e.message.contains("'type' precisa ser um valor embutido")),
-            "{erros:?}"
+            errors.iter().any(|e| e.message.contains("'type' precisa ser um valor embutido")),
+            "{errors:?}"
         );
         assert!(
-            erros.iter().any(|e| e.message.contains("'name' precisa ser um valor embutido")),
-            "{erros:?}"
+            errors.iter().any(|e| e.message.contains("'name' precisa ser um valor embutido")),
+            "{errors:?}"
         );
     }
 
@@ -2236,16 +2236,16 @@ mod tests {
         let mut g = Graph::default();
         let sp = property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
         g.set_value(sp, "value", Value::String("#ff0000".into())).unwrap();
-        // Mesmo nome: nada muda, o valor fica.
+        // Same name: nothing changes, the value stays.
         g.set_value(sp, "name", Value::String("modulate".into())).unwrap();
         assert!(g.node(sp).unwrap().values.contains_key("value"));
-        // Outro tipo: o valor sai, porque pode ser de outro tipo.
+        // Other type: the value goes, because it may be of another type.
         g.set_value(sp, "type", Value::String("Node2D".into())).unwrap();
         assert!(!g.node(sp).unwrap().values.contains_key("value"));
         g.set_value(sp, "value", Value::String("#00ff00".into())).unwrap();
         g.set_value(sp, "name", Value::String("tag".into())).unwrap();
         assert!(!g.node(sp).unwrap().values.contains_key("value"));
-        // Tirar o tipo também tira o valor: volta a decimal sem valor.
+        // Removing the type also removes the value: it goes back to decimal with node value.
         g.set_value(sp, "value", Value::String("gato".into())).unwrap();
         g.remove_value(sp, "type");
         assert!(!g.node(sp).unwrap().values.contains_key("value"));
@@ -2254,55 +2254,55 @@ mod tests {
     #[test]
     fn value_without_wire_uses_property_default() {
         let mut g = Graph::default();
-        // Propriedade colorida sem valor embutido: o padrão é o do registro, e a entrada não fica obrigatória.
+        // Colour property with node embedded value: the default comes from the registry, and the input is not required.
         property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
-        // Sem tipo declarado, o padrão é decimal zero, como antes.
-        let antigo = adiciona(&mut g, "SetProperty");
-        g.set_value(antigo, "name", Value::String("position_x".into()))
+        // No declared type: the default is decimal zero, as before.
+        let legacy = adiciona(&mut g, "SetProperty");
+        g.set_value(legacy, "name", Value::String("position_x".into()))
             .unwrap();
-        let erros = g.validate();
-        assert!(!erros.iter().any(|e| e.message.contains("'value'")), "{erros:?}");
-        let padrao = g.node(antigo).unwrap();
-        let input = def_of(padrao).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
-        assert_eq!(input_default(padrao, input), Some(Value::Float(0.0)));
+        let errors = g.validate();
+        assert!(!errors.iter().any(|e| e.message.contains("'value'")), "{errors:?}");
+        let default_node = g.node(legacy).unwrap();
+        let input = def_of(default_node).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
+        assert_eq!(input_default(default_node, input), Some(Value::Float(0.0)));
     }
 
     #[test]
     fn changing_name_drops_mismatched_value_wire() {
         let mut g = Graph::default();
-        let leitura = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
-        let escrita = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
-        g.connect((leitura, "value"), (escrita, "value")).unwrap();
-        // Outra propriedade do mesmo tipo: o fio fica.
-        let tirados = g
-            .set_value(escrita, "name", Value::String("centered".into()))
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let writer = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((reader, "value"), (writer, "value")).unwrap();
+        // Another property of the same type: the wire stays.
+        let dropped = g
+            .set_value(writer, "name", Value::String("centered".into()))
             .unwrap();
-        assert!(tirados.is_empty());
+        assert!(dropped.is_empty());
         assert_eq!(g.wires.len(), 1);
-        // Vec2 no lugar de Bool: o fio sai, e volta na resposta para o editor avisar.
-        let tirados = g
-            .set_value(escrita, "name", Value::String("position".into()))
+        // Vec2 in place of Bool: the wire goes, and it comes back in the response so the editor can warn.
+        let dropped = g
+            .set_value(writer, "name", Value::String("position".into()))
             .unwrap();
-        assert_eq!(tirados.len(), 1);
-        assert_eq!(tirados[0].to, PinRef { node: escrita, pin: "value".into() });
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].to, PinRef { node: writer, pin: "value".into() });
         assert!(g.wires.is_empty());
     }
 
     #[test]
     fn changing_read_type_drops_wire_behind_reroute() {
         let mut g = Graph::default();
-        let leitura = property_node(&mut g, "GetProperty", "Node2D", "position");
+        let reader = property_node(&mut g, "GetProperty", "Node2D", "position");
         let reroute = g.add_reroute([0.0, 0.0]);
-        let escrita = property_node(&mut g, "SetProperty", "Node2D", "position");
-        g.connect((leitura, "value"), (reroute, "in")).unwrap();
-        g.connect((reroute, "out"), (escrita, "value")).unwrap();
-        // Node2D.visible é Bool: a leitura passa a dar Bool, e o pino Vec2 da escrita já não aceita.
-        let tirados = g
-            .set_value(leitura, "name", Value::String("visible".into()))
+        let writer = property_node(&mut g, "SetProperty", "Node2D", "position");
+        g.connect((reader, "value"), (reroute, "in")).unwrap();
+        g.connect((reroute, "out"), (writer, "value")).unwrap();
+        // Node2D.visible is Bool: the read now gives Bool, and the writer's Vec2 pin node longer accepts it.
+        let dropped = g
+            .set_value(reader, "name", Value::String("visible".into()))
             .unwrap();
-        assert_eq!(tirados.len(), 1);
-        assert_eq!(tirados[0].to.node, escrita);
-        // O fio que entra no reroute fica: a leitura continua dando um valor.
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].to.node, writer);
+        // The wire into the reroute stays: the read still gives a value.
         assert_eq!(g.wires.len(), 1);
         assert_eq!(g.wires[0].to.node, reroute);
     }
@@ -2310,12 +2310,12 @@ mod tests {
     #[test]
     fn removing_type_returns_wires_that_turn_decimal() {
         let mut g = Graph::default();
-        let leitura = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
-        let escrita = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
-        g.connect((leitura, "value"), (escrita, "value")).unwrap();
-        // Sem tipo declarado, o pino de valor vira decimal: o Bool da leitura não encaixa mais.
-        let tirados = g.remove_value(escrita, "type");
-        assert_eq!(tirados.len(), 1);
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let writer = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((reader, "value"), (writer, "value")).unwrap();
+        // No declared type: the value pin becomes decimal, and the read's Bool node longer fits.
+        let dropped = g.remove_value(writer, "type");
+        assert_eq!(dropped.len(), 1);
         assert!(g.wires.is_empty());
     }
 }

@@ -8,6 +8,7 @@ import { log } from '$lib/state/log.svelte';
 import { createGraphEditor, readNodeLibrary, readNodeRegistry, type GraphEditor } from '$lib/runtime/engine';
 import { isTauri } from '$lib/platform';
 import { logicDebug } from './debug.svelte';
+import { isPropertyNode } from './properties';
 import {
   COMMENT_SIZE,
   type Camera,
@@ -57,7 +58,7 @@ class LogicState {
   /** Tipos de nó da biblioteca de lógica (estáticos: lidos uma vez do WASM). */
   defs = $state.raw<NodeDef[]>([]);
   defsByKind = $derived(new Map(this.defs.map((d) => [d.kind, d] as const)));
-  /** Tipos do registro (com as propriedades de cada um), para escolher o tipo e o nome dos nós de propriedade. */
+  /** Registry types (with each one's properties), to pick the type and name of property nodes. */
   tipos = $state.raw<NodeType[]>([]);
 
   /** Pasta do projeto aberto, ou null. */
@@ -477,20 +478,36 @@ class LogicState {
 
   /** Valor embutido de uma entrada (campo do próprio nó). */
   setValue(node: number, pin: string, value: Value) {
-    this.#runDroppingWires('Valor recusado', (ed) => ed.set_value(node, pin, JSON.stringify(value)));
+    const cleared = this.#clearsTypedValue(node, pin, value);
+    const ok = this.#runDroppingWires('Valor recusado', (ed) => ed.set_value(node, pin, JSON.stringify(value)));
+    if (ok && cleared) this.#warnValueCleared();
   }
 
   removeValue(node: number, pin: string) {
-    this.#runDroppingWires('Não foi possível limpar o valor', (ed) => ed.remove_value(node, pin));
+    const cleared = this.#clearsTypedValue(node, pin, undefined);
+    const ok = this.#runDroppingWires('Não foi possível limpar o valor', (ed) => ed.remove_value(node, pin));
+    if (ok && cleared) this.#warnValueCleared();
+  }
+
+  /** True when setting `pin` of a property node to `next` (undefined when removed) clears its typed value (VIS-021). */
+  #clearsTypedValue(node: number, pin: string, next: Value | undefined): boolean {
+    if (pin !== 'type' && pin !== 'name') return false;
+    const n = this.snap.nodes.find((x) => x.id === node);
+    if (!n || !isPropertyNode(n.kind) || !n.values?.value) return false;
+    return JSON.stringify(n.values[pin]) !== JSON.stringify(next);
+  }
+
+  #warnValueCleared() {
+    log.toast('warn', 'Valor digitado limpo', 'Trocar o tipo ou o nome de um nó de propriedade tira o valor do pino de valor.');
   }
 
   /**
    * Like `#run`, for edits that can drop wires: changing the type or the name of a property node may leave wires on its
    * value pin that no longer match. The wires the engine returns are dropped, and the user gets a warning (VIS-021).
    */
-  #runDroppingWires(titulo: string, fn: (ed: GraphEditor) => string): boolean {
+  #runDroppingWires(title: string, fn: (ed: GraphEditor) => string): boolean {
     let dropped: Wire[] = [];
-    const ok = this.#run(titulo, (ed) => {
+    const ok = this.#run(title, (ed) => {
       dropped = JSON.parse(fn(ed)) as Wire[];
     });
     if (ok && dropped.length > 0) {

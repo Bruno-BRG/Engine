@@ -37,8 +37,10 @@
   Ações são os nomes que o jogo consulta (ex.: <span class="mono">ui_left</span>). Teclas são os códigos
   físicos do teclado (<span class="mono">KeyA</span>, <span class="mono">Space</span>,
   <span class="mono">ArrowLeft</span>), então não mudam com o layout. Uma ação também pode usar botões do mouse,
-  botões do controle e analógicos (escolha em <span class="mono">+ Mouse/controle</span>). Uma tecla pode servir
-  a mais de uma ação. Esc cancela a captura.
+  botões do controle, gatilhos LT e RT e analógicos (escolha em <span class="mono">+ Mouse/controle</span>).
+  Em <span class="mono">+ Tecla</span> e <span class="mono">Substituir</span>, a captura aceita uma tecla ou um
+  botão do controle. O navegador só mostra o controle depois de um aperto de botão. Uma tecla pode servir a mais
+  de uma ação. Esc cancela a captura.
 </p>
 
 <table class="inputs">
@@ -68,7 +70,7 @@
               <span class="none">sem teclas</span>
             {/each}
             {#if capturing}
-              <span class="wait" role="status">Pressione uma tecla…</span>
+              <span class="wait" role="status">Pressione uma tecla ou um botão do controle…</span>
             {/if}
           </div>
         </td>
@@ -109,7 +111,7 @@
 {#if settingsUi.capture}
   <div class="capture" role="status">
     <Keyboard size={13} />
-    <span>Pressione a tecla para <span class="mono">{settingsUi.capture.action}</span>.</span>
+    <span>Pressione uma tecla ou um botão do controle para <span class="mono">{settingsUi.capture.action}</span>.</span>
     <button class="btn" onclick={cancelCapture}>Cancelar</button>
   </div>
 {/if}
