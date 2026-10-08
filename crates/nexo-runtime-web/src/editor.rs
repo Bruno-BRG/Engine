@@ -207,6 +207,45 @@ impl SceneEditor {
         Ok(self.play.as_ref().is_some_and(|p| p.physics.grounded(uid)))
     }
 
+    // ---------- Consultas de física (PHY-030) ----------
+    // Resultados em JSON: {hit, node, point, normal, distance}, com null onde não há acerto.
+    // Sem reprodução, as consultas não acertam nada. A máscara usa os bits das camadas (-1 = todas).
+
+    /// Resultado do RayCast2D `uid` agora. `null` se o nó não é um RayCast2D.
+    pub fn ray_hit(&self, uid: &str) -> Result<String, JsError> {
+        let uid = parse_uid(uid)?;
+        let hit = self.play.as_ref().and_then(|p| p.physics.ray_hit(&p.scene, uid));
+        to_json(&hit)
+    }
+
+    /// Resultado do ShapeCast2D `uid` agora. `null` se o nó não é um ShapeCast2D.
+    pub fn shape_hit(&self, uid: &str) -> Result<String, JsError> {
+        let uid = parse_uid(uid)?;
+        let hit = self.play.as_ref().and_then(|p| p.physics.shape_hit(&p.scene, uid));
+        to_json(&hit)
+    }
+
+    /// Raio sem nó: o primeiro colisor atingido a partir de (ox, oy) na direção (dx, dy).
+    pub fn raycast(&self, ox: f64, oy: f64, dx: f64, dy: f64, distance: f64, mask: u32, com_areas: bool) -> Result<String, JsError> {
+        let hit = match &self.play {
+            Some(p) => p.physics.raycast([ox, oy], [dx, dy], distance, mask, com_areas),
+            None => Default::default(),
+        };
+        to_json(&hit)
+    }
+
+    /// UIDs dos nós com algum colisor que contém o ponto (x, y), em JSON.
+    pub fn overlap_point(&self, x: f64, y: f64, mask: u32, com_areas: bool) -> Result<String, JsError> {
+        let nos = self.play.as_ref().map(|p| p.physics.overlap_point([x, y], mask, com_areas)).unwrap_or_default();
+        to_json(&nos)
+    }
+
+    /// UIDs dos nós com algum colisor que toca o retângulo de centro (x, y) e tamanho (w, h), em JSON.
+    pub fn overlap_rect(&self, x: f64, y: f64, w: f64, h: f64, mask: u32, com_areas: bool) -> Result<String, JsError> {
+        let nos = self.play.as_ref().map(|p| p.physics.overlap_rect([x, y], [w, h], mask, com_areas)).unwrap_or_default();
+        to_json(&nos)
+    }
+
     // ---------- Entrada (INP-001, INP-002) ----------
 
     /// Registra uma tecla (código de `KeyboardEvent.code`) pressionada ou solta.

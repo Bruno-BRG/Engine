@@ -16,6 +16,9 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+mod joints;
+mod queries;
+
 /// Passo fixo da simulação, em segundos.
 pub const STEP: f64 = 1.0 / 60.0;
 /// Passos no máximo por quadro. Evita a espiral da morte quando o quadro demora demais.
@@ -136,6 +139,8 @@ pub struct Physics {
     world: PhysicsWorld,
     driven: Vec<Driven>,
     index: HashMap<Uid, usize>,
+    /// Corpo rígido de cada nó com corpo (estático, dinâmico, personagem ou área), para juntas e consultas.
+    bodies: HashMap<Uid, RigidBodyHandle>,
     /// Nó dono de cada colisor (o corpo ou a área).
     owner: HashMap<ColliderHandle, Uid>,
     /// Áreas e se estão monitorando.
@@ -159,6 +164,7 @@ impl Physics {
             world,
             driven: Vec::new(),
             index: HashMap::new(),
+            bodies: HashMap::new(),
             owner: HashMap::new(),
             areas: HashMap::new(),
             events: Vec::new(),
@@ -170,6 +176,7 @@ impl Physics {
                 p.add_body(scene, uid, node, &xfs);
             }
         }
+        joints::add(&mut p, scene);
         p
     }
 
@@ -194,6 +201,7 @@ impl Physics {
         };
         builder = builder.translation(Vector::new(body_xf.x as f32, body_xf.y as f32)).rotation(to_rad(body_xf.rot));
         let handle = self.world.bodies.insert(builder.build());
+        self.bodies.insert(uid, handle);
 
         let groups = mask_groups(node);
         let mut first_collider = None;
