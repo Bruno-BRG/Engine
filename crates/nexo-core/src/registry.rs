@@ -25,6 +25,8 @@ pub enum PropKind {
     Uid,
     /// Máscara de bits das camadas de colisão (INS-003): um inteiro, um bit por camada.
     Mask,
+    /// Lista de pontos [[x, y], ...] (polígonos de colisão, PHY-011).
+    Points,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -96,11 +98,10 @@ pub struct NodeType {
 }
 
 const SHAPES: &[&str] = &["rect", "circle", "diamond"];
-const COLLIDER_SHAPES: &[&str] = &["rect", "circle"];
+const COLLIDER_SHAPES: &[&str] = &["rect", "circle", "capsule_y", "segment"];
+const FREEZE_MODES: &[&str] = &["none", "static", "kinematic"];
+const OVERRIDE_MODES: &[&str] = &["disabled", "combine", "replace"];
 const BEHAVIOR_KINDS: &[&str] = &["spin", "float", "pulse"];
-/// Camadas padrão do registro (usadas pela física até ela ler as Configurações do Projeto, PHY-021).
-/// Tag e Layer são texto: os nomes válidos vêm de `ProjectSettings` (SCN-033, INS-001), não daqui.
-pub const LAYERS: &[&str] = &["default", "ground", "player", "enemy"];
 
 /// Máscara de colisão: bits das camadas que o corpo detecta. -1 significa todas.
 fn collision_mask() -> PropDef {
@@ -123,6 +124,27 @@ fn audio_player_props() -> Vec<PropDef> {
         PropDef::new("loop", "Repetir", "Reprodução", PropKind::Bool, json!(false)),
         PropDef::new("bus", "Barramento", "Reprodução", PropKind::Str, json!("Master")),
     ]
+}
+
+/// Camadas de todo corpo e área: máscara, camadas incluídas e excluídas (PHY-022).
+fn layer_props() -> Vec<PropDef> {
+    vec![
+        collision_mask(),
+        PropDef::new("include_layers", "Incluir camadas", "Colisão", PropKind::Int, json!(0)),
+        PropDef::new("exclude_layers", "Excluir camadas", "Colisão", PropKind::Int, json!(0)),
+    ]
+}
+
+/// As propriedades de camada mais as de um tipo específico.
+fn com_camadas(mut extra: Vec<PropDef>) -> Vec<PropDef> {
+    let mut props = layer_props();
+    props.append(&mut extra);
+    props
+}
+
+/// Material de física pelo nome (PHY-023): vazio = sem material.
+fn material() -> PropDef {
+    PropDef::new("physics_material", "Material de física", "Colisão", PropKind::Str, json!(""))
 }
 
 fn build() -> Vec<NodeType> {
@@ -192,45 +214,69 @@ fn build() -> Vec<NodeType> {
             name: "StaticBody2D",
             base: Some("Node2D"),
             category: "Física",
-            description: "Corpo imóvel: chão, paredes e plataformas.",
-            props: vec![collision_mask()],
+            description: "Corpo imóvel: chão, paredes e plataformas. Com velocidade constante vira esteira.",
+            props: com_camadas(vec![
+                material(),
+                PropDef::new(
+                    "constant_linear_velocity",
+                    "Velocidade constante",
+                    "Física",
+                    PropKind::Vec2,
+                    json!([0.0, 0.0]),
+                )
+                .step(1.0),
+            ]),
         },
         NodeType {
             name: "RigidBody2D",
             base: Some("Node2D"),
             category: "Física",
             description: "Corpo dinâmico: cai, empurra e quica sob a gravidade.",
-            props: vec![
-                collision_mask(),
+            props: com_camadas(vec![
+                material(),
                 PropDef::new("gravity_scale", "Escala de gravidade", "Física", PropKind::Float, json!(1.0))
                     .range(-10.0, 10.0)
                     .step(0.1),
                 PropDef::new("linear_damping", "Amortecimento linear", "Física", PropKind::Float, json!(0.0))
                     .range(0.0, 10.0)
                     .step(0.1),
+                PropDef::new("angular_damping", "Amortecimento angular", "Física", PropKind::Float, json!(0.0))
+                    .range(0.0, 10.0)
+                    .step(0.1),
+                PropDef::new("mass", "Massa", "Física", PropKind::Float, json!(1.0))
+                    .range(0.01, 10000.0)
+                    .step(0.1),
+                PropDef::new("can_sleep", "Pode dormir", "Física", PropKind::Bool, json!(true)),
+                PropDef::new("freeze", "Congelar", "Física", PropKind::Enum, json!("none")).options(FREEZE_MODES),
                 PropDef::new("lock_rotation", "Travar rotação", "Física", PropKind::Bool, json!(false)),
                 PropDef::new("continuous", "Detecção contínua", "Física", PropKind::Bool, json!(false)),
-            ],
+            ]),
         },
         NodeType {
             name: "CharacterBody2D",
             base: Some("Node2D"),
             category: "Física",
             description: "Personagem controlado por código: anda e para em paredes e chão. A gravidade não é automática.",
-            props: vec![
-                collision_mask(),
+            props: com_camadas(vec![
                 PropDef::new("velocity", "Velocidade", "Movimento", PropKind::Vec2, json!([0.0, 0.0])).step(1.0),
-            ],
+            ]),
         },
         NodeType {
             name: "Area2D",
             base: Some("Node2D"),
             category: "Física",
-            description: "Detecta os corpos e as áreas que entram nela. Não empurra nada.",
-            props: vec![
-                collision_mask(),
+            description: "Detecta os corpos e as áreas que entram nela. Pode trocar a gravidade e o amortecimento dos corpos.",
+            props: com_camadas(vec![
                 PropDef::new("monitoring", "Monitorar", "Área", PropKind::Bool, json!(true)),
-            ],
+                PropDef::new("gravity_override", "Gravidade", "Área", PropKind::Enum, json!("disabled"))
+                    .options(OVERRIDE_MODES),
+                PropDef::new("gravity", "Vetor de gravidade", "Área", PropKind::Vec2, json!([0.0, 0.0])).step(1.0),
+                PropDef::new("damp_override", "Amortecimento", "Área", PropKind::Enum, json!("disabled"))
+                    .options(OVERRIDE_MODES),
+                PropDef::new("linear_damp", "Amortecimento linear", "Área", PropKind::Float, json!(0.0))
+                    .range(0.0, 10.0)
+                    .step(0.1),
+            ]),
         },
         NodeType {
             name: "CollisionShape2D",
@@ -241,6 +287,18 @@ fn build() -> Vec<NodeType> {
                 PropDef::new("shape", "Forma", "Forma", PropKind::Enum, json!("rect")).options(COLLIDER_SHAPES),
                 PropDef::new("size", "Tamanho", "Forma", PropKind::Vec2, json!([32.0, 32.0])).step(1.0),
                 PropDef::new("disabled", "Desativada", "Forma", PropKind::Bool, json!(false)),
+                PropDef::new("one_way", "Colisão de uma face", "Forma", PropKind::Bool, json!(false)),
+            ],
+        },
+        NodeType {
+            name: "CollisionPolygon2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Forma de colisão por pontos. Convexa vira uma forma só; côncava, partes convexas.",
+            props: vec![
+                PropDef::new("points", "Pontos", "Forma", PropKind::Points, json!([])),
+                PropDef::new("disabled", "Desativada", "Forma", PropKind::Bool, json!(false)),
+                PropDef::new("one_way", "Colisão de uma face", "Forma", PropKind::Bool, json!(false)),
             ],
         },
         NodeType {
