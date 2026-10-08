@@ -44,7 +44,7 @@
   /** Linha de apoio do evento: o nome do estado (se for de estado) e se ele tem fluxo ligado. */
   function subtitulo(n: GraphNode): string {
     const partes: string[] = [];
-    const d = detalhe(n.kind, n.values);
+    const d = detalhe(n.kind, n.values ?? {});
     if (d) partes.push(d);
     if (!temFluxo(n.id)) partes.push('sem fluxo ligado');
     return partes.join(' · ');
