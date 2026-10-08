@@ -346,6 +346,7 @@
                           points={pointsOf(v)}
                           onset={(pts, coalesce) => setProp(def, pts, coalesce)}
                           onend={endEdit}
+                          purpose={node?.kind === 'Path2D' ? 'caminho' : 'colisao'}
                         />
                       {:else if def.kind === 'uid' && def.asset}
                         <AssetField

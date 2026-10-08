@@ -251,6 +251,15 @@ fn build() -> Vec<NodeType> {
                     .slider(),
             ],
         },
+        // Path2D (VPT-005, SCN-015): an open polyline of points in the node's space. No physics and no runtime
+        // movement yet; the viewport draws the line as a gizmo. PathFollow2D is still pending in SCN-015.
+        NodeType {
+            name: "Path2D",
+            base: Some("Node2D"),
+            category: "2D",
+            description: "Caminho: uma linha de pontos no espaço do nó. Aparece no viewport; ainda não anda sozinho.",
+            props: vec![PropDef::new("points", "Pontos", "Caminho", PropKind::Points, json!([]))],
+        },
         NodeType {
             name: "StaticBody2D",
             base: Some("Node2D"),
@@ -763,5 +772,16 @@ mod tests {
         }
         // The polygon's points are edited as a list of [x, y] pairs (PHY-011).
         assert_eq!(prop_def("CollisionPolygon2D", "points").unwrap().kind, PropKind::Points);
+    }
+
+    #[test]
+    fn path2d_is_a_2d_node_with_open_points_list() {
+        // VPT-005: Path2D is a 2D node in the "2D" category; its points are a list of [x, y] pairs, empty by default.
+        let def = find("Path2D").expect("Path2D is registered");
+        assert_eq!(def.category, "2D");
+        assert_eq!(def.base, Some("Node2D"));
+        assert!(is_2d("Path2D"));
+        assert_eq!(prop_def("Path2D", "points").unwrap().kind, PropKind::Points);
+        assert_eq!(default_value("Path2D", "points"), Some(json!([])));
     }
 }
