@@ -323,6 +323,14 @@ class SceneState {
     this.setProps(uid, { [key]: value }, coalesceKey);
   }
 
+  /**
+   * Renames a name reference (e.g. the physics material) in every node that uses it, as one undo step.
+   * Returns how many nodes changed, or null when the editor refused the rename.
+   */
+  renameRefs(prop: string, from: string, to: string): number | null {
+    return this.#run((ed) => ed.rename_prop_value(prop, from, to)) ?? null;
+  }
+
   /** Move o nó para `parent` (ou raiz) na posição final `index` entre os irmãos. */
   move(uid: string, parent: string | null, index: number) {
     this.#run((ed) => ed.move_node(uid, parent ?? undefined, index));
