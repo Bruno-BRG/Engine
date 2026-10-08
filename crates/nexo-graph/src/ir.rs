@@ -260,6 +260,18 @@ pub enum Op {
     },
 }
 
+/// One frame of the call stack of an op (DBG-003). Functions and timers are embedded where they are called, so each
+/// frame stores the node that opened it: the event, the call, or the timer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame {
+    /// The event that starts the program ("OnReady", "OnProcess"...). Always the first frame.
+    Event { node: u64, event: String },
+    /// A function call (CallFunction): the calling node and the function name.
+    Function { node: u64, name: String },
+    /// The timeout branch of a timer (TimerStart), which runs in its own task.
+    Timer { node: u64 },
+}
+
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
@@ -274,6 +286,21 @@ pub struct Program {
     pub regs: usize,
     /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
     pub estado: Option<String>,
+    /// Distinct call stacks of the program, each from the event to the innermost frame (DBG-003). A function called
+    /// in two places has one stack per call.
+    pub stacks: Vec<Vec<Frame>>,
+    /// Index in `stacks` of the call stack of each op, at the same index as `ops`.
+    pub stack_of_op: Vec<usize>,
+}
+
+impl Program {
+    /// Call stack of the op at `pc`, from the event to the innermost frame (DBG-003). Empty when `pc` is not an op.
+    pub fn stack_at(&self, pc: usize) -> &[Frame] {
+        match self.stack_of_op.get(pc).and_then(|&i| self.stacks.get(i)) {
+            Some(stack) => stack.as_slice(),
+            None => &[],
+        }
+    }
 }
 
 /// Resultado da compilação: as variáveis do script, um programa por nó de evento e o estado inicial.
@@ -354,6 +381,12 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         produzidas: BTreeMap::new(),
         chamadas: Vec::new(),
         retornos: Vec::new(),
+        frames: vec![Frame::Event {
+            node: event.id,
+            event: event.kind.clone(),
+        }],
+        stacks: Vec::new(),
+        stack_of_op: Vec::new(),
     };
     e.flow(event.id, "exec")?;
     // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
@@ -368,6 +401,8 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         sources: e.sources,
         regs: e.regs,
         estado,
+        stacks: e.stacks,
+        stack_of_op: e.stack_of_op,
     })
 }
 
@@ -397,14 +432,32 @@ struct Emitter<'g> {
     chamadas: Vec<u64>,
     /// Saltos de Return à espera do fim do corpo da função que está sendo embutida, uma lista por chamada.
     retornos: Vec<Vec<usize>>,
+    /// Frames of the call stack being compiled: the event, then the functions and timers that contain the node.
+    frames: Vec<Frame>,
+    /// Distinct call stacks seen so far. Each op stores only the index of its own.
+    stacks: Vec<Vec<Frame>>,
+    /// Index in `stacks` of the call stack of each emitted op.
+    stack_of_op: Vec<usize>,
 }
 
 impl<'g> Emitter<'g> {
-    /// Acrescenta uma op e devolve o índice dela.
+    /// Appends an op and returns its index. The op records the current call stack (DBG-003).
     fn emit(&mut self, op: Op, source: u64) -> usize {
         self.ops.push(op);
         self.sources.push(source);
+        let stack = self.stack_index();
+        self.stack_of_op.push(stack);
         self.ops.len() - 1
+    }
+
+    /// Index in `stacks` of the current call stack. A stack enters the table once, so the table stays small: it grows
+    /// with the number of distinct call paths, not with the number of ops.
+    fn stack_index(&mut self) -> usize {
+        if let Some(i) = self.stacks.iter().position(|p| *p == self.frames) {
+            return i;
+        }
+        self.stacks.push(self.frames.clone());
+        self.stacks.len() - 1
     }
 
     fn reg(&mut self) -> Reg {
@@ -607,7 +660,9 @@ impl<'g> Emitter<'g> {
                 let to_end = self.emit(Op::Jump { target: 0 }, id);
                 let entry = self.ops.len();
                 self.patch(spawn, entry);
+                self.frames.push(Frame::Timer { node: id });
                 self.flow(id, "timeout")?;
+                self.frames.pop();
                 let end = self.ops.len();
                 self.patch(to_end, end);
                 Ok(())
@@ -704,7 +759,12 @@ impl<'g> Emitter<'g> {
                 }
                 self.chamadas.push(def.id);
                 self.retornos.push(Vec::new());
+                self.frames.push(Frame::Function {
+                    node: id,
+                    name: nome.clone(),
+                });
                 self.flow(def.id, "exec")?;
+                self.frames.pop();
                 let fim = self.ops.len();
                 for salto in self.retornos.pop().unwrap_or_default() {
                     self.patch(salto, fim);
@@ -1115,5 +1175,163 @@ mod tests {
                 .any(|e| e.node == Some(inst) && e.message.contains("antes do nó rodar")),
             "{erros:?}"
         );
+    }
+
+    /// Print node with an embedded message.
+    fn print_node(g: &mut Graph, msg: &str) -> u64 {
+        let p = adiciona(g, "Print");
+        g.set_value(p, "msg", Value::String(msg.into())).unwrap();
+        p
+    }
+
+    /// Call node that calls the function `name`.
+    fn call_node(g: &mut Graph, name: &str) -> u64 {
+        let c = adiciona(g, "CallFunction");
+        g.set_value(c, "name", Value::String(name.into())).unwrap();
+        c
+    }
+
+    #[test]
+    fn function_called_twice_has_stack_per_call() {
+        // OnReady calls "f" twice in a row. The body of "f" (a Print) is embedded in each call.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let body = print_node(&mut g, "x");
+        g.connect((def, "exec"), (body, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let first = call_node(&mut g, "f");
+        let second = call_node(&mut g, "f");
+        g.connect((ev, "exec"), (first, "exec")).unwrap();
+        g.connect((first, "exec"), (second, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let body_stacks: Vec<Vec<Frame>> = (0..p.ops.len())
+            .filter(|&pc| p.sources[pc] == body)
+            .map(|pc| p.stack_at(pc).to_vec())
+            .collect();
+        let call_stack = |call: u64| {
+            vec![
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into(),
+                },
+                Frame::Function {
+                    node: call,
+                    name: "f".into(),
+                },
+            ]
+        };
+        assert!(body_stacks.contains(&call_stack(first)), "{body_stacks:?}");
+        assert!(body_stacks.contains(&call_stack(second)), "{body_stacks:?}");
+        assert!(
+            body_stacks
+                .iter()
+                .all(|stack| *stack == call_stack(first) || *stack == call_stack(second)),
+            "{body_stacks:?}"
+        );
+    }
+
+    #[test]
+    fn nested_call_stack_lists_outer_then_inner_function() {
+        // OnReady calls "outer"; the body of "outer" calls "inner"; the body of "inner" prints.
+        let mut g = Graph::default();
+        let inner_def = adiciona(&mut g, "Function");
+        g.set_value(inner_def, "name", Value::String("inner".into()))
+            .unwrap();
+        let body = print_node(&mut g, "deep");
+        g.connect((inner_def, "exec"), (body, "exec")).unwrap();
+        let outer_def = adiciona(&mut g, "Function");
+        g.set_value(outer_def, "name", Value::String("outer".into()))
+            .unwrap();
+        let inner_call = call_node(&mut g, "inner");
+        g.connect((outer_def, "exec"), (inner_call, "exec"))
+            .unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let outer_call = call_node(&mut g, "outer");
+        g.connect((ev, "exec"), (outer_call, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack = (0..p.ops.len())
+            .filter(|&pc| p.sources[pc] == body)
+            .map(|pc| p.stack_at(pc).to_vec())
+            .next()
+            .unwrap();
+        assert_eq!(
+            stack,
+            vec![
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into(),
+                },
+                Frame::Function {
+                    node: outer_call,
+                    name: "outer".into(),
+                },
+                Frame::Function {
+                    node: inner_call,
+                    name: "inner".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn after_call_stack_returns_to_event() {
+        // OnReady calls "f", then prints "after", which is no longer inside the function.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let body = print_node(&mut g, "inside");
+        g.connect((def, "exec"), (body, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let call = call_node(&mut g, "f");
+        let after = print_node(&mut g, "after");
+        g.connect((ev, "exec"), (call, "exec")).unwrap();
+        g.connect((call, "exec"), (after, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack_of = |node: u64| -> Vec<Frame> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == node)
+                .map(|pc| p.stack_at(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let only_event = vec![Frame::Event {
+            node: ev,
+            event: "OnReady".into(),
+        }];
+        assert_eq!(stack_of(after), only_event);
+        assert_ne!(stack_of(body), only_event);
+    }
+
+    #[test]
+    fn timeout_branch_is_in_timer_frame() {
+        // TimerStart: the "started" branch runs in the current task; the "timeout" branch runs in the timer's task.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let tm = adiciona(&mut g, "TimerStart");
+        g.set_value(tm, "seconds", Value::Float(0.2)).unwrap();
+        g.connect((ev, "exec"), (tm, "exec")).unwrap();
+        let started = print_node(&mut g, "started");
+        g.connect((tm, "started"), (started, "exec")).unwrap();
+        let timeout = print_node(&mut g, "timeout");
+        g.connect((tm, "timeout"), (timeout, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack_of = |node: u64| -> Vec<Frame> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == node)
+                .map(|pc| p.stack_at(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let event = Frame::Event {
+            node: ev,
+            event: "OnReady".into(),
+        };
+        assert_eq!(stack_of(started), vec![event.clone()]);
+        assert_eq!(stack_of(timeout), vec![event, Frame::Timer { node: tm }]);
     }
 }

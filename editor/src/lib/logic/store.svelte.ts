@@ -151,8 +151,8 @@ class LogicState {
   async open(name: string) {
     if (!this.project) return;
     const seq = ++this.#seq;
-    await this.flush();
     try {
+      await this.flush();
       let ed = this.#editors.get(name);
       if (!ed) {
         const text = await call<string>('load_script', { path: this.project, name });
