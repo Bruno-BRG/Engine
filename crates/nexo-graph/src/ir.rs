@@ -53,6 +53,11 @@ pub enum Op {
     Owner {
         dst: Reg,
     },
+    /// `dst` receives the other node of the dispatch: the colliding body or the signal's emitter (output "other").
+    /// Zero when the event has none.
+    Other {
+        dst: Reg,
+    },
     /// `dst` recebe o delta do quadro (saída "delta").
     Delta {
         dst: Reg,
@@ -297,6 +302,9 @@ pub struct Program {
     pub regs: usize,
     /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
     pub estado: Option<String>,
+    /// Filter text of the event: the action name (OnInputAction), the method name (OnSignal) or the other node's name
+    /// (OnCollision, empty for any). Empty for the other events. The scheduler matches it with each dispatch (VIS-002).
+    pub filter: String,
     /// Distinct call stacks of the program, each from the event to the innermost frame (DBG-003). A function called
     /// in two places has one stack per call.
     pub stacks: Vec<Vec<Frame>>,
@@ -480,6 +488,13 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         "State" | "StateEnter" | "StateExit" => Some(texto_embutido(event, "state")),
         _ => None,
     };
+    // Filter events keep the text that the dispatch must match (VIS-002).
+    let filter = match event.kind.as_str() {
+        "OnInputAction" => texto_embutido(event, "action"),
+        "OnSignal" => texto_embutido(event, "method"),
+        "OnCollision" => texto_embutido(event, "with"),
+        _ => String::new(),
+    };
     Ok(Program {
         event: event.kind.clone(),
         node: event.id,
@@ -487,6 +502,7 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         sources: e.sources,
         regs: e.regs,
         estado,
+        filter,
         stacks: e.stacks,
         stack_of_op: e.stack_of_op,
         wires_at: e.wires_at,
@@ -1003,9 +1019,18 @@ impl<'g> Emitter<'g> {
     fn output_node(&mut self, node: &'g GraphNode, pin: &str) -> Result<Reg, CompileError> {
         let id = node.id;
         match (node.kind.as_str(), pin) {
-            ("OnReady" | "OnProcess" | "OnPhysicsProcess", "self") => {
+            (
+                "OnReady" | "OnProcess" | "OnPhysicsProcess" | "OnInputAction" | "OnSignal" | "OnCollision"
+                | "OnTimer",
+                "self",
+            ) => {
                 let dst = self.reg();
                 self.emit(Op::Owner { dst }, id);
+                Ok(dst)
+            }
+            ("OnSignal" | "OnCollision", "other") => {
+                let dst = self.reg();
+                self.emit(Op::Other { dst }, id);
                 Ok(dst)
             }
             ("OnProcess" | "OnPhysicsProcess", "delta") => {

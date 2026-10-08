@@ -11,17 +11,35 @@
 use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
 use nexo_core::scene::value_of;
+use nexo_core::timer::TimerEvent;
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Compiled, Context, Graph, Host, Pausa, Scheduler, Trace, VmError, compile};
-use nexo_physics::STEP;
+use nexo_physics::{EventKind, PhysicsEvent, STEP};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use wasm_bindgen::prelude::*;
 
-/// A frame event that has not started yet: its name and the time it receives.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A script event that has not started yet: its name, the time it receives, and what triggered it (VIS-002).
+#[derive(Clone, Debug, PartialEq)]
 struct Evento {
     nome: &'static str,
     dt: f64,
+    /// Text the program's filter must match: the input action, the signal's method or the other node's name.
+    filter: String,
+    /// The other node of the dispatch: the colliding body or the signal's emitter. Zero when there is none.
+    other: u64,
+}
+
+impl Evento {
+    /// Frame event: runs with the frame time and no filter.
+    fn frame(name: &'static str, dt: f64) -> Evento {
+        Evento { nome: name, dt, filter: String::new(), other: 0 }
+    }
+
+    /// Dispatched event (signal, collision, timer or input action). It runs with time zero: the waits that the frame
+    /// events already advanced do not move again on it.
+    fn dispatch(name: &'static str, filter: &str, other: u64) -> Evento {
+        Evento { nome: name, dt: 0.0, filter: filter.to_string(), other }
+    }
 }
 
 /// Uma instância de script: o grafo de um nó, com o agendador e o contexto dele.
@@ -37,6 +55,9 @@ pub(crate) struct Instancia {
     erros: BTreeSet<String>,
     /// Frame events that have not started yet. A pause keeps them, and `continuar` or `passo` resume them.
     fila: VecDeque<Evento>,
+    /// Signal, collision and timer events delivered to this instance (VIS-002). The next frame runs them first, and
+    /// they wait while the instance is paused.
+    delivered: Vec<Evento>,
     /// The step reached the end of a frame: the next frame starts paused, before its first operation.
     aguarda_quadro: bool,
 }
@@ -170,6 +191,11 @@ pub(crate) fn tick(
     dt: f64,
 ) {
     p.instancias.retain(|i| p.scene.node(i.dono).is_some());
+    for (owner, event) in deliveries(p) {
+        if let Some(inst) = p.instancias.iter_mut().find(|i| i.dono == owner) {
+            inst.delivered.push(event);
+        }
+    }
     for inst in &mut p.instancias {
         let resultado = {
             let mut mundo = Mundo {
@@ -188,12 +214,71 @@ pub(crate) fn tick(
     }
 }
 
-/// The events of one frame, in execution order: one "OnPhysicsProcess" per fixed physics step, then the
-/// "OnProcess" with the frame time.
-fn quadro(passos: usize, dt: f64) -> VecDeque<Evento> {
-    let mut fila: VecDeque<Evento> = (0..passos).map(|_| Evento { nome: "OnPhysicsProcess", dt: STEP }).collect();
-    fila.push_back(Evento { nome: "OnProcess", dt });
-    fila
+/// Takes the physics and timer events of this frame and turns them into script events, each with the instance it
+/// concerns (VIS-002). A signal runs the method of each connection of its emitter (SCN-034) on the target. A body
+/// that starts a collision also runs its "On Collision" with the other node's name. A timer's timeout runs its own
+/// "On Timer". The raw events stay in the play for the editor (`physics_events`, `timer_events`).
+fn deliveries(play: &mut Play) -> Vec<(Uid, Evento)> {
+    let physics = play.physics.take_events();
+    let timers = play.timers.take_events();
+    let routed = route_events(&play.scene, &physics, &timers);
+    play.editor_physics.extend(physics);
+    play.editor_timers.extend(timers);
+    routed
+}
+
+/// The script events of raw physics and timer events, each with the instance it concerns. Only reads the scene.
+fn route_events(scene: &Scene, physics: &[PhysicsEvent], timers: &[TimerEvent]) -> Vec<(Uid, Evento)> {
+    let mut routed = Vec::new();
+    for ev in physics {
+        let signal = match ev.kind {
+            EventKind::BodyEntered => "body_entered",
+            EventKind::BodyExited => "body_exited",
+            EventKind::AreaEntered => "area_entered",
+            EventKind::AreaExited => "area_exited",
+            EventKind::CollisionStarted => "collision_started",
+            EventKind::CollisionEnded => "collision_ended",
+        };
+        dispatch_signal(scene, ev.node, signal, ev.other.0, &mut routed);
+        if ev.kind == EventKind::CollisionStarted {
+            let other_name = scene.node(ev.other).map(|n| n.name.clone()).unwrap_or_default();
+            routed.push((ev.node, Evento::dispatch("OnCollision", &other_name, ev.other.0)));
+        }
+    }
+    for ev in timers {
+        dispatch_signal(scene, ev.node, ev.kind, 0, &mut routed);
+        if ev.kind == "timeout" {
+            routed.push((ev.node, Evento::dispatch("OnTimer", "", 0)));
+        }
+    }
+    routed
+}
+
+/// Adds an "On Signal" event for each connection of `emitter` with the signal `signal` (SCN-034). The target runs the
+/// method of the connection, and `other` is the other node of the dispatch (the collider, or zero for timers).
+fn dispatch_signal(scene: &Scene, emitter: Uid, signal: &str, other: u64, out: &mut Vec<(Uid, Evento)>) {
+    let Some(node) = scene.node(emitter) else {
+        return;
+    };
+    for connection in node.connections.iter().filter(|c| c.signal == signal) {
+        out.push((connection.target, Evento::dispatch("OnSignal", &connection.method, other)));
+    }
+}
+
+/// Input events of the frame (VIS-002): one for each input action that the instance's programs listen to and that was
+/// pressed in this frame.
+fn input_events(graph: &Compiled, host: &dyn Host) -> Vec<Evento> {
+    let actions: BTreeSet<&str> = graph
+        .programs
+        .iter()
+        .filter(|p| p.event == "OnInputAction" && !p.filter.is_empty())
+        .map(|p| p.filter.as_str())
+        .collect();
+    actions
+        .into_iter()
+        .filter(|action| host.action_just_pressed(action))
+        .map(|action| Evento::dispatch("OnInputAction", action, 0))
+        .collect()
 }
 
 /// Writes an execution error to the console, once per message, and drops the rest of the frame of the instance.
@@ -225,6 +310,7 @@ impl Instancia {
             contexto,
             erros: BTreeSet::new(),
             fila: VecDeque::new(),
+            delivered: Vec::new(),
             aguarda_quadro: false,
         })
     }
@@ -238,6 +324,7 @@ impl Instancia {
         self.texto = texto.to_string();
         self.erros.clear();
         self.fila.clear();
+        self.delivered.clear();
         self.aguarda_quadro = false;
         let estado = self.contexto.estado.clone();
         if !estado.is_empty() && !self.grafo.programs.iter().any(|p| p.estado.as_deref() == Some(estado.as_str())) {
@@ -261,20 +348,30 @@ impl Instancia {
     fn quadro_novo(&mut self, host: &mut dyn Host, passos: usize, dt: f64) -> Result<(), VmError> {
         if self.aguarda_quadro {
             self.aguarda_quadro = false;
-            self.fila = quadro(passos, dt);
+            self.fila = self.frame_queue(&*host, passos, dt);
             return self.avancar_fila(host, true);
         }
         if self.pausada() {
             return Ok(());
         }
-        self.fila = quadro(passos, dt);
+        self.fila = self.frame_queue(&*host, passos, dt);
         self.avancar_fila(host, false)
+    }
+
+    /// The events of the frame, in order: the ones delivered to the instance, the input actions pressed in this frame,
+    /// one "OnPhysicsProcess" per fixed physics step, and the "OnProcess" with the frame time (VIS-002).
+    fn frame_queue(&mut self, host: &dyn Host, steps: usize, dt: f64) -> VecDeque<Evento> {
+        let mut queue: VecDeque<Evento> = self.delivered.drain(..).collect();
+        queue.extend(input_events(&self.grafo, host));
+        queue.extend((0..steps).map(|_| Evento::frame("OnPhysicsProcess", STEP)));
+        queue.push_back(Evento::frame("OnProcess", dt));
+        queue
     }
 
     /// Starts the event (creates its tasks) and runs it up to the next pause or to its end. `parado`: stops before the
     /// first operation instead of running it (step by step).
     fn comecar(&mut self, evento: Evento, host: &mut dyn Host, parado: bool) -> Result<(), VmError> {
-        self.agenda.iniciar(&self.grafo, evento.nome);
+        self.agenda.start_filtered(&self.grafo, evento.nome, &evento.filter, evento.other);
         if evento.nome == "OnProcess" {
             self.agenda.iniciar_estado(&self.grafo, &self.contexto.estado);
         }
@@ -661,5 +758,119 @@ mod tests {
         let mut inst = Instancia::novo(&c.cena, node, &text).unwrap();
         quadro_de(&mut inst, &mut c, 0).unwrap();
         assert_eq!(inst.contexto.vars[1], Value::Float(4.0));
+    }
+
+    /// A play over `scene`, with the physics and timers that `play_start` builds, and no scripts yet.
+    fn play_of(scene: Scene) -> Play {
+        let physics = Physics::build(&scene, &ProjectSettings::default());
+        Play {
+            scene,
+            time: 0.0,
+            physics,
+            audio: AudioPlayback::default(),
+            timers: nexo_core::timer::Timers::default(),
+            instancias: Vec::new(),
+            editor_physics: Vec::new(),
+            editor_timers: Vec::new(),
+        }
+    }
+
+    /// Graph with one event `kind` that prints `msg`. The event's filter goes in the pin `pin`, when there is one.
+    fn graph_with_filter(kind: &str, pin: &str, filter: &str, msg: &str) -> Graph {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, kind);
+        if !pin.is_empty() {
+            g.set_value(ev, pin, Value::String(filter.into())).unwrap();
+        }
+        let pr = adiciona(&mut g, "Print");
+        g.set_value(pr, "msg", Value::String(msg.into())).unwrap();
+        g.connect((ev, "exec"), (pr, "exec")).unwrap();
+        g
+    }
+
+    /// Messages printed to the console by the script of `owner`.
+    fn texts_of(console: &[Mensagem], owner: Uid) -> Vec<String> {
+        console.iter().filter(|m| m.node == owner).map(|m| m.message.clone()).collect()
+    }
+
+    #[test]
+    fn timeout_runs_the_method_connected_to_the_target() {
+        // Timer -> target: the connection calls "on_timeout" on the target's script (SCN-034, VIS-002).
+        let mut scene = Scene::new("Teste", 1);
+        let timer = scene.add_node(None, "Timer", None).unwrap();
+        let target = scene.add_node(None, "Node2D", None).unwrap();
+        scene.connect(timer, "timeout", target, "on_timeout").unwrap();
+        let text = graph_with_filter("OnSignal", "method", "on_timeout", "esgotou").to_ron().unwrap();
+        let mut play = play_of(scene);
+        play.instancias.push(Instancia::novo(&play.scene, target, &text).unwrap());
+        assert!(play.timers.start(&play.scene, timer));
+        let (settings, input, mut console) = (ProjectSettings::default(), Input::default(), Vec::new());
+        // The default wait is 1 s: a frame of 1.5 s fires the timeout.
+        play.timers.advance(&play.scene, 1.5);
+        tick(&mut play, 0, &settings, &input, Ponteiro::default(), &mut console, 1.5);
+        assert_eq!(texts_of(&console, target), ["esgotou"]);
+        // The raw event stays in the queue for the editor.
+        assert_eq!(play.editor_timers.len(), 1);
+    }
+
+    #[test]
+    fn timer_runs_the_on_timer_of_its_own_script() {
+        let mut scene = Scene::new("Teste", 1);
+        let timer = scene.add_node(None, "Timer", None).unwrap();
+        let text = graph_with_filter("OnTimer", "", "", "tic").to_ron().unwrap();
+        let mut play = play_of(scene);
+        play.instancias.push(Instancia::novo(&play.scene, timer, &text).unwrap());
+        assert!(play.timers.start(&play.scene, timer));
+        let (settings, input, mut console) = (ProjectSettings::default(), Input::default(), Vec::new());
+        play.timers.advance(&play.scene, 1.5);
+        tick(&mut play, 0, &settings, &input, Ponteiro::default(), &mut console, 1.5);
+        assert_eq!(texts_of(&console, timer), ["tic"]);
+    }
+
+    #[test]
+    fn collision_routes_on_collision_with_the_other_name_and_the_connected_method() {
+        let mut scene = Scene::new("Teste", 1);
+        let body = scene.add_node(None, "RigidBody2D", None).unwrap();
+        let wall = scene.add_node(None, "StaticBody2D", None).unwrap();
+        scene.rename_node(wall, "Parede").unwrap();
+        let target = scene.add_node(None, "Node2D", None).unwrap();
+        scene.connect(body, "collision_started", target, "on_hit").unwrap();
+        let ev = PhysicsEvent { kind: EventKind::CollisionStarted, node: body, other: wall, point: None, normal: None };
+        let routed = route_events(&scene, &[ev], &[]);
+        assert!(routed.contains(&(body, Evento::dispatch("OnCollision", "Parede", wall.0))));
+        assert!(routed.contains(&(target, Evento::dispatch("OnSignal", "on_hit", wall.0))));
+        assert_eq!(routed.len(), 2);
+    }
+
+    #[test]
+    fn area_signal_routes_only_to_the_connections_of_that_signal() {
+        let mut scene = Scene::new("Teste", 1);
+        let area = scene.add_node(None, "Area2D", None).unwrap();
+        let body = scene.add_node(None, "RigidBody2D", None).unwrap();
+        let target = scene.add_node(None, "Node2D", None).unwrap();
+        scene.connect(area, "body_entered", target, "on_enter").unwrap();
+        scene.connect(area, "body_exited", target, "on_exit").unwrap();
+        let ev = PhysicsEvent { kind: EventKind::BodyEntered, node: area, other: body, point: None, normal: None };
+        let routed = route_events(&scene, &[ev], &[]);
+        // Only the entered connection fires; the exit one stays quiet, and an area has no "On Collision".
+        assert_eq!(routed, vec![(target, Evento::dispatch("OnSignal", "on_enter", body.0))]);
+    }
+
+    #[test]
+    fn pressed_action_runs_the_on_input_action_of_that_name() {
+        let text = graph_with_filter("OnInputAction", "action", "jump", "pulou").to_ron().unwrap();
+        let mut scene = Scene::new("Teste", 1);
+        let node = scene.add_node(None, "Node2D", None).unwrap();
+        let mut play = play_of(scene);
+        play.instancias.push(Instancia::novo(&play.scene, node, &text).unwrap());
+        let mut settings = ProjectSettings::default();
+        settings.input.bind("jump", "Space");
+        let mut input = Input::default();
+        let mut console = Vec::new();
+        tick(&mut play, 0, &settings, &input, Ponteiro::default(), &mut console, 0.1);
+        assert!(texts_of(&console, node).is_empty());
+        input.set_key("Space", true);
+        tick(&mut play, 0, &settings, &input, Ponteiro::default(), &mut console, 0.1);
+        assert_eq!(texts_of(&console, node), ["pulou"]);
     }
 }

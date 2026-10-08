@@ -53,6 +53,22 @@ impl Scheduler {
         }
     }
 
+    /// Creates a task for each program of the event `event` whose filter takes the dispatch: `filter` is the input
+    /// action, the signal's method or the name of the node hit by a collision. `other` is the node on the other side
+    /// of the dispatch (`Op::Other`), or zero. Does nothing while paused (VIS-002).
+    pub fn start_filtered(&mut self, compiled: &Compiled, event: &str, filter: &str, other: u64) {
+        if self.pausa.is_some() {
+            return;
+        }
+        for (i, programa) in compiled.programs.iter().enumerate() {
+            if programa.event == event && accepts(event, &programa.filter, filter) {
+                let mut tarefa = Tarefa::nova(i, programa);
+                tarefa.other = other;
+                self.tarefas.push(tarefa);
+            }
+        }
+    }
+
     /// Quantidade de tarefas vivas (rodando ou esperando).
     pub fn tarefas(&self) -> usize {
         self.tarefas.len()
@@ -252,6 +268,7 @@ impl Scheduler {
             }
 
             let programa = &compiled.programs[self.tarefas[i].programa];
+            let other = self.tarefas[i].other;
             let (resultado, novas, sinais, transicoes, restante) = {
                 let mut amb = Ambiente {
                     host: &mut *host,
@@ -266,6 +283,7 @@ impl Scheduler {
                     novas: Vec::new(),
                     sinais: Vec::new(),
                     transicoes: Vec::new(),
+                    other,
                 };
                 let r = avancar(&mut self.tarefas[i], programa, &mut amb, Vm::MAX_STEPS);
                 (r, amb.novas, amb.sinais, amb.transicoes, amb.passo)
@@ -328,6 +346,17 @@ pub fn recarregar_contexto(ctx: &Context, antigo: &Compiled, novo: &Compiled) ->
         delta: ctx.delta,
         vars,
         estado: ctx.estado.clone(),
+    }
+}
+
+/// Whether a program whose event node has the filter `program_filter` takes a dispatch with `filter` (VIS-002).
+/// Input actions and signal methods match by name, so an empty filter never runs. A collision with an empty
+/// filter runs for any node. The other events have no filter and take every dispatch.
+fn accepts(event: &str, program_filter: &str, filter: &str) -> bool {
+    match event {
+        "OnCollision" => program_filter.is_empty() || program_filter == filter,
+        "OnInputAction" | "OnSignal" => !filter.is_empty() && program_filter == filter,
+        _ => true,
     }
 }
 
@@ -395,6 +424,95 @@ mod tests {
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
         assert_eq!(float_prop(&host, 7, "position_x"), 60.0);
         assert_eq!(ctx.vars[0], Value::Float(1.0));
+    }
+
+    /// Filter event (VIS-002) followed by a Print. The filter goes in the pin `pin`; without a pin, the event has none.
+    fn filtered_event(g: &mut Graph, kind: &str, pin: &str, filter: &str, msg: &str) -> u64 {
+        let ev = adiciona(g, kind);
+        if !pin.is_empty() {
+            texto(g, ev, pin, filter);
+        }
+        imprime(g, (ev, "exec"), msg);
+        ev
+    }
+
+    fn printed(host: &Mock) -> Vec<String> {
+        host.impressos.iter().map(|(_, m)| m.clone()).collect()
+    }
+
+    #[test]
+    fn input_action_runs_only_the_pressed_name() {
+        let mut g = Graph::default();
+        filtered_event(&mut g, "OnInputAction", "action", "ui_accept", "aceitar");
+        filtered_event(&mut g, "OnInputAction", "action", "ui_cancel", "cancelar");
+        filtered_event(&mut g, "OnInputAction", "action", "", "sem nome");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(7);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.start_filtered(&compiled, "OnInputAction", "ui_accept", 0);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(printed(&host), ["aceitar"]);
+        // A dispatch with no name does not match the program with an empty name.
+        sched.start_filtered(&compiled, "OnInputAction", "", 0);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(printed(&host), ["aceitar"]);
+    }
+
+    #[test]
+    fn signal_runs_requested_method_and_emitter_goes_to_other() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnSignal");
+        texto(&mut g, ev, "method", "mover");
+        let sp = adiciona(&mut g, "SetProperty");
+        texto(&mut g, sp, "name", "position_x");
+        g.set_value(sp, "value", Value::Float(5.0)).unwrap();
+        g.connect((ev, "exec"), (sp, "exec")).unwrap();
+        // The event's Other output (the emitter) feeds the property's node, so the emitter receives the write.
+        g.connect((ev, "other"), (sp, "node")).unwrap();
+        let compiled = compile(&g).unwrap();
+        assert_eq!(compiled.programs[0].filter, "mover");
+        let mut ctx = compiled.new_context(7);
+        let mut host = Mock::default();
+        host.props.insert((9, "position_x".into()), Value::Float(0.0));
+        let mut sched = Scheduler::new();
+        sched.start_filtered(&compiled, "OnSignal", "outro", 9);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(float_prop(&host, 9, "position_x"), 0.0);
+        sched.start_filtered(&compiled, "OnSignal", "mover", 9);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(float_prop(&host, 9, "position_x"), 5.0);
+    }
+
+    #[test]
+    fn collision_filters_by_other_name_and_empty_matches_any() {
+        let mut g = Graph::default();
+        filtered_event(&mut g, "OnCollision", "with", "Parede", "parede");
+        filtered_event(&mut g, "OnCollision", "with", "", "qualquer");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(7);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.start_filtered(&compiled, "OnCollision", "Parede", 3);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(printed(&host), ["parede", "qualquer"]);
+        host.impressos.clear();
+        sched.start_filtered(&compiled, "OnCollision", "Chao", 4);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(printed(&host), ["qualquer"]);
+    }
+
+    #[test]
+    fn timer_runs_on_its_own_node() {
+        let mut g = Graph::default();
+        filtered_event(&mut g, "OnTimer", "", "", "fim");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(7);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.start_filtered(&compiled, "OnTimer", "", 0);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.016).unwrap();
+        assert_eq!(printed(&host), ["fim"]);
     }
 
     #[test]

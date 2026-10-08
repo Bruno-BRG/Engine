@@ -233,6 +233,9 @@ pub(crate) struct Tarefa {
     pub ultimo_no: Option<u64>,
     /// Criada por Spawn neste quadro: o tempo dela só começa a contar no quadro seguinte.
     pub nova: bool,
+    /// The other node of the dispatch that started the task (the colliding body, the signal's emitter), read by
+    /// `Op::Other`. Zero when the event has none. Tasks started by this one inherit it (VIS-002).
+    pub other: u64,
 }
 
 impl Tarefa {
@@ -244,6 +247,7 @@ impl Tarefa {
             latente: None,
             ultimo_no: None,
             nova: false,
+            other: 0,
         }
     }
 }
@@ -275,6 +279,8 @@ pub(crate) struct Ambiente<'a> {
     pub sinais: Vec<String>,
     /// Trocas de estado pedidas por GoToState, para o agendador.
     pub transicoes: Vec<String>,
+    /// The other node of the dispatch of the task that runs (`Tarefa::other`), read by `Op::Other`.
+    pub other: u64,
 }
 
 /// A máquina virtual. Não guarda estado: tudo fica no `Context`, no `Host` e na `Tarefa`.
@@ -307,6 +313,7 @@ impl Vm {
             novas: Vec::new(),
             sinais: Vec::new(),
             transicoes: Vec::new(),
+            other: tarefa.other,
         };
         match avancar(&mut tarefa, program, &mut amb, limit)? {
             Parada::Fim => Ok(()),
@@ -391,6 +398,7 @@ fn executa(
     match op {
         Op::Const { dst, value } => set(regs, *dst, value.clone(), origem)?,
         Op::Owner { dst } => set(regs, *dst, Value::Node(amb.ctx.owner), origem)?,
+        Op::Other { dst } => set(regs, *dst, Value::Node(amb.other), origem)?,
         Op::Delta { dst } => set(regs, *dst, Value::Float(amb.ctx.delta), origem)?,
         Op::GetVar { dst, var } => {
             let v = amb
@@ -702,6 +710,7 @@ fn executa(
                 latente: None,
                 ultimo_no: None,
                 nova: false,
+                other: t.other,
             };
             if s > 0.0 {
                 filha.latente = Some(Latente::Espera { restante: s });
@@ -826,6 +835,7 @@ fn destino(op: &Op) -> Option<Reg> {
     match op {
         Op::Const { dst, .. }
         | Op::Owner { dst }
+        | Op::Other { dst }
         | Op::Delta { dst }
         | Op::GetVar { dst, .. }
         | Op::Add { dst, .. }
@@ -1215,6 +1225,7 @@ pub(crate) mod tests {
             sources: vec![5],
             regs: 0,
             estado: None,
+            filter: String::new(),
             stacks: Vec::new(),
             stack_of_op: Vec::new(),
             wires_at: Vec::new(),

@@ -87,6 +87,10 @@ const EN: Record<string, string> = {
   StateEnter: 'state enter start begin',
   StateExit: 'state exit leave end',
   GoToState: 'go to state change switch transition',
+  OnInputAction: 'on input action key button press',
+  OnSignal: 'on signal receive connection emit',
+  OnCollision: 'on collision with hit touch body',
+  OnTimer: 'on timer timeout alarm wait',
 };
 
 /** Nome visível de um tipo de nó na busca (rótulo em português mais os nomes em inglês). */

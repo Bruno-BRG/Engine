@@ -4,23 +4,30 @@
   import { Zap, ChevronDown, ChevronRight } from '@lucide/svelte';
 
   // Eventos do script aberto (VIS-002). Cada evento é um nó da biblioteca com `event: true`.
-  // Os que ainda não têm nó (colisão, ação, sinal, desenho, destruição, temporizador) aparecem desabilitados.
+  // The ones without a node yet (draw and destroy) show up disabled.
   const DISPONIVEIS: { kind: string; nome: string }[] = [
     { kind: 'OnReady', nome: 'Ao ficar pronto (On Ready)' },
     { kind: 'OnProcess', nome: 'A cada quadro (On Process)' },
     { kind: 'OnPhysicsProcess', nome: 'A cada quadro de física (On Physics Process)' },
+    { kind: 'OnCollision', nome: 'Ao colidir com... (On Collision with)' },
+    { kind: 'OnInputAction', nome: 'Ao receber ação (On Input Action)' },
+    { kind: 'OnSignal', nome: 'Ao receber sinal (On Signal)' },
+    { kind: 'OnTimer', nome: 'Ao esgotar o temporizador (On Timer)' },
     { kind: 'State', nome: 'Estado (State)' },
     { kind: 'StateEnter', nome: 'Ao entrar no estado (On Enter State)' },
     { kind: 'StateExit', nome: 'Ao sair do estado (On Exit State)' },
   ];
-  const PENDENTES = [
-    'Ao colidir com... (On Collision with)',
-    'Ao receber ação (On Input Action)',
-    'Ao receber sinal (On Signal)',
-    'Ao desenhar (On Draw)',
-    'Ao destruir (On Destroy)',
-    'Ao esgotar o temporizador (On Timer)',
-  ];
+  const PENDENTES = ['Ao desenhar (On Draw)', 'Ao destruir (On Destroy)'];
+
+  /** Text pin that holds each event's filter, with its label and the text shown when the filter is empty. */
+  const FILTER_PIN: Record<string, { pin: string; label: string; empty: string }> = {
+    State: { pin: 'state', label: 'estado', empty: 'sem nome de estado' },
+    StateEnter: { pin: 'state', label: 'estado', empty: 'sem nome de estado' },
+    StateExit: { pin: 'state', label: 'estado', empty: 'sem nome de estado' },
+    OnInputAction: { pin: 'action', label: 'ação', empty: 'sem ação' },
+    OnSignal: { pin: 'method', label: 'método', empty: 'sem método' },
+    OnCollision: { pin: 'with', label: 'com', empty: 'com qualquer nó' },
+  };
 
   let aberto = $state(false);
   let recolhido = $state(false);
@@ -30,11 +37,12 @@
     logic.addEvent(kind);
   }
 
-  /** Eventos de estado guardam o nome do estado no pino "state". */
+  /** The event's filter, read from its text pin: the state name, the action, the method or the other node. */
   function detalhe(kind: string, valores: Record<string, unknown>): string {
-    if (!kind.startsWith('State')) return '';
-    const v = valores.state as { String?: string } | undefined;
-    return v?.String ? `estado “${v.String}”` : 'sem nome de estado';
+    const filter = FILTER_PIN[kind];
+    if (!filter) return '';
+    const v = valores[filter.pin] as { String?: string } | undefined;
+    return v?.String ? `${filter.label} “${v.String}”` : filter.empty;
   }
 
   function temFluxo(id: number): boolean {

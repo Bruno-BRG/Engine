@@ -154,6 +154,23 @@ fn evento(
     }
 }
 
+/// Event whose filter is the text embedded in one of its pins: the action name, the signal's method or the other
+/// node's name. The compiler uses that text as the program's filter (VIS-002). The pin has no wire, so the text
+/// stays on the node.
+fn event_with_filter(
+    kind: &'static str,
+    label: &'static str,
+    description: &'static str,
+    pin: &'static str,
+    pin_label: &'static str,
+    outputs: Vec<PinDef>,
+) -> NodeDef {
+    NodeDef {
+        inputs: vec![texto(pin, pin_label, "")],
+        ..evento(kind, label, description, outputs)
+    }
+}
+
 fn build() -> Vec<NodeDef> {
     let decimal_resultado = || vec![PinDef::new("result", "Resultado", PinType::Float)];
     let bool_resultado = || vec![PinDef::new("result", "Resultado", PinType::Bool)];
@@ -185,6 +202,44 @@ fn build() -> Vec<NodeDef> {
                 PinDef::new("delta", "Delta (s)", PinType::Float),
                 PinDef::new("self", "Este nó", PinType::Node),
             ],
+        ),
+        event_with_filter(
+            "OnInputAction",
+            "Ao receber ação",
+            "Roda no quadro em que a ação com este nome é pressionada (On Input Action). Sem nome, não roda.",
+            "action",
+            "Ação",
+            vec![exec(), PinDef::new("self", "Este nó", PinType::Node)],
+        ),
+        event_with_filter(
+            "OnSignal",
+            "Ao receber sinal",
+            "Roda quando um sinal ligado a este nó chega (SCN-034), pelo nome do método da ligação. A saída Emissor é o nó que emitiu.",
+            "method",
+            "Método",
+            vec![
+                exec(),
+                PinDef::new("self", "Este nó", PinType::Node),
+                PinDef::new("other", "Emissor", PinType::Node),
+            ],
+        ),
+        event_with_filter(
+            "OnCollision",
+            "Ao colidir com",
+            "Roda quando este corpo começa a colidir com o nó de nome dado (vazio: com qualquer nó). A saída Outro é o nó com que colidiu.",
+            "with",
+            "Nome do outro nó",
+            vec![
+                exec(),
+                PinDef::new("self", "Este nó", PinType::Node),
+                PinDef::new("other", "Outro nó", PinType::Node),
+            ],
+        ),
+        evento(
+            "OnTimer",
+            "Ao esgotar o temporizador",
+            "Roda quando o temporizador deste nó chega ao fim da espera (sinal timeout).",
+            vec![exec(), PinDef::new("self", "Este nó", PinType::Node)],
         ),
         // Fluxo.
         def(
@@ -719,10 +774,14 @@ mod tests {
 
     #[test]
     fn biblioteca_serializa_para_o_editor() {
-        assert_eq!(library().len(), 55);
+        assert_eq!(library().len(), 59);
         assert!(find("Branch").is_some_and(|d| !d.event));
         assert!(find("OnProcess").is_some_and(|d| d.event));
         assert!(find("OnPhysicsProcess").is_some_and(|d| d.event));
+        assert!(find("OnInputAction").is_some_and(|d| d.event && d.inputs[0].name == "action"));
+        assert!(find("OnSignal").is_some_and(|d| d.event && d.inputs[0].name == "method"));
+        assert!(find("OnCollision").is_some_and(|d| d.event && d.inputs[0].name == "with"));
+        assert!(find("OnTimer").is_some_and(|d| d.event && d.inputs.is_empty()));
         assert!(find("Nada").is_none());
         // O editor lê esta tabela como JSON.
         let json = serde_json::to_value(library()).unwrap();

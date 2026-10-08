@@ -163,10 +163,10 @@ fn method_name(program: &Program) -> String {
 fn metodo(out: &mut String, compiled: &Compiled, programa: &Program, names: &[String]) {
     let assincrono = programa.ops.iter().any(latente);
     let retorno = if assincrono { "async Task" } else { "void" };
-    let parametros = if matches!(programa.event.as_str(), "OnProcess" | "OnPhysicsProcess") {
-        "NodeRef self, double delta"
-    } else {
-        "NodeRef self"
+    let parametros = match programa.event.as_str() {
+        "OnProcess" | "OnPhysicsProcess" => "NodeRef self, double delta",
+        "OnSignal" | "OnCollision" => "NodeRef self, NodeRef other",
+        _ => "NodeRef self",
     };
     let _ = writeln!(
         out,
@@ -200,9 +200,10 @@ fn tipos_dos_registradores(compiled: &Compiled, programa: &Program) -> Vec<PinTy
     for op in &programa.ops {
         let (dst, ty) = match op {
             Op::Const { dst, value } => (*dst, value.ty()),
-            Op::Owner { dst } | Op::FindNode { dst, .. } | Op::InstanceScene { dst, .. } => {
-                (*dst, PinType::Node)
-            }
+            Op::Owner { dst }
+            | Op::Other { dst }
+            | Op::FindNode { dst, .. }
+            | Op::InstanceScene { dst, .. } => (*dst, PinType::Node),
             Op::Delta { dst }
             | Op::Add { dst, .. }
             | Op::Sub { dst, .. }
@@ -249,6 +250,7 @@ fn instrucao(names: &[String], op: &Op) -> String {
     match op {
         Op::Const { dst, value } => format!("r{dst} = {};", literal(value)),
         Op::Owner { dst } => format!("r{dst} = self;"),
+        Op::Other { dst } => format!("r{dst} = other;"),
         Op::Delta { dst } => format!("r{dst} = delta;"),
         Op::GetVar { dst, var } => format!("r{dst} = {};", nome_variavel(names, *var)),
         Op::SetVar { var, src } => format!("{} = r{src};", nome_variavel(names, *var)),
@@ -574,6 +576,21 @@ mod tests {
         );
         // "class" é palavra reservada em C#: sai protegida.
         assert!(texto.contains("private long @class = 0L;"), "{texto}");
+    }
+
+    #[test]
+    fn collision_event_takes_the_other_node_as_parameter() {
+        // OnCollision: the method takes `other`, and the Other output reads that parameter (VIS-002).
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnCollision");
+        let sp = adiciona(&mut g, "SetProperty");
+        g.set_value(sp, "name", Value::String("position_x".into())).unwrap();
+        g.set_value(sp, "value", Value::Float(5.0)).unwrap();
+        g.connect((ev, "exec"), (sp, "exec")).unwrap();
+        g.connect((ev, "other"), (sp, "node")).unwrap();
+        let texto = generate_csharp(&compile(&g).unwrap(), "Jogador");
+        assert!(texto.contains("NodeRef self, NodeRef other"), "{texto}");
+        assert!(texto.contains("= other;"), "{texto}");
     }
 
     #[test]

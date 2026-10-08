@@ -7,7 +7,7 @@ use crate::scripts::{self, Instancia};
 use nexo_core::query::{self, Draw};
 use nexo_core::timer::{TimerEvent, Timers};
 use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, registry};
-use nexo_physics::{Physics, check_reference};
+use nexo_physics::{Physics, PhysicsEvent, check_reference};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,6 +22,10 @@ pub(crate) struct Play {
     pub(crate) audio: AudioPlayback,
     pub(crate) timers: Timers,
     pub(crate) instancias: Vec<Instancia>,
+    /// Physics events taken by the scripts' frame, not yet read by the editor (`physics_events`).
+    pub(crate) editor_physics: Vec<PhysicsEvent>,
+    /// Timer events taken by the scripts' frame, not yet read by the editor (`timer_events`).
+    pub(crate) editor_timers: Vec<TimerEvent>,
 }
 
 #[wasm_bindgen]
@@ -230,7 +234,16 @@ impl SceneEditor {
         timers.autostart(&scene);
         // Bordas de entrada: a tecla já apertada antes de começar não conta como aperto no primeiro quadro.
         self.input.latch();
-        self.play = Some(Play { scene, time: 0.0, physics, audio, timers, instancias });
+        self.play = Some(Play {
+            scene,
+            time: 0.0,
+            physics,
+            audio,
+            timers,
+            instancias,
+            editor_physics: Vec::new(),
+            editor_timers: Vec::new(),
+        });
         Ok(())
     }
 
@@ -279,7 +292,7 @@ impl SceneEditor {
     /// Sinais dos temporizadores desde a última chamada, em JSON: [{node, kind}] (SCN-014). A fila é esvaziada.
     pub fn timer_events(&mut self) -> Result<String, JsError> {
         let events: Vec<TimerEvent> = match &mut self.play {
-            Some(p) => p.timers.take_events(),
+            Some(p) => std::mem::take(&mut p.editor_timers),
             None => Vec::new(),
         };
         to_json(&events)
@@ -292,7 +305,7 @@ impl SceneEditor {
     /// Eventos de física desde a última chamada, em JSON: [{kind, node, other}]. A fila é esvaziada.
     pub fn physics_events(&mut self) -> Result<String, JsError> {
         let events = match &mut self.play {
-            Some(p) => p.physics.take_events(),
+            Some(p) => std::mem::take(&mut p.editor_physics),
             None => Vec::new(),
         };
         to_json(&events)
