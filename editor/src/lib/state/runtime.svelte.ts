@@ -32,11 +32,11 @@ class PlayRuntime {
   /** Nós da cópia de reprodução, atualizados algumas vezes por segundo para o Depurador. */
   live = $state.raw<NodeView[]>([]);
   #sinceLive = 0;
-  /** Pontos de parada como foram enviados por último, para não reenviar o que não mudou. */
+  /** Breakpoints as last sent to the play session, so unchanged ones are not sent again. */
   #pontosEnviados: string | null = null;
 
   constructor() {
-    // Um ponto de parada marcado ou removido vale já: a reprodução recebe os pontos na hora, mesmo sem quadros.
+    // A breakpoint set or removed takes effect at once: the play session gets them now, even without frames.
     logicDebug.onPontosMudaram = () => this.#sincronizarPontos();
   }
 
@@ -90,7 +90,7 @@ class PlayRuntime {
     }
   }
 
-  /** Escolhe a instância que o Depurador acompanha. Só ela grava o rastro na reprodução. */
+  /** Chooses the instance the debugger follows. Only it records a trace in the play session. */
   escolherInstancia(uid: string | null) {
     logicDebug.select(uid);
     try {
@@ -114,7 +114,7 @@ class PlayRuntime {
     if (aberto) this.#atualizarDepurador();
   }
 
-  /** Continuar, ou Próxima operação, numa instância pausada (VIS-031). Só a instância muda; o jogo segue. */
+  /** Continue, or Next operation, for a paused instance (VIS-031). Only that instance changes; the game keeps running. */
   depurar(acao: 'continuar' | 'proxima', uid: string) {
     const ed = scene.editor;
     if (!ed?.is_playing()) return;
@@ -131,27 +131,27 @@ class PlayRuntime {
     this.syncLive();
   }
 
-  /** Estado das instâncias e rastro da escolhida: o que o Depurador mostra depois de cada quadro ou ação. */
+  /** State of the instances and the trace of the followed one, read only while the debugger is observing. */
   #atualizarDepurador() {
     const ed = scene.editor;
     if (!ed || !ed.is_playing() || !logicDebug.observando) return;
     const lista = JSON.parse(ed.debug_state()) as InstanciaDebug[];
     logicDebug.setInstancias(lista);
-    // Sem escolha válida (início do jogo, ou a instância sumiu): a primeira pausada, ou a primeira.
+    // No valid choice (game start, or the instance is gone): the first paused one, or the first.
     if (!lista.some((i) => i.uid === logicDebug.selecionada)) {
       this.escolherInstancia((lista.find((i) => i.pausada) ?? lista[0])?.uid ?? null);
     }
     const uid = logicDebug.selecionada;
     if (uid) {
       const eventos = JSON.parse(ed.debug_trace()) as TraceEvent[];
-      // Sem eventos (a instância está parada), o último trecho continua visível.
+      // No events (the instance is parked), the last segment stays visible.
       if (eventos.length) logicDebug.pushTrace(uid, eventos);
     }
   }
 
   /**
-   * Envia os pontos de parada à reprodução: cada nó com script recebe os pontos do script dele. Só reenvia quando
-   * mudam. Os pontos valem na reprodução atual e nas próximas (VIS-031).
+   * Sends the breakpoints to the play session: each node with a script gets the breakpoints of its script. Sends them
+   * only when they change. They hold in the current play session and in the next ones (VIS-031).
    */
   #sincronizarPontos() {
     const ed = scene.editor;

@@ -156,8 +156,8 @@ pub(crate) struct Tarefa {
     pub pc: usize,
     pub regs: Vec<Value>,
     pub latente: Option<Latente>,
-    /// Nó da última op rodada, ou onde a tarefa parou. Um ponto de parada vale uma vez por visita ao nó: as ops
-    /// seguintes do mesmo nó (um Print tem mais de uma) não voltam a parar nele (VIS-031).
+    /// Node of the last op run, or where the task stopped. A breakpoint fires once per visit to a node: the ops
+    /// that follow in the same node (a Print has more than one) do not stop there again (VIS-031).
     pub ultimo_no: Option<u64>,
     /// Criada por Spawn neste quadro: o tempo dela só começa a contar no quadro seguinte.
     pub nova: bool,
@@ -258,8 +258,8 @@ pub(crate) fn avancar(
             return Ok(Parada::Fim);
         }
         let origem = program.sources.get(t.pc).copied().unwrap_or(program.node);
-        // Pausa antes da op: por passo esgotado, ou por ponto de parada na execução livre. O ponto vale uma vez por
-        // visita ao nó: ao retomar, as ops do mesmo nó rodam sem parar de novo nele.
+        // Pause before the op: when the step budget is spent, or at a breakpoint in free run. A breakpoint fires once per
+        // visit to the node: on resume, the ops of the same node run without stopping there again.
         let passo_esgotado = matches!(amb.passo, Some(0));
         let ponto = amb.passo.is_none() && amb.pontos.contains(&origem) && t.ultimo_no != Some(origem);
         if passo_esgotado || ponto {

@@ -1,7 +1,7 @@
-//! Visual scripts in the play session (VIS-023, CON-004). Each node with a graph gets an instance: the compiled graph,
-//! a scheduler and a context. `set_scripts` keeps the graphs (RON) by node UID. `play_start` compiles them, and each
-//! frame (`tick`) runs the events through the Host (`host.rs`). In the play session, `set_scripts` hot-reloads the
-//! changed graphs: variables with the same name and type keep their value (`Scheduler::recarregar`).
+//! Scripts visuais na reprodução (VIS-023, CON-004). Cada nó com grafo ganha uma instância: o grafo compilado, um
+//! agendador e um contexto. `set_scripts` guarda os grafos (RON) por UID de nó. `play_start` os compila, e cada
+//! quadro (`tick`) roda os eventos pelo Host (`host.rs`). Na reprodução, um `set_scripts` recarrega a quente os grafos
+//! alterados: as variáveis de mesmo nome e tipo mantêm o valor (`Scheduler::recarregar`).
 //!
 //! Per-instance debugging (VIS-031): a pause (breakpoint or step) freezes only that instance. The frame events it has
 //! not run yet wait in its queue, and it creates no new tasks while paused. `continuar` runs the rest of the frame
@@ -16,7 +16,7 @@ use nexo_physics::STEP;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use wasm_bindgen::prelude::*;
 
-/// Evento de quadro que ainda não começou: o nome dele e o tempo que recebe.
+/// A frame event that has not started yet: its name and the time it receives.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Evento {
     nome: &'static str,
@@ -34,9 +34,9 @@ pub(crate) struct Instancia {
     contexto: Context,
     /// Erros de execução já escritos no console. Cada mensagem aparece uma vez, até a próxima recarga.
     erros: BTreeSet<String>,
-    /// Eventos do quadro que ainda não começaram. Uma pausa os guarda, e `continuar` ou `passo` os retomam.
+    /// Frame events that have not started yet. A pause keeps them, and `continuar` or `passo` resume them.
     fila: VecDeque<Evento>,
-    /// O passo a passo chegou ao fim de um quadro: o próximo quadro começa parado, antes da primeira operação.
+    /// The step reached the end of a frame: the next frame starts paused, before its first operation.
     aguarda_quadro: bool,
 }
 
@@ -155,9 +155,10 @@ pub(crate) fn atualizar_rastro(instancias: &mut [Instancia], escolhida: Option<U
     }
 }
 
-/// One frame of all the scripts in the play session. Per instance: first one "OnPhysicsProcess" event per physics step
-/// (with the fixed step), then the frame's "OnProcess", with the active state. A paused instance gets no new frame.
-/// A runtime error goes to the console once per message; the instance keeps going.
+/// Um quadro de todos os scripts da reprodução. Por instância: primeiro um evento "OnPhysicsProcess" por passo de
+/// física (com o passo fixo), depois o "OnProcess" do quadro, com o estado ativo. Erro de execução vai ao console uma
+/// vez por mensagem; a instância segue.
+/// A paused instance gets no new frame.
 pub(crate) fn tick(
     p: &mut Play,
     passos: usize,
@@ -186,15 +187,15 @@ pub(crate) fn tick(
     }
 }
 
-/// Os eventos de um quadro, na ordem de execução: um "OnPhysicsProcess" por passo fixo de física, depois o
-/// "OnProcess" com o tempo do quadro.
+/// The events of one frame, in execution order: one "OnPhysicsProcess" per fixed physics step, then the
+/// "OnProcess" with the frame time.
 fn quadro(passos: usize, dt: f64) -> VecDeque<Evento> {
     let mut fila: VecDeque<Evento> = (0..passos).map(|_| Evento { nome: "OnPhysicsProcess", dt: STEP }).collect();
     fila.push_back(Evento { nome: "OnProcess", dt });
     fila
 }
 
-/// Registra um erro de execução no console, uma vez por mensagem, e descarta o resto do quadro da instância.
+/// Writes an execution error to the console, once per message, and drops the rest of the frame of the instance.
 pub(crate) fn registrar(inst: &mut Instancia, cena: &Scene, console: &mut Vec<Mensagem>, resultado: Result<(), VmError>) {
     let Err(erro) = resultado else {
         return;
@@ -226,8 +227,8 @@ impl Instancia {
         })
     }
 
-    /// Hot reload: swaps the graph and keeps the variables with the same name and type (`Scheduler::recarregar`). The
-    /// running tasks are dropped. A state that no longer exists in the new graph returns to its initial value.
+    /// Recarga a quente: troca o grafo e mantém as variáveis de mesmo nome e tipo (`Scheduler::recarregar`). As
+    /// tarefas em curso são descartadas. Um estado que deixou de existir no grafo novo volta ao estado inicial.
     /// The pause and the rest of the frame are dropped too.
     fn recarregar(&mut self, novo: Compiled, texto: &str) {
         self.contexto = self.agenda.recarregar(&self.contexto, &self.grafo, &novo);
@@ -242,19 +243,19 @@ impl Instancia {
         }
     }
 
-    /// Pausada para depuração: a agenda parou numa operação, ou o passo chegou ao fim de um quadro. Uma instância
-    /// pausada não recebe quadros novos até `continuar` ou `passo`.
+    /// Paused for debugging: the schedule stopped at an operation, or a step reached the end of a frame. A paused
+    /// instance gets no new frames until `continuar` or `passo`.
     pub(crate) fn pausada(&self) -> bool {
         self.agenda.pausa().is_some() || self.aguarda_quadro
     }
 
-    /// Onde a execução parou, se parou numa operação (ponto de parada ou passo a passo).
+    /// Where the execution stopped, if it stopped at an operation (breakpoint or step by step).
     pub(crate) fn pausa(&self) -> Option<&Pausa> {
         self.agenda.pausa()
     }
 
-    /// Escolhe o que a instância faz no quadro: se ela está parada, espera; se o passo a passo chegou ao fim de um
-    /// quadro, o quadro novo começa parado; senão, roda o quadro inteiro até a próxima pausa.
+    /// Decides what the instance does in the frame: if it is paused, it waits; if a step reached the end of a
+    /// frame, the new frame starts paused; otherwise, the whole frame runs up to the next pause.
     fn quadro_novo(&mut self, host: &mut dyn Host, passos: usize, dt: f64) -> Result<(), VmError> {
         if self.aguarda_quadro {
             self.aguarda_quadro = false;
@@ -268,8 +269,8 @@ impl Instancia {
         self.avancar_fila(host, false)
     }
 
-    /// Começa o evento (cria as tarefas dele) e roda até a próxima pausa ou o fim dele. `parado`: para antes da
-    /// primeira operação, em vez de rodar (passo a passo).
+    /// Starts the event (creates its tasks) and runs it up to the next pause or to its end. `parado`: stops before the
+    /// first operation instead of running it (step by step).
     fn comecar(&mut self, evento: Evento, host: &mut dyn Host, parado: bool) -> Result<(), VmError> {
         self.agenda.iniciar(&self.grafo, evento.nome);
         if evento.nome == "OnProcess" {
@@ -282,8 +283,8 @@ impl Instancia {
         }
     }
 
-    /// Começa os eventos da fila, um por vez, até uma pausa ou até a fila acabar. Com `parado`, a primeira operação
-    /// de cada evento pausa, e o evento seguinte só começa depois que a operação dele roda.
+    /// Starts the queued events one at a time, until a pause or until the queue is empty. With `parado`, the first op
+    /// of each event pauses, and the next event starts only after its operation has run.
     fn avancar_fila(&mut self, host: &mut dyn Host, parado: bool) -> Result<(), VmError> {
         while self.agenda.pausa().is_none() {
             let Some(evento) = self.fila.pop_front() else {
@@ -294,7 +295,7 @@ impl Instancia {
         Ok(())
     }
 
-    /// Continuar (VIS-031): sai da pausa, roda o resto do quadro uma vez e os quadros seguintes até a próxima pausa.
+    /// Continue (VIS-031): leaves the pause, runs the rest of the frame once, and the following frames up to the next pause.
     pub(crate) fn continuar(&mut self, host: &mut dyn Host) -> Result<(), VmError> {
         if !self.pausada() {
             return Ok(());
@@ -304,8 +305,8 @@ impl Instancia {
         self.avancar_fila(host, false)
     }
 
-    /// Próxima operação (VIS-031): roda uma operação e pausa antes da seguinte, mesmo que ela esteja no evento
-    /// seguinte. Se o quadro acaba, o próximo começa parado no quadro seguinte. Sem pausa, não faz nada.
+    /// Next operation (VIS-031): runs one op and pauses before the next one, even in the next event.
+    /// If the frame ends, the next frame starts paused. Without a pause, it does nothing.
     pub(crate) fn passo(&mut self, host: &mut dyn Host) -> Result<(), VmError> {
         if self.aguarda_quadro || self.agenda.pausa().is_none() {
             return Ok(());
@@ -320,7 +321,7 @@ impl Instancia {
         Ok(())
     }
 
-    /// Tira o rastro da instância desde a última vez (VIS-030, DBG-003). Vazio se o rastro está desligado.
+    /// Takes the trace of the instance since the last call (VIS-030, DBG-003). Empty if the trace is off.
     pub(crate) fn tomar_rastro(&mut self) -> Vec<TraceEvent> {
         self.agenda.tomar_rastro()
     }
@@ -347,7 +348,7 @@ mod tests {
     use nexo_graph::Value;
     use nexo_physics::Physics;
 
-    /// Mundo de teste: uma cena vazia, com a física e o áudio que os prints não usam.
+    /// Test world: an empty scene, with the physics and audio that the prints do not use.
     struct Cenario {
         cena: Scene,
         fisica: Physics,
@@ -372,13 +373,13 @@ mod tests {
             }
         }
 
-        /// Textos que o script de `dono` imprimiu, na ordem.
+        /// Texts printed by the script of `dono`, in order.
         fn textos(&self, dono: Uid) -> Vec<String> {
             self.console.iter().filter(|m| m.node == dono).map(|m| m.message.clone()).collect()
         }
     }
 
-    /// Roda `acao` com o mundo de teste do script `dono`.
+    /// Runs `acao` with the test world of the script `dono`.
     fn com_mundo<T>(c: &mut Cenario, dono: Uid, acao: impl FnOnce(&mut Mundo<'_>) -> T) -> T {
         let mut mundo = Mundo {
             cena: &mut c.cena,
@@ -393,7 +394,7 @@ mod tests {
         acao(&mut mundo)
     }
 
-    /// Um quadro da instância, com `passos` passos de física.
+    /// One frame of the instance, with `passos` physics steps.
     fn quadro_de(inst: &mut Instancia, c: &mut Cenario, passos: usize) -> Result<(), VmError> {
         let dono = inst.dono;
         com_mundo(c, dono, |m| inst.quadro_novo(m, passos, 0.1))
@@ -403,9 +404,9 @@ mod tests {
         g.add_node(kind, [0.0, 0.0]).unwrap()
     }
 
-    /// Grafo com dois eventos: "OnPhysicsProcess" imprime "fis" e "OnProcess" imprime "proc". Devolve os nós dos
-    /// dois prints. Cada print tem duas operações (a constante da mensagem e a escrita), então um passo nem sempre
-    /// chega à escrita.
+    /// Graph with two events: "OnPhysicsProcess" prints "fis" and "OnProcess" prints "proc". Returns the nodes of the
+    /// two prints. Each print has two operations (the message constant and the write), so one step does not always
+    /// reach the write.
     fn grafo_de_quadro() -> (Graph, u64, u64) {
         let mut g = Graph::default();
         let ev_fis = adiciona(&mut g, "OnPhysicsProcess");
@@ -423,7 +424,7 @@ mod tests {
         Instancia::novo(Uid(dono), &g.to_ron().unwrap()).unwrap()
     }
 
-    /// Próxima operação até `pare` ser verdadeiro, com no máximo dez passos.
+    /// Next operation until `pare` holds, with at most ten steps.
     fn passa_ate(a: &mut Instancia, c: &mut Cenario, pare: impl Fn(&Instancia) -> bool) {
         for _ in 0..10 {
             if pare(&*a) {
@@ -434,7 +435,7 @@ mod tests {
         }
     }
 
-    /// Ponto de parada no print de "proc" da instância `a` (só ela).
+    /// Breakpoint on the "proc" print of instance `a` only.
     fn com_ponto_em(a: &mut Instancia, proc: u64) {
         let pontos = BTreeMap::from([(a.dono, BTreeSet::from([proc]))]);
         aplicar_pontos(std::slice::from_mut(a), &pontos);
@@ -491,7 +492,7 @@ mod tests {
         assert!(!a.pausada());
         assert_eq!(c.textos(Uid(1)), ["fis", "proc"], "o resto do quadro roda uma vez só");
 
-        // Depois de continuar, o quadro seguinte roda de novo até o ponto de parada.
+        // After continuing, the next frame runs again up to the breakpoint.
         quadro_de(&mut a, &mut c, 1).unwrap();
         assert_eq!(c.textos(Uid(1)), ["fis", "proc", "fis"]);
         assert_eq!(a.pausa().map(|p| p.node), Some(proc));
@@ -503,22 +504,22 @@ mod tests {
         let mut a = instancia(1, &g);
         com_ponto_em(&mut a, proc);
         let mut c = Cenario::novo();
-        // Quadro 1: o "fis" roda e a execução para no "proc" (ponto de parada).
+        // Frame 1: "fis" runs and the execution stops at "proc" (breakpoint).
         quadro_de(&mut a, &mut c, 1).unwrap();
         assert_eq!(a.pausa().map(|p| p.node), Some(proc));
         assert_eq!(c.textos(Uid(1)), ["fis"]);
 
-        // Próxima operação até o fim do quadro: "proc" imprime e a instância espera o quadro seguinte.
+        // Next operation until the end of the frame: "proc" prints and the instance waits for the next frame.
         passa_ate(&mut a, &mut c, |i| i.pausa().is_none());
         assert_eq!(c.textos(Uid(1)), ["fis", "proc"]);
         assert!(a.pausada() && a.pausa().is_none(), "fim de quadro: espera o quadro seguinte");
 
-        // Quadro 2 começa parado no primeiro evento, antes de qualquer operação dele.
+        // Frame 2 starts paused at the first event, before any of its operations.
         quadro_de(&mut a, &mut c, 1).unwrap();
         assert_eq!(a.pausa().map(|p| p.node), Some(fis));
         assert_eq!(c.textos(Uid(1)), ["fis", "proc"]);
 
-        // Próxima operação até o "proc" do quadro 2: o "fis" imprime e a pausa cai no começo do "proc".
+        // Next operation until "proc" of frame 2: "fis" prints and the pause falls at the start of "proc".
         passa_ate(&mut a, &mut c, |i| i.pausa().map(|p| p.node) == Some(proc));
         assert_eq!(c.textos(Uid(1)), ["fis", "proc", "fis"]);
         assert_eq!(a.pausa().map(|p| p.node), Some(proc));

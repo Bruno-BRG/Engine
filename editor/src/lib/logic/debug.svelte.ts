@@ -1,39 +1,40 @@
-// Depurador da lógica (VIS-031, DBG-003). A interface guarda os pontos de parada por script, a instância que o
-// Depurador acompanha e o rastro dela. A reprodução (runtime.svelte.ts) envia os pontos com `set_breakpoints`,
-// escolhe a instância com `debug_select` e lê o estado (`debug_state`) e o rastro (`debug_trace`) a cada quadro.
-// O rastro é por instância, com o UID do nó como chave: dois nós com o mesmo script têm os mesmos ids de grafo.
+// Script debugger in the editor (VIS-031, DBG-003). The interface keeps the breakpoints of each script, the instance the
+// debugger follows, and that instance's trace. The play session (runtime.svelte.ts) sends the breakpoints with
+// `set_breakpoints`, chooses the instance with `debug_select`, and reads the state (`debug_state`) and the trace
+// (`debug_trace`) only while the debugger is observing.
+// The trace is per instance, keyed by the node UID: two nodes with the same script have the same graph ids.
 
 import type { TraceEvent, Value } from './model';
 
-/** Estado de uma instância de script na reprodução, como `debug_state` a envia. */
+/** State of a script instance in the play session, as `debug_state` sends it. */
 export interface InstanciaDebug {
-  /** UID do nó que roda o script. Identifica a instância. */
+  /** UID of the node that runs the script. Identifies the instance. */
   uid: string;
-  /** Parada por depuração: um ponto de parada, um passo, ou o fim de um quadro durante o passo a passo. */
+  /** Paused by the debugger: a breakpoint, a step, or the end of a frame during step-by-step play. */
   pausada: boolean;
-  /** Nó da operação onde a execução parou. Null quando a pausa é o início de um quadro. */
+  /** Node of the operation where execution stopped. Null when the instance waits for the next frame. */
   node: number | null;
-  /** Evento do programa da operação onde a execução parou. Null sem pausa numa operação. */
+  /** Event of the program of the operation where execution stopped. Null without a pause at an operation. */
   evento: string | null;
 }
 
 class LogicDebug {
-  /** Pontos de parada por script: ids dos nós do grafo. A reprodução os envia por instância. */
+  /** Breakpoints per script: node ids of the graph. The play session sends them per instance. */
   breaks = $state<Record<string, number[]>>({});
-  /** Instâncias da reprodução, na ordem da árvore. Vazio fora do jogo. */
+  /** Instances of the play session, in tree order. Empty outside the game. */
   instancias = $state.raw<InstanciaDebug[]>([]);
-  /** UID da instância que o Depurador acompanha. Só ela grava o rastro. */
+  /** UID of the instance the debugger follows. Only it records the trace. */
   selecionada = $state<string | null>(null);
   /** Whether the Depurador panel is open. The panel sets it on mount and unmount. */
   painelAberto = $state(false);
-  /** Nós que rodaram no último trecho com rastro, por instância (pulsam os fios de fluxo). */
+  /** Nodes that ran in the last trace segment, per instance (they pulse the flow wires). */
   executados = $state.raw<Record<string, number[]>>({});
-  /** Último valor produzido por cada nó, por instância (aparece no hover do pino). */
+  /** Last value each node produced, per instance (shown on hover of the pin). */
   valores = $state.raw<Record<string, Record<number, Value>>>({});
-  /** Avisado quando os pontos mudam: a reprodução os reenvia. Ligado pelo runtime. */
+  /** Called when the breakpoints change, so the play session sends them again. Set by the runtime. */
   onPontosMudaram: (() => void) | null = null;
 
-  /** A instância escolhida, se ela existe na reprodução. */
+  /** The followed instance, if it exists in the play session. */
   get escolhida(): InstanciaDebug | null {
     return this.instancias.find((i) => i.uid === this.selecionada) ?? null;
   }
@@ -74,7 +75,7 @@ class LogicDebug {
     return this.breaks[script] ?? [];
   }
 
-  /** Registra um trecho de rastro da instância: os nós que rodaram nele e os valores que produziram. */
+  /** Records a trace segment of the instance: the nodes that ran in it and the values they produced. */
   pushTrace(uid: string, eventos: TraceEvent[]) {
     const rodaram = new Set<number>();
     const valores: Record<number, Value> = { ...(this.valores[uid] ?? {}) };
@@ -86,7 +87,7 @@ class LogicDebug {
     this.valores = { ...this.valores, [uid]: valores };
   }
 
-  /** Esquece o rastro e as instâncias (a reprodução parou). Os pontos de parada ficam. */
+  /** Forgets the trace and the instances (the play session stopped). The breakpoints stay. */
   limpar() {
     this.executados = {};
     this.valores = {};
@@ -96,7 +97,7 @@ class LogicDebug {
 }
 
 /**
- * Whether Continuar and Próxima operação can act on the instance. They need an instance paused at an operation (a
+ * Whether Continuar and Next operation can act on the instance. They need an instance paused at an operation (a
  * breakpoint or a step), not one waiting for the next frame, and the game must be running (not paused with F6).
  */
 export function podeAcionar(instancia: InstanciaDebug | null, jogoPausado: boolean): boolean {

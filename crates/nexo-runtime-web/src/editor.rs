@@ -38,9 +38,9 @@ pub struct SceneEditor {
     pub(crate) console: Vec<Mensagem>,
     /// Último ponteiro enviado por `pointer_event`.
     pub(crate) pointer: Ponteiro,
-    /// Pontos de parada por instância (UID do nó que roda o script), como `set_breakpoints` os recebe (VIS-031).
+    /// Breakpoints per instance (UID of the node that runs the script), as `set_breakpoints` receives them (VIS-031).
     pub(crate) pontos: BTreeMap<Uid, BTreeSet<u64>>,
-    /// Instância que o depurador acompanha: só ela grava o rastro (`debug_select`, DBG-003).
+    /// Instance the debugger follows. Only it records a trace (`debug_select`, DBG-003).
     pub(crate) selecionada: Option<Uid>,
     /// Whether the Depurador panel is open (`debug_panel`). An open panel lets the followed instance record a trace.
     pub(crate) painel_aberto: bool,
