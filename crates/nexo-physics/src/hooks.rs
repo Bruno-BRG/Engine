@@ -10,10 +10,35 @@ pub(crate) const ONE_WAY: u128 = 1;
 /// Ângulo, em radianos, dentro do qual um contato conta como vindo de cima de uma forma de uma face.
 const ONE_WAY_ANGLE: f32 = std::f32::consts::FRAC_PI_3;
 
+/// Esteira: velocidade de superfície de um colisor. A linear vale em toda a superfície; a angular gira a
+/// superfície em torno da origem do corpo, como um disco que gira (PHY-002).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Belt {
+    /// Velocidade linear, em px/s no mundo.
+    pub(crate) linear: Vector,
+    /// Velocidade angular, em rad/s. Positiva gira no sentido da rotação da cena (horário na tela).
+    pub(crate) angular: f32,
+    /// Origem do corpo no mundo: o eixo da rotação.
+    pub(crate) center: Vector,
+}
+
+impl Belt {
+    /// Velocidade da superfície no ponto `p` do mundo: a linear mais ω × r, com r a partir da origem.
+    pub(crate) fn at(&self, p: Vector) -> Vector {
+        let r = p - self.center;
+        self.linear + Vector::new(-self.angular * r.y, self.angular * r.x)
+    }
+
+    /// True se a esteira move alguma coisa.
+    pub(crate) fn is_active(&self) -> bool {
+        self.linear != Vector::ZERO || self.angular != 0.0
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Rules {
-    /// Velocidade de superfície (px/s, no mundo) de cada colisor de esteira.
-    pub(crate) belts: HashMap<ColliderHandle, Vector>,
+    /// Esteira de cada colisor que move a superfície.
+    pub(crate) belts: HashMap<ColliderHandle, Belt>,
 }
 
 /// True se o colisor é uma forma de uma face só.
@@ -41,18 +66,22 @@ impl PhysicsHooks for Rules {
         // O Rapier soma `tangent_velocity` à superfície do primeiro colisor e faz o contato igualar
         // as duas superfícies. Por isso a esteira no primeiro colisor entra com o sinal da velocidade
         // dela, e no segundo com o sinal oposto. Verificado nos testes de esteira (ordem dos colisores).
-        let mut tangent = Vector::ZERO;
-        if let Some(v) = self.belts.get(&c1) {
-            tangent += *v;
-        }
-        if let Some(v) = self.belts.get(&c2) {
-            tangent -= *v;
-        }
-        if tangent == Vector::ZERO {
+        // Com velocidade angular, a superfície muda de ponto para ponto: cada contato usa o próprio ponto
+        // (as âncoras vêm no mundo neste gancho) e o ponto médio entre os dois lados.
+        let (belt1, belt2) = (self.belts.get(&c1), self.belts.get(&c2));
+        if belt1.is_none() && belt2.is_none() {
             return;
         }
         if let Some(m) = ctx.rigid_mut() {
             for s in m.solver_contacts.iter_mut() {
+                let p = (s.anchor1 + s.anchor2) * 0.5;
+                let mut tangent = Vector::ZERO;
+                if let Some(b) = belt1 {
+                    tangent += b.at(p);
+                }
+                if let Some(b) = belt2 {
+                    tangent -= b.at(p);
+                }
                 s.tangent_velocity = tangent;
             }
         }

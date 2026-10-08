@@ -11,8 +11,9 @@
   import { createViewport, type Viewport } from '$lib/runtime/engine';
   import { showContextMenu, type MenuItem } from '$lib/state/contextmenu.svelte';
   import { focusPanel, focus } from '$lib/state/focus.svelte';
-  import ViewportOverlay, { type Gizmo, type Box } from './ViewportOverlay.svelte';
-  import { Hand, Move, RotateCw, Maximize, Square, Scan, Monitor, TriangleAlert, LoaderCircle } from '@lucide/svelte';
+  import ViewportOverlay, { type Gizmo, type Box, type ShapeGizmo, type AudioRadius, type DebugOverlay } from './ViewportOverlay.svelte';
+  import { Hand, Move, RotateCw, Maximize, Square, Scan, Monitor, TriangleAlert, LoaderCircle, Bug } from '@lucide/svelte';
+  import type { SceneEditor } from '$lib/runtime/engine';
 
   /** `cena` edita a cena; `jogo` mostra a câmera atual com a proporção escolhida (EDT-012). */
   let { mode = 'cena', active = true }: { mode?: 'cena' | 'jogo'; active?: boolean } = $props();
@@ -35,7 +36,7 @@
   let size = $state({ w: 1, h: 1 });
   let spaceDown = $state(false);
   let panning = $state(false);
-  let dragKind = $state<'' | 'move' | 'rotate' | 'scale' | 'rect' | 'box'>('');
+  let dragKind = $state<'' | 'move' | 'rotate' | 'scale' | 'rect' | 'box' | 'shape'>('');
   let box = $state<Box>(null);
   let dropActive = $state(false);
   let dirty = true;
@@ -64,6 +65,7 @@
     cam.y;
     cam.zoom;
     app.playing;
+    app.physicsDebug;
     app.gameAspect;
     app.gameScale;
     active;
@@ -112,6 +114,141 @@
     return { x: lx / (p.sx || 1), y: ly / (p.sy || 1) };
   }
 
+  /** Ponto do espaço do nó (unidades das propriedades) para o mundo: o inverso de `toLocal`. */
+  function nodeToWorld(p: World, lx: number, ly: number): Pt {
+    const c = Math.cos(p.rot * RAD);
+    const s = Math.sin(p.rot * RAD);
+    const ax = lx * p.sx;
+    const ay = ly * p.sy;
+    return { x: p.x + c * ax - s * ay, y: p.y + s * ax + c * ay };
+  }
+
+  // ---------- Formas de colisão (PHY-012) ----------
+  const SHAPE_KINDS = ['CollisionShape2D', 'CollisionPolygon2D'];
+
+  /**
+   * Alças de uma forma, no espaço do nó. A chave diz o que a alça muda:
+   * retângulo `c0..c3` (cantos, em ordem), círculo `r`, cápsula `x` (largura), `t`/`b` (altura),
+   * segmento `a`/`b` (pontas), polígono `p<i>` (ponto i).
+   */
+  function shapeHandles(n: NodeView): { key: string; lx: number; ly: number }[] {
+    if (n.kind === 'CollisionPolygon2D') {
+      const pts = (n.props.points as [number, number][] | undefined) ?? [];
+      return pts.map((p, i) => ({ key: 'p' + i, lx: p[0], ly: p[1] }));
+    }
+    const [w, h] = (n.props.size as [number, number]) ?? [32, 32];
+    switch (n.props.shape) {
+      case 'circle':
+        return [{ key: 'r', lx: w / 2, ly: 0 }];
+      case 'capsule_y':
+        return [
+          { key: 'x', lx: w / 2, ly: 0 },
+          { key: 't', lx: 0, ly: -h / 2 },
+          { key: 'b', lx: 0, ly: h / 2 },
+        ];
+      case 'segment':
+        return [
+          { key: 'a', lx: -w / 2, ly: 0 },
+          { key: 'b', lx: w / 2, ly: 0 },
+        ];
+      default:
+        return [
+          { key: 'c0', lx: -w / 2, ly: -h / 2 },
+          { key: 'c1', lx: w / 2, ly: -h / 2 },
+          { key: 'c2', lx: w / 2, ly: h / 2 },
+          { key: 'c3', lx: -w / 2, ly: h / 2 },
+        ];
+    }
+  }
+
+  /**
+   * Ponto de ancoragem fixo durante o arrasto de uma alça, em mundo: o canto oposto do retângulo ou a
+   * outra ponta do segmento. Círculo, cápsula e polígono não têm ancoragem (o centro não se move).
+   */
+  function anchorOf(n: NodeView, key: string): Pt | null {
+    const [w, h] = (n.props.size as [number, number]) ?? [32, 32];
+    const wp = world(n);
+    if (n.kind !== 'CollisionShape2D') return null;
+    if (n.props.shape === 'segment') return nodeToWorld(wp, key === 'a' ? w / 2 : -w / 2, 0);
+    if (key.startsWith('c')) {
+      const corners: [number, number][] = [
+        [-w / 2, -h / 2],
+        [w / 2, -h / 2],
+        [w / 2, h / 2],
+        [-w / 2, h / 2],
+      ];
+      const [ox, oy] = corners[(Number(key.slice(1)) + 2) % 4];
+      return nodeToWorld(wp, ox, oy);
+    }
+    return null;
+  }
+
+  /** Alça de forma de colisão sob o ponto de tela, na forma selecionada (PHY-012). */
+  function shapeHandleAt(p: Pt): { key: string } | null {
+    if (!sel || mode !== 'cena' || app.playing || !SHAPE_KINDS.includes(sel.kind)) return null;
+    const wp = world(sel);
+    for (const h of shapeHandles(sel)) {
+      const at = nodeToWorld(wp, h.lx, h.ly);
+      const s = toScreen(at.x, at.y);
+      if (Math.abs(s.x - p.x) <= HANDLE_HIT && Math.abs(s.y - p.y) <= HANDLE_HIT) return { key: h.key };
+    }
+    return null;
+  }
+
+  /**
+   * Arrasta a alça `key` da forma `n` até o ponto `w` do mundo e grava com set_prop (PHY-012).
+   * `anchor` é a ancoragem de `anchorOf`, medida no início do arrasto. Tamanho em unidades do nó.
+   */
+  function dragShape(n: NodeView, key: string, w: Pt, anchor: Pt | null, coalesce: string) {
+    const wp = world(n);
+    const lp = toLocal(wp, w.x, w.y);
+    if (n.kind === 'CollisionPolygon2D') {
+      const pts = ((n.props.points as [number, number][] | undefined) ?? []).map((q) => [q[0], q[1]] as [number, number]);
+      const i = Number(key.slice(1));
+      if (pts[i]) pts[i] = [round2(lp.x), round2(lp.y)];
+      scene.setProp(n.uid, 'points', pts, coalesce);
+      return;
+    }
+    const [w0, h0] = (n.props.size as [number, number]) ?? [32, 32];
+    if (n.props.shape === 'circle') {
+      const r = Math.max(0.5, Math.hypot(lp.x, lp.y));
+      scene.setProp(n.uid, 'size', [round2(2 * r), round2(2 * r)], coalesce);
+      return;
+    }
+    if (n.props.shape === 'capsule_y') {
+      if (key === 'x') {
+        const width = Math.max(1, round2(2 * Math.abs(lp.x)));
+        scene.setProp(n.uid, 'size', [width, Math.max(h0, width)], coalesce);
+      } else {
+        const height = Math.max(w0, round2(2 * Math.abs(lp.y)));
+        scene.setProp(n.uid, 'size', [w0, height], coalesce);
+      }
+      return;
+    }
+    if (!anchor) return;
+    // Retângulo e segmento: a ancoragem fica no mundo e o centro vai para o meio dos dois pontos.
+    const sx = Math.abs(wp.sx) || 1;
+    const sy = Math.abs(wp.sy) || 1;
+    let mid: Pt;
+    let width: number;
+    let height = h0;
+    if (n.props.shape === 'segment') {
+      // Só o comprimento no eixo do nó: a ponta acompanha o eixo, não o mouse fora dele.
+      const ax = Math.cos(wp.rot * RAD);
+      const ay = Math.sin(wp.rot * RAD);
+      const along = (w.x - anchor.x) * ax + (w.y - anchor.y) * ay;
+      mid = { x: anchor.x + ax * (along / 2), y: anchor.y + ay * (along / 2) };
+      width = Math.max(1, Math.abs(along) / sx);
+    } else {
+      const d = rotateBy(w.x - anchor.x, w.y - anchor.y, -wp.rot * RAD);
+      mid = { x: (anchor.x + w.x) / 2, y: (anchor.y + w.y) / 2 };
+      width = Math.max(1, Math.abs(d.x) / sx);
+      height = Math.max(1, Math.abs(d.y) / sy);
+    }
+    const pos = toLocal(parentWorld(n), mid.x, mid.y);
+    scene.setProps(n.uid, { size: [round2(width), round2(height)], position: [round2(pos.x), round2(pos.y)] }, coalesce);
+  }
+
   /** Geometria de um sprite no mundo, igual à do núcleo Rust (centro, tamanho e rotação). */
   function geom(n: NodeView) {
     const w0 = world(n);
@@ -151,6 +288,43 @@
     return { w: sw, h: sh };
   }
 
+  // ---------- Depuração da física (DBG-004) ----------
+  /** Desenho de depuração como o WASM o envia (`debug_draw_json`, em unidades de mundo). */
+  type RawDebug = {
+    shapes: { node: string; role: string; points: [number, number][]; closed: boolean }[];
+    contacts: { point: [number, number]; normal: [number, number] }[];
+    velocities: { node: string; origin: [number, number]; velocity: [number, number] }[];
+  };
+  /** Comprimento da seta de velocidade: quantos segundos de movimento ela mostra, e o teto em pixels. */
+  const VEL_SECONDS = 0.1;
+  const VEL_MAX = 160;
+  /** Desenho de depuração da física já em pixels de tela; `null` sem a alternância ou fora da reprodução. */
+  let debugOverlay = $state.raw<DebugOverlay>(null);
+
+  function debugFrame(ed: SceneEditor): DebugOverlay {
+    const d = JSON.parse(ed.debug_draw_json() as unknown as string) as RawDebug | null;
+    if (!d) return null;
+    const s = (p: [number, number]): Pt => toScreen(p[0], p[1]);
+    return {
+      shapes: d.shapes.filter((f) => f.points.length > 1).map((f) => ({ role: f.role, pts: f.points.map(s), closed: f.closed })),
+      contacts: d.contacts.map((k) => {
+        const p = s(k.point);
+        return { p, q: { x: p.x + k.normal[0] * 12, y: p.y + k.normal[1] * 12 } };
+      }),
+      velocities: d.velocities.map((v) => {
+        const from = s(v.origin);
+        let dx = v.velocity[0] * VEL_SECONDS * cam.zoom;
+        let dy = v.velocity[1] * VEL_SECONDS * cam.zoom;
+        const len = Math.hypot(dx, dy);
+        if (len > VEL_MAX) {
+          dx *= VEL_MAX / len;
+          dy *= VEL_MAX / len;
+        }
+        return { from, to: { x: from.x + dx, y: from.y + dy } };
+      }),
+    };
+  }
+
   function resize() {
     const r = host.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -179,6 +353,8 @@
       const uid = spriteTextures[i];
       floats[i * 12 + 7] = uid ? textures.slotOf(uid) : 0;
     }
+    // Depuração da física: só na Cena, durante a reprodução, com a alternância ligada (DBG-004).
+    debugOverlay = playing && app.physicsDebug && mode === 'cena' ? debugFrame(ed) : null;
     const dpr = window.devicePixelRatio || 1;
     if (mode === 'cena') {
       vp.set_camera(cam.x, cam.y, cam.zoom * dpr, t / 1000, scene.data.screen[0], scene.data.screen[1]);
@@ -309,15 +485,20 @@
     };
   });
 
+  /**
+   * Moldura da tela de cada câmera atual (VPT-005), em unidades de mundo: a tela do jogo dividida pelo zoom
+   * da câmera. É o que a Visão do jogo mostra; o zoom da vista do editor não entra aqui.
+   */
   const frames = $derived.by<Pt[][]>(() => {
     if (mode !== 'cena' || app.playing) return [];
-    const [sw, sh] = scene.data.screen;
+    const f = frameSize();
     return scene.data.nodes
       .filter((n) => n.kind === 'Camera2D' && n.props.current !== false)
       .map((n) => {
         const w = world(n);
-        const hw = sw / 2 / cam.zoom;
-        const hh = sh / 2 / cam.zoom;
+        const zoom = Math.max(Number(n.props.zoom) || 1, 0.05);
+        const hw = f.w / zoom / 2;
+        const hh = f.h / zoom / 2;
         return [
           toScreen(w.x - hw, w.y - hh),
           toScreen(w.x + hw, w.y - hh),
@@ -332,6 +513,33 @@
     if (mode !== 'cena' || app.playing) return [];
     scene.revision;
     return scene.shapeOutlines().map((o) => o.points.map(([x, y]) => toScreen(x, y)));
+  });
+
+  /** Raio de atenuação de cada som 2D, em pixels de tela: `max_distance` no zoom atual (VPT-005). */
+  const audioRadii = $derived.by<AudioRadius[]>(() => {
+    if (mode !== 'cena' || app.playing) return [];
+    return scene.data.nodes
+      .filter((n) => n.kind === 'AudioStreamPlayer2D' && n.visible)
+      .map((n) => ({
+        c: toScreen(n.world.x, n.world.y),
+        r: Math.max(0, Number(n.props.max_distance) || 0) * cam.zoom,
+        sel: scene.isSelected(n.uid),
+      }));
+  });
+
+  /** Contorno e alças da forma de colisão selecionada (PHY-012). */
+  const shapeGizmo = $derived.by<ShapeGizmo>(() => {
+    if (mode !== 'cena' || app.playing || !sel || !SHAPE_KINDS.includes(sel.kind)) return null;
+    scene.revision;
+    const outline = scene.shapeOutlines().find((o) => o.uid === sel.uid);
+    const wp = world(sel);
+    return {
+      pts: outline ? outline.points.map(([x, y]) => toScreen(x, y)) : [],
+      handles: shapeHandles(sel).map((h) => {
+        const at = nodeToWorld(wp, h.lx, h.ly);
+        return toScreen(at.x, at.y);
+      }),
+    };
   });
 
   const gameFramePts = $derived.by<Pt[] | null>(() => {
@@ -358,6 +566,7 @@
     | { kind: 'rotate'; uid: string; cx: number; cy: number; a0: number; r0: number; key: string }
     | { kind: 'scale'; uid: string; cx: number; cy: number; d0: number; s0: [number, number]; key: string }
     | { kind: 'rect'; uid: string; ox: number; oy: number; key: string }
+    | { kind: 'shape'; uid: string; handle: string; anchor: Pt | null; key: string }
     | { kind: 'box'; x0: number; y0: number; additive: boolean };
   let drag: Drag | null = null;
   let contextAt: Pt | null = null;
@@ -416,6 +625,15 @@
     }
     if (e.button !== 0 || app.playing) return;
     const w = toWorld(p.x, p.y);
+
+    // Alça de forma de colisão da seleção (PHY-012): vem antes das alças de transformação.
+    const sh = shapeHandleAt(p);
+    if (sh && sel) {
+      canvas.setPointerCapture(e.pointerId);
+      drag = { kind: 'shape', uid: sel.uid, handle: sh.key, anchor: anchorOf(sel, sh.key), key: 'drag:' + sel.uid + ':' + performance.now() };
+      dragKind = 'shape';
+      return;
+    }
 
     // Alça da ferramenta sob o mouse.
     const h = handleAt(p);
@@ -491,6 +709,15 @@
     }
     if (drag?.kind === 'box') {
       box = { x0: drag.x0, y0: drag.y0, x1: p.x, y1: p.y };
+      return;
+    }
+    if (drag?.kind === 'shape') {
+      const n = scene.node(drag.uid);
+      if (!n) return;
+      let w = toWorld(p.x, p.y);
+      if (snapOn(e)) w = { x: snapTo(w.x, app.gridSize), y: snapTo(w.y, app.gridSize) };
+      dragShape(n, drag.handle, w, drag.anchor, drag.key);
+      dirtyDrag();
       return;
     }
     if (drag?.kind === 'move') {
@@ -579,7 +806,9 @@
         scene.select(null);
       }
     }
-    if (drag?.kind === 'move' || drag?.kind === 'rotate' || drag?.kind === 'scale' || drag?.kind === 'rect') scene.endGroup();
+    if (drag?.kind === 'move' || drag?.kind === 'rotate' || drag?.kind === 'scale' || drag?.kind === 'rect' || drag?.kind === 'shape') {
+      scene.endGroup();
+    }
     if (e.type === 'pointerup' && e.button === 2 && contextAt && !panMoved) openContext(e);
     drag = null;
     box = null;
@@ -667,7 +896,7 @@
         ? 'default'
         : spaceDown || app.tool === 'hand'
           ? 'grab'
-          : dragKind === 'move'
+          : dragKind === 'move' || dragKind === 'shape'
             ? 'move'
             : dragKind === 'rotate'
               ? 'grabbing'
@@ -715,6 +944,9 @@
     box={box}
     frame={gameFramePts}
     colliders={colliderPts}
+    shape={shapeGizmo}
+    audio={audioRadii}
+    debug={debugOverlay}
   />
 
   {#if label && sel}
@@ -734,6 +966,15 @@
       <span class="div"></span>
       <button class="icon-btn" class:active={app.snap} title="Snap de grade ({app.gridSize} px) · segure Ctrl para alternar" onclick={() => (app.snap = !app.snap)}>
         <span class="snap-mark mono">#</span>
+      </button>
+      <button
+        class="icon-btn"
+        class:active={app.physicsDebug}
+        title="Depuração de física: formas, contatos e velocidades na reprodução (sessão)"
+        aria-pressed={app.physicsDebug}
+        onclick={() => (app.physicsDebug = !app.physicsDebug)}
+      >
+        <Bug size={15} />
       </button>
       <span class="div"></span>
       <button class="icon-btn" title="Enquadrar seleção (F)" onclick={() => viewApi.frameSelection()}><Scan size={15} /></button>

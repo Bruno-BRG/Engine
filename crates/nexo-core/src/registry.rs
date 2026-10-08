@@ -225,6 +225,17 @@ fn build() -> Vec<NodeType> {
                     json!([0.0, 0.0]),
                 )
                 .step(1.0),
+                // Gira a superfície em torno da origem do corpo (disco de esteira, PHY-002).
+                PropDef::new(
+                    "constant_angular_velocity",
+                    "Velocidade angular constante",
+                    "Física",
+                    PropKind::Float,
+                    json!(0.0),
+                )
+                .range(-3600.0, 3600.0)
+                .step(1.0)
+                .unit("°/s"),
             ]),
         },
         NodeType {
@@ -259,6 +270,12 @@ fn build() -> Vec<NodeType> {
             description: "Personagem controlado por código: anda e para em paredes e chão. A gravidade não é automática.",
             props: com_camadas(vec![
                 PropDef::new("velocity", "Velocidade", "Movimento", PropKind::Vec2, json!([0.0, 0.0])).step(1.0),
+                // Ao descer uma rampa, o personagem cola no chão se ele estiver até essa distância (PHY-004).
+                // Zero desliga a colagem.
+                PropDef::new("floor_snap_length", "Colagem ao chão", "Movimento", PropKind::Float, json!(6.0))
+                    .range(0.0, 200.0)
+                    .step(0.5)
+                    .unit("px"),
             ]),
         },
         NodeType {

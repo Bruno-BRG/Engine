@@ -1,5 +1,6 @@
 //! Personagens (CharacterBody2D): movimento com o controlador de forma do Rapier, estado de contato
-//! (PHY-004) e carregamento por superfícies com velocidade (plataformas e esteiras).
+//! (PHY-004), colagem ao chão (`floor_snap_length`) e carregamento por superfícies com velocidade
+//! (plataformas e esteiras).
 
 use super::*;
 use rapier2d::control::{CharacterCollision, KinematicCharacterController};
@@ -7,6 +8,10 @@ use rapier2d::parry::query::ShapeCastOptions;
 
 /// Distância, em pixels, que a sonda procura o chão logo abaixo do personagem.
 const FLOOR_PROBE: f32 = 2.0;
+/// Folga, em pixels, que a colagem deixa entre o personagem e o chão. Maior que a folga padrão do
+/// controlador (cerca de 1% da altura): se a colagem parasse exatamente nela, o movimento seguinte acharia
+/// um choque de tempo zero na quina do personagem e perderia o chão.
+const FLOOR_GAP: f32 = 0.5;
 /// Folga, em pixels, para uma forma de uma face contar como "abaixo" do personagem.
 const ONE_WAY_SLACK: f32 = 1.0;
 
@@ -37,13 +42,15 @@ pub(crate) struct Character {
     pub(crate) floor_angle: f64,
     /// Velocidade da superfície de apoio, medida no passo anterior.
     pub(crate) platform: [f64; 2],
+    /// Distância de colagem ao chão, em pixels. Zero desliga (floor_snap_length).
+    pub(crate) snap: f32,
     pub(crate) controller: KinematicCharacterController,
     /// Primeiro colisor do personagem: a forma que o controlador move.
     pub(crate) collider: ColliderHandle,
 }
 
 impl Character {
-    pub(crate) fn new(velocity: [f64; 2], collider: ColliderHandle, up: Vector) -> Character {
+    pub(crate) fn new(velocity: [f64; 2], collider: ColliderHandle, up: Vector, snap: f32) -> Character {
         Character {
             velocity,
             grounded: false,
@@ -51,9 +58,13 @@ impl Character {
             on_ceiling: false,
             floor_angle: 0.0,
             platform: [0.0, 0.0],
+            snap: snap.max(0.0),
             controller: KinematicCharacterController {
                 // "Para cima" é o oposto da gravidade; sem gravidade, o padrão da tela (Y para baixo).
                 up,
+                // A colagem é própria (ver `move_characters`): o snap embutido do Rapier só cola quando o
+                // movimento final desce, e falha ao deslizar numa quina.
+                snap_to_ground: None,
                 ..Default::default()
             },
             collider,
@@ -135,6 +146,30 @@ impl Physics {
             );
             let mut hits: Vec<CharacterCollision> = Vec::new();
             let mv = ch.controller.move_shape(dt, &queries, collider.shape(), &pos, desired, |h| hits.push(h));
+            let mut moved = mv.translation;
+            let mut grounded = mv.grounded;
+
+            // Colagem ao chão (floor_snap_length): quem estava apoiado e não tenta subir cola no chão até
+            // `snap` px abaixo. A decisão vem da intenção de movimento, não do deslocamento final: o
+            // deslizamento do controlador pode subir um pouco numa quina, e o snap do Rapier desiste nesse caso.
+            if ch.grounded && ch.snap > 0.0 && desired.dot(up) <= 0.0 {
+                let mut at = pos;
+                at.translation += moved;
+                if let Some((_, hit)) = queries.cast_shape(
+                    &at,
+                    -up,
+                    collider.shape(),
+                    ShapeCastOptions {
+                        target_distance: FLOOR_GAP,
+                        max_time_of_impact: ch.snap,
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    },
+                ) {
+                    moved -= up * hit.time_of_impact;
+                    grounded = true;
+                }
+            }
 
             let (mut on_wall, mut on_ceiling) = (false, false);
             for h in &hits {
@@ -146,9 +181,9 @@ impl Physics {
             }
             // Com o chão encontrado, a sonda logo abaixo mede o ângulo e a superfície de apoio.
             let (mut floor_angle, mut platform) = (0.0, [0.0, 0.0]);
-            if mv.grounded {
+            if grounded {
                 let mut at = pos;
-                at.translation += mv.translation;
+                at.translation += moved;
                 if let Some((c, hit)) = queries.cast_shape(
                     &at,
                     -up,
@@ -156,10 +191,12 @@ impl Physics {
                     ShapeCastOptions::with_max_time_of_impact(FLOOR_PROBE),
                 ) {
                     floor_angle = angle_deg(up, hit.normal1);
-                    platform = self.surface_velocity(c);
+                    // O ponto de apoio no chão define a velocidade da superfície ali. Com o cast deste
+                    // Rapier, o ponto no mundo da forma atingida é `witness1` (witness2 vem noutro referencial).
+                    platform = self.surface_velocity(c, hit.witness1);
                 }
             }
-            moves.push((i, mv.translation, desired, mv.grounded, on_wall, on_ceiling, floor_angle, platform));
+            moves.push((i, moved, desired, grounded, on_wall, on_ceiling, floor_angle, platform));
         }
 
         for (i, moved, desired, grounded, on_wall, on_ceiling, floor_angle, platform) in moves {

@@ -40,8 +40,15 @@ fn opt_uid(s: Option<String>) -> Result<Option<Uid>, JsError> {
     s.filter(|s| !s.is_empty()).map(|s| parse_uid(&s)).transpose()
 }
 
-fn to_json(v: &impl Serialize) -> Result<String, JsError> {
+pub(crate) fn to_json(v: &impl Serialize) -> Result<String, JsError> {
     serde_json::to_string(v).map_err(js_err)
+}
+
+impl SceneEditor {
+    /// Física da reprodução atual, para os métodos de depuração (`debug.rs`). `None` fora da reprodução.
+    pub(crate) fn play_physics(&self) -> Option<&Physics> {
+        self.play.as_ref().map(|p| &p.physics)
+    }
 }
 
 #[wasm_bindgen]

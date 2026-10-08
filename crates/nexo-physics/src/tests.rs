@@ -254,6 +254,81 @@ fn sem_esteira_caixa_fica_parada() {
     assert!(pos(&s, caixa)[0].abs() < 1.0, "x = {}", pos(&s, caixa)[0]);
 }
 
+/// Disco fixo de raio 200 com o topo em y = 300 (centro em y = 500), com a velocidade angular dada em °/s.
+fn disco(s: &mut Scene, root: Uid, graus_por_s: f64) -> Uid {
+    let d = node(
+        s,
+        Some(root),
+        "StaticBody2D",
+        json!({"position": [0.0, 500.0], "constant_angular_velocity": graus_por_s}),
+    );
+    node(s, Some(d), "CollisionShape2D", json!({"shape": "circle", "size": [400.0, 400.0]}));
+    d
+}
+
+#[test]
+fn disco_que_gira_arrasta_caixa_no_topo() {
+    // Positivo gira no sentido da rotação da cena (horário na tela): o topo anda para a direita.
+    let mut s = Scene::new("teste", 60);
+    let root = raiz(&mut s);
+    disco(&mut s, root, 90.0);
+    let caixa = caixa_em(&mut s, root, 0.0, 280.0, json!({}));
+
+    let mut p = Physics::build(&s, &cfg());
+    run(&mut p, &mut s, 0.5);
+
+    let x = pos(&s, caixa)[0];
+    assert!(x > 40.0, "x = {x}");
+}
+
+#[test]
+fn disco_que_gira_no_outro_sentido_arrasta_para_a_esquerda() {
+    let mut s = Scene::new("teste", 61);
+    let root = raiz(&mut s);
+    disco(&mut s, root, -90.0);
+    let caixa = caixa_em(&mut s, root, 0.0, 280.0, json!({}));
+
+    let mut p = Physics::build(&s, &cfg());
+    run(&mut p, &mut s, 0.5);
+
+    let x = pos(&s, caixa)[0];
+    assert!(x < -40.0, "x = {x}");
+}
+
+#[test]
+fn personagem_no_disco_que_gira_recebe_a_velocidade_da_superficie() {
+    let mut s = Scene::new("teste", 62);
+    let root = raiz(&mut s);
+    disco(&mut s, root, 90.0);
+    let heroi = node(&mut s, Some(root), "CharacterBody2D", json!({"position": [0.0, 240.0]}));
+    node(&mut s, Some(heroi), "CollisionShape2D", json!({"size": [32.0, 32.0]}));
+
+    let mut p = Physics::build(&s, &cfg());
+    p.set_velocity(heroi, [0.0, 300.0]);
+    run(&mut p, &mut s, 0.3);
+    p.set_velocity(heroi, [0.0, 0.0]);
+    run(&mut p, &mut s, 0.1);
+
+    // Em qualquer ponto do aro, a superfície anda ω·R em módulo: (π/2)·200 ≈ 314 px/s.
+    let st = p.character_state(heroi).unwrap();
+    assert!(st.on_floor, "{st:?}");
+    let esperado = 90f64.to_radians() * 200.0;
+    let [vx, vy] = st.platform_velocity;
+    assert!((vx.hypot(vy) - esperado).abs() < esperado * 0.1, "{st:?}");
+    assert!(vx > 0.0, "{st:?}");
+}
+
+#[test]
+fn velocidade_linear_e_angular_somam_na_superficie() {
+    // Esteira com velocidade linear de 20 px/s e rotação: no topo (r = (0, -R)) a superfície anda 20 + ωR.
+    let b = Belt { linear: Vector::new(20.0, 0.0), angular: 2.0, center: Vector::new(0.0, 0.0) };
+    let topo = b.at(Vector::new(0.0, -5.0));
+    assert!((topo.x - 30.0).abs() < 1e-4 && topo.y.abs() < 1e-4, "{topo:?}");
+    // Ponto à direita da origem: a rotação empurra no sentido de y, com a linear somada.
+    let lado = b.at(Vector::new(5.0, 0.0));
+    assert!((lado.x - 20.0).abs() < 1e-4 && (lado.y - 10.0).abs() < 1e-4, "{lado:?}");
+}
+
 // ---------- PHY-003: massa, amortecimento, sono e congelamento ----------
 
 #[test]
@@ -440,6 +515,75 @@ fn personagem_carregado_pela_esteira() {
     // Sem velocidade própria, o personagem anda com a esteira: 60 px/s.
     assert!(((x2 - x1) - 60.0).abs() < 6.0, "deslocamento = {}", x2 - x1);
     assert!(p.character_state(heroi).unwrap().platform_velocity[0] > 50.0);
+}
+
+// ---------- PHY-004: colagem ao chão ----------
+
+/// Rampa de 1200 px que desce 20° para a direita, com um personagem apoiado nela e com a colagem dada.
+/// Cai sobre a rampa e assenta antes de devolver o personagem.
+fn heroi_na_rampa(s: &mut Scene, root: Uid, colagem: f64) -> Uid {
+    let rampa = node(s, Some(root), "StaticBody2D", json!({"position": [0.0, 400.0], "rotation": 20.0}));
+    node(s, Some(rampa), "CollisionShape2D", json!({"size": [1200.0, 32.0]}));
+    let heroi = node(
+        s,
+        Some(root),
+        "CharacterBody2D",
+        json!({"position": [0.0, 300.0], "floor_snap_length": colagem}),
+    );
+    node(s, Some(heroi), "CollisionShape2D", json!({"size": [32.0, 32.0]}));
+    heroi
+}
+
+/// Deixa o personagem cair sobre a rampa e parado em cima dela, apoiado.
+fn assentar_na_rampa(p: &mut Physics, s: &mut Scene, heroi: Uid) {
+    p.set_velocity(heroi, [0.0, 300.0]);
+    run(p, s, 0.5);
+    p.set_velocity(heroi, [0.0, 0.0]);
+    run(p, s, 0.2);
+}
+
+/// Quantos quadros, de 90, o personagem andando pela rampa a 150 px/s ficou sem o chão.
+fn quadros_sem_chao(colagem: f64) -> usize {
+    let mut s = Scene::new("teste", 64);
+    let root = raiz(&mut s);
+    let heroi = heroi_na_rampa(&mut s, root, colagem);
+    let mut p = Physics::build(&s, &cfg());
+    assentar_na_rampa(&mut p, &mut s, heroi);
+    p.set_velocity(heroi, [150.0, 0.0]);
+    let mut sem_chao = 0;
+    for _ in 0..90 {
+        run(&mut p, &mut s, STEP);
+        if !p.character_state(heroi).unwrap().on_floor {
+            sem_chao += 1;
+        }
+    }
+    sem_chao
+}
+
+#[test]
+fn personagem_cola_no_chao_ao_descer_rampa() {
+    assert_eq!(quadros_sem_chao(6.0), 0);
+}
+
+#[test]
+fn sem_colagem_personagem_perde_o_chao_na_descida() {
+    // Sem colagem, cada passo deixa o personagem um pouco acima da rampa: ele voa.
+    assert!(quadros_sem_chao(0.0) > 0);
+}
+
+#[test]
+fn angulo_do_chão_na_rampa_e_o_da_rampa() {
+    let mut s = Scene::new("teste", 65);
+    let root = raiz(&mut s);
+    let heroi = heroi_na_rampa(&mut s, root, 6.0);
+    let mut p = Physics::build(&s, &cfg());
+    assentar_na_rampa(&mut p, &mut s, heroi);
+    p.set_velocity(heroi, [60.0, 0.0]);
+    run(&mut p, &mut s, 0.3);
+
+    let st = p.character_state(heroi).unwrap();
+    assert!(st.on_floor, "{st:?}");
+    assert!((st.floor_angle - 20.0).abs() < 1.5, "{st:?}");
 }
 
 // ---------- PHY-005: áreas ----------
@@ -947,4 +1091,61 @@ fn gravidade_zero_usa_a_direcao_da_tela_para_cima() {
     assert_eq!(up_of([0.0, 0.0]), Vector::new(0.0, -1.0));
     assert_eq!(up_of([0.0, 980.0]), Vector::new(0.0, -1.0));
     assert_eq!(up_of([0.0, -980.0]), Vector::new(0.0, 1.0));
+}
+
+// ---------- DBG-004: desenho de depuração ----------
+
+#[test]
+fn desenho_de_depuracao_traz_formas_contatos_e_papeis() {
+    let mut s = Scene::new("teste", 66);
+    let root = raiz(&mut s);
+    let chao = piso(&mut s, root, 0.0, 300.0, 400.0);
+    let caixa = caixa_em(&mut s, root, 0.0, 200.0, json!({}));
+    let area = node(&mut s, Some(root), "Area2D", json!({"position": [200.0, 100.0]}));
+    node(&mut s, Some(area), "CollisionShape2D", json!({"size": [40.0, 40.0]}));
+
+    let mut p = Physics::build(&s, &cfg());
+    run(&mut p, &mut s, 1.0);
+    let d = p.debug_draw();
+
+    // Retângulo do chão, da caixa (apoiada) e da área: cada um com 4 pontos fechados.
+    let do_chao = d.shapes.iter().find(|f| f.node == chao).unwrap();
+    assert_eq!(do_chao.role, BodyRole::Static);
+    assert!(do_chao.closed && do_chao.points.len() == 4, "{do_chao:?}");
+    assert!(d.shapes.iter().any(|f| f.node == caixa && f.role == BodyRole::Dynamic));
+    assert!(d.shapes.iter().any(|f| f.node == area && f.role == BodyRole::Area));
+
+    // A caixa está apoiada: há contato com a face de cima do chão (y = 300) e a normal aponta na vertical.
+    assert!(!d.contacts.is_empty());
+    assert!(
+        d.contacts.iter().any(|c| (c.point[1] - 300.0).abs() < 2.0 && c.normal[1].abs() > 0.99),
+        "{:?}",
+        d.contacts
+    );
+    // Parada, a caixa não tem velocidade.
+    let v = d.velocities.iter().find(|v| v.node == caixa).unwrap();
+    assert!(v.velocity[0].hypot(v.velocity[1]) < 5.0, "{v:?}");
+}
+
+#[test]
+fn desenho_de_depuracao_mostra_queda_e_velocidade_de_personagem() {
+    let mut s = Scene::new("teste", 67);
+    let root = raiz(&mut s);
+    let caixa = caixa_em(&mut s, root, 0.0, 0.0, json!({}));
+    let heroi = node(&mut s, Some(root), "CharacterBody2D", json!({"position": [300.0, 0.0]}));
+    node(&mut s, Some(heroi), "CollisionShape2D", json!({"size": [32.0, 32.0]}));
+
+    let mut p = Physics::build(&s, &cfg());
+    p.set_velocity(heroi, [30.0, 0.0]);
+    run(&mut p, &mut s, 0.1);
+    let d = p.debug_draw();
+
+    // A caixa cai: a velocidade aponta para baixo (y cresce na tela).
+    let queda = d.velocities.iter().find(|v| v.node == caixa).unwrap();
+    assert!(queda.velocity[1] > 50.0, "{queda:?}");
+    // O personagem mostra a própria velocidade e o centro do corpo como origem.
+    let andando = d.velocities.iter().find(|v| v.node == heroi).unwrap();
+    assert_eq!(andando.velocity, [30.0, 0.0]);
+    assert!(andando.origin[0] > 300.0, "{andando:?}");
+    assert!(d.shapes.iter().any(|f| f.node == heroi && f.role == BodyRole::Character));
 }

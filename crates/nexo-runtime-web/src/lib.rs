@@ -5,6 +5,7 @@ use nexo_render::Renderer;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+mod debug;
 mod editor;
 pub use editor::SceneEditor;
 
