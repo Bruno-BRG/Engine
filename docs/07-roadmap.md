@@ -37,6 +37,8 @@ Status: the physics runtime (Rapier 2D: static, rigid and character bodies, area
 
 Desktop + web export (EXP), tilemaps (R2D), sprite animation and AnimationPlayer (ANI), game UI nodes (GUI), particles, profiler basics (DBG), three example projects, node reference docs.
 
+**Done when:** every P0 and P1 item of [export](backlog/export.md), [rendering 2D](backlog/rendering-2d.md), [animation](backlog/animation.md), [game UI](backlog/game-ui.md) and [console and debug](backlog/console-debug.md) is checked, plus DOC-006 and DOC-007 (three example projects). Two items need things outside the repository: DOC-004 (screenshots of the Unity editor) and the itch.io publication of the exit game. P2 items stay after 1.0.
+
 **Exit:** a small complete game published on itch.io made only with Nexo.
 
 ## Phase 4: Depth (1.0)
