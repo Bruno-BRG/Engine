@@ -1,24 +1,51 @@
-//! Máquina virtual da IR (VIS-023). Executa um `Program` contra um `Host` (a ponte para o mundo do jogo) e
-//! um `Context` (dono, delta e variáveis da instância). Não conhece a cena nem a física, por isso este crate
-//! não depende do nexo-core. Cada op conta como um passo. Passado o orçamento, a execução vira erro em vez de
-//! travar o jogo, o que cobre os laços de fluxo infinitos.
+//! Máquina virtual da IR (VIS-023, VIS-025). Executa um `Program` contra um `Host` (a ponte para o mundo do jogo)
+//! e um `Context` (dono, delta e variáveis da instância). `Vm::run` roda um programa sem pausas. Os programas com
+//! pontos latentes (Wait, Tween, Move To, Await Signal, Timer) rodam pelo `Scheduler` (ver `scheduler.rs`), que
+//! usa as mesmas ops. Cada op conta como um passo. Passado o orçamento, a execução vira erro em vez de travar o
+//! jogo, o que cobre os laços de fluxo infinitos.
 
-use crate::ir::{Op, Program, Reg};
-use crate::types::Value;
+use crate::audio::AudioCommand;
+use crate::ir::{AudioOp, Op, Program, Reg};
+use crate::types::{LogLevel, Value};
+use std::collections::BTreeSet;
 use std::fmt;
 
-/// O mundo do jogo visto pela VM. A cena implementa este trait.
+/// O mundo do jogo visto pela VM. A cena implementa este trait. Cada método abaixo é um contrato: o que
+/// significa o retorno e o que o host deve fazer está escrito em cada um.
 pub trait Host {
-    /// Valor numérico da propriedade `name` do nó `node`. None quando o nó ou a propriedade não existe.
+    /// Lê a propriedade numérica `name` do nó `node`. `None` quando o nó ou a propriedade não existe.
     fn get_property(&mut self, node: u64, name: &str) -> Option<f64>;
-    /// Grava a propriedade. False quando o nó ou a propriedade não existe ou não aceita o valor.
+    /// Grava a propriedade numérica. `false` quando o nó ou a propriedade não existe ou não aceita o valor.
     fn set_property(&mut self, node: u64, name: &str, value: f64) -> bool;
-    /// True enquanto a ação de entrada `action` está pressionada.
+    /// Entrada: `true` enquanto a ação `action` está pressionada (qualquer quadro).
     fn action_pressed(&self, action: &str) -> bool;
-    /// Recebe o texto do nó Print.
-    fn print(&mut self, msg: &str);
-    /// Pede a remoção do nó.
+    /// Entrada: `true` só no quadro em que a ação passou de solta para pressionada.
+    fn action_just_pressed(&self, action: &str) -> bool;
+    /// Entrada: `true` só no quadro em que a ação passou de pressionada para solta.
+    fn action_released(&self, action: &str) -> bool;
+    /// Entrada: -1 se a ação `negative` está pressionada, 1 se `positive`, 0 com nenhuma ou com as duas.
+    fn axis(&self, negative: &str, positive: &str) -> f64;
+    /// Entrada: vetor das quatro ações, com comprimento no máximo 1 (diagonal não é mais rápida).
+    fn vector(&self, left: &str, right: &str, up: &str, down: &str) -> [f64; 2];
+    /// Posição do ponteiro no mundo do jogo (coordenadas do mundo, depois da câmera).
+    fn mouse_world(&self) -> [f64; 2];
+    /// Posição do ponteiro na tela, em pixels da janela.
+    fn mouse_screen(&self) -> [f64; 2];
+    /// Escreve uma mensagem no console do editor, no nível dado (Print, Warn ou Error).
+    fn log(&mut self, level: LogLevel, message: &str);
+    /// Acha um nó da cena pelo nome. `None` quando não existe. A VM entrega a referência vazia (id 0).
+    fn find_node(&self, name: &str) -> Option<u64>;
+    /// Cria uma cópia da cena `scene` na posição dada e devolve o id do nó criado. `None` quando a cena não
+    /// existe ou não pode ser instanciada; a VM para com erro.
+    fn instance_scene(&mut self, scene: &str, position: [f64; 2]) -> Option<u64>;
+    /// Remove o nó da cena. Nó inexistente é ignorado.
     fn destroy(&mut self, node: u64);
+    /// Move o corpo `node` com a velocidade dada, parando nas paredes (como `move_and_slide` da Godot). Devolve
+    /// se ele está no chão depois do movimento. `None` quando o nó não é um corpo que se move; a VM para com erro.
+    fn move_and_slide(&mut self, node: u64, velocity: [f64; 2]) -> Option<bool>;
+    /// Executa um comando de áudio (tocar, parar, fade, volume de barramento). Som ou barramento desconhecido é
+    /// responsabilidade do host: ele deve registrar o problema, e a VM segue.
+    fn audio(&mut self, command: AudioCommand);
 }
 
 /// Estado de uma instância do script entre as execuções.
@@ -30,6 +57,17 @@ pub struct Context {
     pub delta: f64,
     /// Valores das variáveis, na ordem de `Compiled::variables`.
     pub vars: Vec<Value>,
+    /// Estado ativo (VIS-027). Vazio quando o grafo não tem estados.
+    pub estado: String,
+}
+
+/// Evento de rastro (VIS-030, DBG-003). O editor usa para pulsar os fios e mostrar valores no hover.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TraceEvent {
+    /// Uma op do nó `node` rodou, no evento `evento`.
+    Executou { evento: String, node: u64 },
+    /// A op do nó `node` produziu `valor` no seu registrador de saída. A saída em si é associada pelo editor.
+    Valor { node: u64, valor: Value },
 }
 
 /// Falha na execução. Guarda o nó de origem da op que falhou.
@@ -38,7 +76,17 @@ pub enum VmError {
     /// Passou do orçamento de passos. Quase sempre é um laço de fluxo sem saída.
     BudgetExhausted { limit: u32, node: u64 },
     /// O host não achou a propriedade para ler, ou não aceitou o valor para gravar (`write`).
-    PropertyFailed { node: u64, name: String, write: bool },
+    PropertyFailed {
+        node: u64,
+        name: String,
+        write: bool,
+    },
+    /// O host recusou uma ação que a VM precisa do retorno (instanciar cena, mover corpo).
+    HostFailed { node: u64, action: String },
+    /// Divisão por zero no nó Divide.
+    DivisionByZero { node: u64 },
+    /// `Vm::run` não sustenta pausas. O programa tem um ponto latente e precisa do `Scheduler`.
+    Suspended { node: u64 },
     /// A IR não bate com o que a VM espera. Programas feitos por `compile` nunca chegam aqui.
     Malformed { node: u64, message: String },
 }
@@ -47,37 +95,117 @@ impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VmError::BudgetExhausted { limit, node } => {
-                write!(f, "orçamento de {limit} passos esgotado no nó {node} (laço infinito?)")
+                write!(
+                    f,
+                    "orçamento de {limit} passos esgotado no nó {node} (laço infinito?)"
+                )
             }
             VmError::PropertyFailed {
                 node,
                 name,
                 write: true,
-            } => {
-                write!(f, "não foi possível gravar '{name}' no nó {node}")
-            }
+            } => write!(f, "não foi possível gravar '{name}' no nó {node}"),
             VmError::PropertyFailed {
                 node,
                 name,
                 write: false,
-            } => {
-                write!(f, "não foi possível ler '{name}' do nó {node}")
+            } => write!(f, "não foi possível ler '{name}' do nó {node}"),
+            VmError::HostFailed { node, action } => write!(f, "{action} falhou no nó {node}"),
+            VmError::DivisionByZero { node } => write!(f, "divisão por zero no nó {node}"),
+            VmError::Suspended { node } => {
+                write!(
+                    f,
+                    "o nó {node} pausa o programa: rode pelo Scheduler, não por Vm::run"
+                )
             }
-            VmError::Malformed { node, message } => write!(f, "IR inválida no nó {node}: {message}"),
+            VmError::Malformed { node, message } => {
+                write!(f, "IR inválida no nó {node}: {message}")
+            }
         }
     }
 }
 
 impl std::error::Error for VmError {}
 
-/// A máquina virtual. Não guarda estado: tudo fica no `Context` e no `Host`.
+/// Estado de uma pausa latente. Quando termina, a tarefa segue da op depois da que pausou.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Latente {
+    /// Espera `restante` segundos.
+    Espera { restante: f64 },
+    /// Interpola propriedades do nó `no`: cada alvo é (nome, valor inicial, valor final).
+    Tween {
+        no: u64,
+        alvos: Vec<(String, f64, f64)>,
+        duracao: f64,
+        decorrido: f64,
+    },
+    /// Espera o sinal `nome`. Quem acorda é o `Scheduler::emitir`.
+    Sinal { nome: String },
+}
+
+/// Uma linha de execução de um programa: o ponteiro, os registradores e a pausa, se houver.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Tarefa {
+    /// Índice do programa em `Compiled::programs`.
+    pub programa: usize,
+    pub pc: usize,
+    pub regs: Vec<Value>,
+    pub latente: Option<Latente>,
+    /// Quando parou num ponto de parada, o próximo passo não pode parar de novo no mesmo lugar.
+    pub ignora_ponto: bool,
+    /// Criada por Spawn neste quadro: o tempo dela só começa a contar no quadro seguinte.
+    pub nova: bool,
+}
+
+impl Tarefa {
+    pub(crate) fn nova(programa: usize, program: &Program) -> Tarefa {
+        Tarefa {
+            programa,
+            pc: 0,
+            regs: vec![Value::Bool(false); program.regs],
+            latente: None,
+            ignora_ponto: false,
+            nova: false,
+        }
+    }
+}
+
+/// Por que `avancar` parou.
+pub(crate) enum Parada {
+    /// O programa acabou.
+    Fim,
+    /// A tarefa pausou num latente.
+    Latente(Latente),
+    /// Parou antes de uma op, num ponto de parada ou no passo a passo.
+    Pausa { node: u64 },
+}
+
+/// O que a tarefa precisa do mundo e o que ela deixa para o agendador.
+pub(crate) struct Ambiente<'a> {
+    pub host: &'a mut dyn Host,
+    pub ctx: &'a mut Context,
+    /// Nós com ponto de parada. Só valem na execução livre (`passo` = None).
+    pub pontos: &'a BTreeSet<u64>,
+    /// Passo a passo: quantas ops ainda podem rodar antes de parar. `None` é execução livre. Quando chega a zero,
+    /// a próxima op pausa. Vale para a instância inteira, não para uma tarefa só.
+    pub passo: Option<u32>,
+    pub trace: Option<&'a mut Vec<TraceEvent>>,
+    /// Tarefas criadas por Spawn (temporizadores), para o agendador.
+    pub novas: Vec<Tarefa>,
+    /// Sinais emitidos por EmitSignal, para o agendador.
+    pub sinais: Vec<String>,
+    /// Trocas de estado pedidas por GoToState, para o agendador.
+    pub transicoes: Vec<String>,
+}
+
+/// A máquina virtual. Não guarda estado: tudo fica no `Context`, no `Host` e na `Tarefa`.
 pub struct Vm;
 
 impl Vm {
     /// Orçamento padrão de passos por execução. Cada op conta como um passo.
     pub const MAX_STEPS: u32 = 10_000;
 
-    /// Executa o programa de um evento com o orçamento padrão.
+    /// Executa o programa de um evento com o orçamento padrão. Erro se o programa tem um ponto latente.
     pub fn run(program: &Program, host: &mut dyn Host, ctx: &mut Context) -> Result<(), VmError> {
         Vm::run_with_budget(program, host, ctx, Vm::MAX_STEPS)
     }
@@ -89,86 +217,502 @@ impl Vm {
         ctx: &mut Context,
         limit: u32,
     ) -> Result<(), VmError> {
-        let mut regs = vec![Value::Bool(false); program.regs];
-        let mut pc = 0usize;
-        let mut steps = 0u32;
-        while let Some(op) = program.ops.get(pc) {
-            // Nó de origem da op, para o erro dizer de onde veio.
-            let origem = program.sources.get(pc).copied().unwrap_or(program.node);
-            steps = steps.saturating_add(1);
-            if steps > limit {
-                return Err(VmError::BudgetExhausted { limit, node: origem });
-            }
-            pc += 1;
-            match op {
-                Op::Const { dst, value } => set(&mut regs, *dst, value.clone(), origem)?,
-                Op::Owner { dst } => set(&mut regs, *dst, Value::Node(ctx.owner), origem)?,
-                Op::Delta { dst } => set(&mut regs, *dst, Value::Float(ctx.delta), origem)?,
-                Op::GetVar { dst, var } => {
-                    let v = ctx
-                        .vars
-                        .get(*var)
-                        .cloned()
-                        .ok_or_else(|| malformed(origem, format!("variável {var} não existe")))?;
-                    set(&mut regs, *dst, v, origem)?;
-                }
-                Op::SetVar { var, src } => {
-                    let v = slot(&regs, *src, origem)?.clone();
-                    let destino = ctx
-                        .vars
-                        .get_mut(*var)
-                        .ok_or_else(|| malformed(origem, format!("variável {var} não existe")))?;
-                    *destino = v;
-                }
-                Op::Add { dst, a, b } => {
-                    let r = float(&regs, *a, origem)? + float(&regs, *b, origem)?;
-                    set(&mut regs, *dst, Value::Float(r), origem)?;
-                }
-                Op::Mul { dst, a, b } => {
-                    let r = float(&regs, *a, origem)? * float(&regs, *b, origem)?;
-                    set(&mut regs, *dst, Value::Float(r), origem)?;
-                }
-                Op::Greater { dst, a, b } => {
-                    let r = float(&regs, *a, origem)? > float(&regs, *b, origem)?;
-                    set(&mut regs, *dst, Value::Bool(r), origem)?;
-                }
-                Op::ActionPressed { dst, action } => {
-                    let pressed = host.action_pressed(text(&regs, *action, origem)?);
-                    set(&mut regs, *dst, Value::Bool(pressed), origem)?;
-                }
-                Op::GetProp { dst, node, name } => {
-                    let alvo = node_id(&regs, *node, origem)?;
-                    let nome = text(&regs, *name, origem)?.to_string();
-                    let v = host.get_property(alvo, &nome).ok_or_else(|| VmError::PropertyFailed {
-                        node: origem,
-                        name: nome.clone(),
-                        write: false,
-                    })?;
-                    set(&mut regs, *dst, Value::Float(v), origem)?;
-                }
-                Op::SetProp { node, name, value } => {
-                    let alvo = node_id(&regs, *node, origem)?;
-                    let nome = text(&regs, *name, origem)?.to_string();
-                    let v = float(&regs, *value, origem)?;
-                    if !host.set_property(alvo, &nome, v) {
-                        return Err(VmError::PropertyFailed {
-                            node: origem,
-                            name: nome,
-                            write: true,
-                        });
-                    }
-                }
-                Op::Print { msg } => host.print(text(&regs, *msg, origem)?),
-                Op::Destroy { node } => host.destroy(node_id(&regs, *node, origem)?),
-                Op::Jump { target } => pc = *target,
-                Op::JumpIfFalse { cond, target } => {
-                    if !boolean(&regs, *cond, origem)? {
-                        pc = *target;
-                    }
-                }
+        let vazio = BTreeSet::new();
+        let mut tarefa = Tarefa::nova(0, program);
+        let mut amb = Ambiente {
+            host,
+            ctx,
+            pontos: &vazio,
+            passo: None,
+            trace: None,
+            novas: Vec::new(),
+            sinais: Vec::new(),
+            transicoes: Vec::new(),
+        };
+        match avancar(&mut tarefa, program, &mut amb, limit)? {
+            Parada::Fim => Ok(()),
+            Parada::Latente(_) | Parada::Pausa { .. } => {
+                Err(VmError::Suspended { node: program.node })
             }
         }
-        Ok(())
+    }
+}
+
+/// Roda a tarefa a partir de `t.pc` até o fim, até uma pausa latente ou até um ponto de parada. Conta o
+/// orçamento por chamada. Cada iteração executa uma op.
+pub(crate) fn avancar(
+    t: &mut Tarefa,
+    program: &Program,
+    amb: &mut Ambiente,
+    limite: u32,
+) -> Result<Parada, VmError> {
+    let mut passos = 0u32;
+    let mut executadas = 0u32;
+    loop {
+        if t.pc >= program.ops.len() {
+            return Ok(Parada::Fim);
+        }
+        let origem = program.sources.get(t.pc).copied().unwrap_or(program.node);
+        // Pausa antes da op: por passo esgotado, ou por ponto de parada na execução livre. Ao retomar de um
+        // ponto, a primeira op roda sem parar de novo no mesmo lugar.
+        let primeira = executadas == 0;
+        if !(primeira && t.ignora_ponto) {
+            let passo_esgotado = matches!(amb.passo, Some(0));
+            let ponto = amb.passo.is_none() && amb.pontos.contains(&origem);
+            if passo_esgotado || ponto {
+                t.ignora_ponto = true;
+                return Ok(Parada::Pausa { node: origem });
+            }
+        }
+        passos += 1;
+        if passos > limite {
+            return Err(VmError::BudgetExhausted {
+                limit: limite,
+                node: origem,
+            });
+        }
+        let atual = t.pc;
+        t.pc += 1;
+        executadas += 1;
+        let op = &program.ops[atual];
+        if let Some(tr) = amb.trace.as_mut() {
+            tr.push(TraceEvent::Executou {
+                evento: program.event.clone(),
+                node: origem,
+            });
+        }
+        let parada = executa(op, origem, t, amb)?;
+        t.ignora_ponto = false;
+        if let Some(restam) = amb.passo.as_mut() {
+            *restam = restam.saturating_sub(1);
+        }
+        if let (Some(dst), Some(tr)) = (destino(op), amb.trace.as_mut()) {
+            tr.push(TraceEvent::Valor {
+                node: origem,
+                valor: t.regs[dst].clone(),
+            });
+        }
+        if let Some(p) = parada {
+            return Ok(p);
+        }
+    }
+}
+
+/// Executa uma op. Devolve `Some` quando a op pausa a tarefa (latente).
+fn executa(
+    op: &Op,
+    origem: u64,
+    t: &mut Tarefa,
+    amb: &mut Ambiente,
+) -> Result<Option<Parada>, VmError> {
+    let regs = &mut t.regs;
+    match op {
+        Op::Const { dst, value } => set(regs, *dst, value.clone(), origem)?,
+        Op::Owner { dst } => set(regs, *dst, Value::Node(amb.ctx.owner), origem)?,
+        Op::Delta { dst } => set(regs, *dst, Value::Float(amb.ctx.delta), origem)?,
+        Op::GetVar { dst, var } => {
+            let v = amb
+                .ctx
+                .vars
+                .get(*var)
+                .cloned()
+                .ok_or_else(|| malformed(origem, format!("variável {var} não existe")))?;
+            set(regs, *dst, v, origem)?;
+        }
+        Op::SetVar { var, src } => {
+            let v = slot(regs, *src, origem)?.clone();
+            let destino = amb
+                .ctx
+                .vars
+                .get_mut(*var)
+                .ok_or_else(|| malformed(origem, format!("variável {var} não existe")))?;
+            *destino = v;
+        }
+        Op::Add { dst, a, b } => {
+            let r = float(regs, *a, origem)? + float(regs, *b, origem)?;
+            set(regs, *dst, Value::Float(r), origem)?;
+        }
+        Op::Sub { dst, a, b } => {
+            let r = float(regs, *a, origem)? - float(regs, *b, origem)?;
+            set(regs, *dst, Value::Float(r), origem)?;
+        }
+        Op::Mul { dst, a, b } => {
+            let r = float(regs, *a, origem)? * float(regs, *b, origem)?;
+            set(regs, *dst, Value::Float(r), origem)?;
+        }
+        Op::Div { dst, a, b } => {
+            let divisor = float(regs, *b, origem)?;
+            if divisor == 0.0 {
+                return Err(VmError::DivisionByZero { node: origem });
+            }
+            let r = float(regs, *a, origem)? / divisor;
+            set(regs, *dst, Value::Float(r), origem)?;
+        }
+        Op::Greater { dst, a, b } => {
+            let r = float(regs, *a, origem)? > float(regs, *b, origem)?;
+            set(regs, *dst, Value::Bool(r), origem)?;
+        }
+        Op::Less { dst, a, b } => {
+            let r = float(regs, *a, origem)? < float(regs, *b, origem)?;
+            set(regs, *dst, Value::Bool(r), origem)?;
+        }
+        Op::Equal { dst, a, b } => {
+            let r = float(regs, *a, origem)? == float(regs, *b, origem)?;
+            set(regs, *dst, Value::Bool(r), origem)?;
+        }
+        Op::IntAdd { dst, a, b } => {
+            let r = int(regs, *a, origem)?.wrapping_add(int(regs, *b, origem)?);
+            set(regs, *dst, Value::Int(r), origem)?;
+        }
+        Op::IntLess { dst, a, b } => {
+            let r = int(regs, *a, origem)? < int(regs, *b, origem)?;
+            set(regs, *dst, Value::Bool(r), origem)?;
+        }
+        Op::MakeVec { dst, x, y } => {
+            let r = [float(regs, *x, origem)?, float(regs, *y, origem)?];
+            set(regs, *dst, Value::Vec2(r), origem)?;
+        }
+        Op::AddVec { dst, a, b } => {
+            let (va, vb) = (vec2(regs, *a, origem)?, vec2(regs, *b, origem)?);
+            set(
+                regs,
+                *dst,
+                Value::Vec2([va[0] + vb[0], va[1] + vb[1]]),
+                origem,
+            )?;
+        }
+        Op::ScaleVec { dst, vector, scale } => {
+            let v = vec2(regs, *vector, origem)?;
+            let k = float(regs, *scale, origem)?;
+            set(regs, *dst, Value::Vec2([v[0] * k, v[1] * k]), origem)?;
+        }
+        Op::VecLength { dst, vector } => {
+            let v = vec2(regs, *vector, origem)?;
+            set(regs, *dst, Value::Float(v[0].hypot(v[1])), origem)?;
+        }
+        Op::Concat { dst, a, b } => {
+            let r = format!("{}{}", text(regs, *a, origem)?, text(regs, *b, origem)?);
+            set(regs, *dst, Value::String(r), origem)?;
+        }
+        Op::Log { level, msg } => {
+            let msg = text(regs, *msg, origem)?;
+            amb.host.log(*level, msg);
+        }
+        Op::ActionPressed { dst, action } => {
+            let pressed = amb.host.action_pressed(text(regs, *action, origem)?);
+            set(regs, *dst, Value::Bool(pressed), origem)?;
+        }
+        Op::ActionJustPressed { dst, action } => {
+            let pressed = amb.host.action_just_pressed(text(regs, *action, origem)?);
+            set(regs, *dst, Value::Bool(pressed), origem)?;
+        }
+        Op::ActionReleased { dst, action } => {
+            let released = amb.host.action_released(text(regs, *action, origem)?);
+            set(regs, *dst, Value::Bool(released), origem)?;
+        }
+        Op::GetAxis {
+            dst,
+            negative,
+            positive,
+        } => {
+            let eixo = amb.host.axis(
+                text(regs, *negative, origem)?,
+                text(regs, *positive, origem)?,
+            );
+            set(regs, *dst, Value::Float(eixo), origem)?;
+        }
+        Op::GetVector {
+            dst,
+            left,
+            right,
+            up,
+            down,
+        } => {
+            let v = amb.host.vector(
+                text(regs, *left, origem)?,
+                text(regs, *right, origem)?,
+                text(regs, *up, origem)?,
+                text(regs, *down, origem)?,
+            );
+            set(regs, *dst, Value::Vec2(v), origem)?;
+        }
+        Op::MouseWorld { dst } => {
+            let p = amb.host.mouse_world();
+            set(regs, *dst, Value::Vec2(p), origem)?;
+        }
+        Op::MouseScreen { dst } => {
+            let p = amb.host.mouse_screen();
+            set(regs, *dst, Value::Vec2(p), origem)?;
+        }
+        Op::GetProp { dst, node, name } => {
+            let alvo = node_id(regs, *node, origem)?;
+            let nome = text(regs, *name, origem)?.to_string();
+            let v = amb
+                .host
+                .get_property(alvo, &nome)
+                .ok_or_else(|| VmError::PropertyFailed {
+                    node: origem,
+                    name: nome.clone(),
+                    write: false,
+                })?;
+            set(regs, *dst, Value::Float(v), origem)?;
+        }
+        Op::SetProp { node, name, value } => {
+            let alvo = node_id(regs, *node, origem)?;
+            let nome = text(regs, *name, origem)?.to_string();
+            let v = float(regs, *value, origem)?;
+            if !amb.host.set_property(alvo, &nome, v) {
+                return Err(VmError::PropertyFailed {
+                    node: origem,
+                    name: nome,
+                    write: true,
+                });
+            }
+        }
+        Op::FindNode { dst, name } => {
+            // Sem nó, a referência vazia (id 0) é o resultado. O id 0 nunca é de um nó real.
+            let achado = amb.host.find_node(text(regs, *name, origem)?).unwrap_or(0);
+            set(regs, *dst, Value::Node(achado), origem)?;
+        }
+        Op::InstanceScene {
+            dst,
+            scene,
+            position,
+        } => {
+            let cena = text(regs, *scene, origem)?.to_string();
+            let pos = vec2(regs, *position, origem)?;
+            let criado =
+                amb.host
+                    .instance_scene(&cena, pos)
+                    .ok_or_else(|| VmError::HostFailed {
+                        node: origem,
+                        action: format!("instanciar a cena '{cena}'"),
+                    })?;
+            set(regs, *dst, Value::Node(criado), origem)?;
+        }
+        Op::Destroy { node } => amb.host.destroy(node_id(regs, *node, origem)?),
+        Op::MoveAndSlide {
+            dst,
+            node,
+            velocity,
+        } => {
+            let alvo = node_id(regs, *node, origem)?;
+            let v = vec2(regs, *velocity, origem)?;
+            let no_chao = amb
+                .host
+                .move_and_slide(alvo, v)
+                .ok_or_else(|| VmError::HostFailed {
+                    node: origem,
+                    action: "mover e deslizar".into(),
+                })?;
+            set(regs, *dst, Value::Bool(no_chao), origem)?;
+        }
+        Op::Audio(comando) => {
+            let cmd = match comando {
+                AudioOp::Play { sound, bus, volume } => AudioCommand::Play {
+                    sound: text(regs, *sound, origem)?.to_string(),
+                    bus: text(regs, *bus, origem)?.to_string(),
+                    volume: float(regs, *volume, origem)?,
+                },
+                AudioOp::Stop { sound } => AudioCommand::Stop {
+                    sound: text(regs, *sound, origem)?.to_string(),
+                },
+                AudioOp::Fade {
+                    sound,
+                    volume,
+                    seconds,
+                } => AudioCommand::Fade {
+                    sound: text(regs, *sound, origem)?.to_string(),
+                    volume: float(regs, *volume, origem)?,
+                    seconds: float(regs, *seconds, origem)?,
+                },
+                AudioOp::SetBus { bus, volume } => AudioCommand::SetBusVolume {
+                    bus: text(regs, *bus, origem)?.to_string(),
+                    volume: float(regs, *volume, origem)?,
+                },
+            };
+            amb.host.audio(cmd);
+        }
+        Op::Jump { target } => t.pc = *target,
+        Op::JumpIfFalse { cond, target } => {
+            if !boolean(regs, *cond, origem)? {
+                t.pc = *target;
+            }
+        }
+        Op::Wait { seconds } => {
+            let s = float(regs, *seconds, origem)?;
+            if s > 0.0 {
+                return Ok(Some(Parada::Latente(Latente::Espera { restante: s })));
+            }
+        }
+        Op::Tween {
+            node,
+            name,
+            to,
+            seconds,
+        } => {
+            let alvo = node_id(regs, *node, origem)?;
+            let nome = text(regs, *name, origem)?.to_string();
+            let fim = float(regs, *to, origem)?;
+            let duracao = float(regs, *seconds, origem)?;
+            return inicia_tween(amb.host, origem, alvo, vec![(nome, fim)], duracao);
+        }
+        Op::MoveTo {
+            node,
+            target,
+            seconds,
+        } => {
+            let alvo = node_id(regs, *node, origem)?;
+            let p = vec2(regs, *target, origem)?;
+            let duracao = float(regs, *seconds, origem)?;
+            let alvos = vec![
+                ("position_x".to_string(), p[0]),
+                ("position_y".to_string(), p[1]),
+            ];
+            return inicia_tween(amb.host, origem, alvo, alvos, duracao);
+        }
+        Op::AwaitSignal { name } => {
+            let nome = text(regs, *name, origem)?.to_string();
+            return Ok(Some(Parada::Latente(Latente::Sinal { nome })));
+        }
+        Op::GoToState { name } => {
+            let nome = text(regs, *name, origem)?.to_string();
+            amb.transicoes.push(nome);
+        }
+        Op::EmitSignal { name } => {
+            let nome = text(regs, *name, origem)?.to_string();
+            amb.sinais.push(nome);
+        }
+        Op::Spawn { seconds, entry } => {
+            let s = float(regs, *seconds, origem)?;
+            let mut filha = Tarefa {
+                programa: t.programa,
+                pc: *entry,
+                regs: regs.to_vec(),
+                latente: None,
+                ignora_ponto: false,
+                nova: false,
+            };
+            if s > 0.0 {
+                filha.latente = Some(Latente::Espera { restante: s });
+                filha.nova = true;
+            }
+            amb.novas.push(filha);
+        }
+    }
+    Ok(None)
+}
+
+/// Começa uma interpolação: lê os valores iniciais e, se a duração é positiva, pausa a tarefa. Com duração zero
+/// grava o valor final na hora e segue.
+fn inicia_tween(
+    host: &mut dyn Host,
+    origem: u64,
+    no: u64,
+    alvos: Vec<(String, f64)>,
+    duracao: f64,
+) -> Result<Option<Parada>, VmError> {
+    let mut prontos = Vec::with_capacity(alvos.len());
+    for (nome, fim) in alvos {
+        let inicio = host
+            .get_property(no, &nome)
+            .ok_or_else(|| VmError::PropertyFailed {
+                node: origem,
+                name: nome.clone(),
+                write: false,
+            })?;
+        prontos.push((nome, inicio, fim));
+    }
+    if duracao <= 0.0 {
+        for (nome, _, fim) in &prontos {
+            if !host.set_property(no, nome, *fim) {
+                return Err(VmError::PropertyFailed {
+                    node: origem,
+                    name: nome.clone(),
+                    write: true,
+                });
+            }
+        }
+        return Ok(None);
+    }
+    Ok(Some(Parada::Latente(Latente::Tween {
+        no,
+        alvos: prontos,
+        duracao,
+        decorrido: 0.0,
+    })))
+}
+
+/// Avança um latente em `dt` segundos. Devolve `true` quando ele termina e a tarefa pode seguir.
+pub(crate) fn progride(
+    l: &mut Latente,
+    dt: f64,
+    host: &mut dyn Host,
+    origem: u64,
+) -> Result<bool, VmError> {
+    match l {
+        Latente::Espera { restante } => {
+            *restante -= dt;
+            Ok(*restante <= 1e-9)
+        }
+        // Acorda pelo sinal, não pelo tempo.
+        Latente::Sinal { .. } => Ok(false),
+        Latente::Tween {
+            no,
+            alvos,
+            duracao,
+            decorrido,
+        } => {
+            *decorrido += dt;
+            let t = (*decorrido / *duracao).min(1.0);
+            for (nome, inicio, fim) in alvos.iter() {
+                let v = *inicio + (*fim - *inicio) * t;
+                if !host.set_property(*no, nome, v) {
+                    return Err(VmError::PropertyFailed {
+                        node: origem,
+                        name: nome.clone(),
+                        write: true,
+                    });
+                }
+            }
+            Ok(t >= 1.0)
+        }
+    }
+}
+
+/// Registrador que a op grava, se ela grava um.
+fn destino(op: &Op) -> Option<Reg> {
+    match op {
+        Op::Const { dst, .. }
+        | Op::Owner { dst }
+        | Op::Delta { dst }
+        | Op::GetVar { dst, .. }
+        | Op::Add { dst, .. }
+        | Op::Sub { dst, .. }
+        | Op::Mul { dst, .. }
+        | Op::Div { dst, .. }
+        | Op::Greater { dst, .. }
+        | Op::Less { dst, .. }
+        | Op::Equal { dst, .. }
+        | Op::IntAdd { dst, .. }
+        | Op::IntLess { dst, .. }
+        | Op::MakeVec { dst, .. }
+        | Op::AddVec { dst, .. }
+        | Op::ScaleVec { dst, .. }
+        | Op::VecLength { dst, .. }
+        | Op::Concat { dst, .. }
+        | Op::ActionPressed { dst, .. }
+        | Op::ActionJustPressed { dst, .. }
+        | Op::ActionReleased { dst, .. }
+        | Op::GetAxis { dst, .. }
+        | Op::GetVector { dst, .. }
+        | Op::MouseWorld { dst }
+        | Op::MouseScreen { dst }
+        | Op::GetProp { dst, .. }
+        | Op::FindNode { dst, .. }
+        | Op::InstanceScene { dst, .. }
+        | Op::MoveAndSlide { dst, .. } => Some(*dst),
+        _ => None,
     }
 }
 
@@ -190,7 +734,23 @@ fn float(regs: &[Value], i: Reg, node: u64) -> Result<f64, VmError> {
         Value::Float(f) => Ok(*f),
         other => Err(malformed(
             node,
-            format!("registrador {i} deveria ser decimal, é {}", other.ty().nome()),
+            format!(
+                "registrador {i} deveria ser decimal, é {}",
+                other.ty().nome()
+            ),
+        )),
+    }
+}
+
+fn int(regs: &[Value], i: Reg, node: u64) -> Result<i64, VmError> {
+    match slot(regs, i, node)? {
+        Value::Int(n) => Ok(*n),
+        other => Err(malformed(
+            node,
+            format!(
+                "registrador {i} deveria ser inteiro, é {}",
+                other.ty().nome()
+            ),
         )),
     }
 }
@@ -200,7 +760,10 @@ fn boolean(regs: &[Value], i: Reg, node: u64) -> Result<bool, VmError> {
         Value::Bool(b) => Ok(*b),
         other => Err(malformed(
             node,
-            format!("registrador {i} deveria ser booleano, é {}", other.ty().nome()),
+            format!(
+                "registrador {i} deveria ser booleano, é {}",
+                other.ty().nome()
+            ),
         )),
     }
 }
@@ -211,6 +774,19 @@ fn text(regs: &[Value], i: Reg, node: u64) -> Result<&str, VmError> {
         other => Err(malformed(
             node,
             format!("registrador {i} deveria ser texto, é {}", other.ty().nome()),
+        )),
+    }
+}
+
+fn vec2(regs: &[Value], i: Reg, node: u64) -> Result<[f64; 2], VmError> {
+    match slot(regs, i, node)? {
+        Value::Vec2(v) => Ok(*v),
+        other => Err(malformed(
+            node,
+            format!(
+                "registrador {i} deveria ser vetor 2D, é {}",
+                other.ty().nome()
+            ),
         )),
     }
 }
@@ -237,27 +813,29 @@ fn set(regs: &mut [Value], i: Reg, value: Value, node: u64) -> Result<(), VmErro
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::graph::Graph;
     use crate::ir::{Op, Program, compile};
     use crate::types::{PinType, Value};
     use std::collections::HashMap;
 
-    /// Host de teste: propriedades num mapa, ações pressionadas e o registro das chamadas.
+    /// Host de teste: propriedades num mapa, entradas simuladas e o registro das chamadas.
     #[derive(Default)]
-    struct Mock {
-        props: HashMap<(u64, String), f64>,
-        pressionadas: Vec<String>,
-        impressos: Vec<String>,
-        destruidos: Vec<u64>,
+    pub(crate) struct Mock {
+        pub props: HashMap<(u64, String), f64>,
+        pub pressionadas: Vec<String>,
+        pub impressos: Vec<(LogLevel, String)>,
+        pub destruidos: Vec<u64>,
+        pub audio: Vec<AudioCommand>,
+        pub nos: HashMap<String, u64>,
+        pub mouse: [f64; 2],
     }
 
     impl Host for Mock {
         fn get_property(&mut self, node: u64, name: &str) -> Option<f64> {
             self.props.get(&(node, name.to_string())).copied()
         }
-
         fn set_property(&mut self, node: u64, name: &str, value: f64) -> bool {
             match self.props.get_mut(&(node, name.to_string())) {
                 Some(v) => {
@@ -267,17 +845,54 @@ mod tests {
                 None => false,
             }
         }
-
         fn action_pressed(&self, action: &str) -> bool {
             self.pressionadas.iter().any(|a| a == action)
         }
-
-        fn print(&mut self, msg: &str) {
-            self.impressos.push(msg.to_string());
+        fn action_just_pressed(&self, action: &str) -> bool {
+            self.action_pressed(action)
         }
-
+        fn action_released(&self, action: &str) -> bool {
+            !self.action_pressed(action)
+        }
+        fn axis(&self, negative: &str, positive: &str) -> f64 {
+            match (self.action_pressed(negative), self.action_pressed(positive)) {
+                (true, false) => -1.0,
+                (false, true) => 1.0,
+                _ => 0.0,
+            }
+        }
+        fn vector(&self, left: &str, right: &str, up: &str, down: &str) -> [f64; 2] {
+            [self.axis(left, right), self.axis(up, down)]
+        }
+        fn mouse_world(&self) -> [f64; 2] {
+            self.mouse
+        }
+        fn mouse_screen(&self) -> [f64; 2] {
+            self.mouse
+        }
+        fn log(&mut self, level: LogLevel, message: &str) {
+            self.impressos.push((level, message.to_string()));
+        }
+        fn find_node(&self, name: &str) -> Option<u64> {
+            self.nos.get(name).copied()
+        }
+        fn instance_scene(&mut self, scene: &str, _position: [f64; 2]) -> Option<u64> {
+            if scene == "bala.scene" {
+                Some(42)
+            } else {
+                None
+            }
+        }
         fn destroy(&mut self, node: u64) {
             self.destruidos.push(node);
+        }
+        fn move_and_slide(&mut self, node: u64, velocity: [f64; 2]) -> Option<bool> {
+            let x = self.props.get_mut(&(node, "position_x".to_string()))?;
+            *x += velocity[0];
+            Some(velocity[1] >= 0.0)
+        }
+        fn audio(&mut self, command: AudioCommand) {
+            self.audio.push(command);
         }
     }
 
@@ -295,7 +910,7 @@ mod tests {
 
     /// Exemplo do enunciado: no OnProcess, se "ui_right" está pressionada, a posição X do próprio nó
     /// sobe delta * 100. Equivale a SetProperty(node, "position_x", GetProperty(node, "position_x") + delta * 100).
-    fn grafo_de_movimento() -> Graph {
+    pub(crate) fn grafo_de_movimento() -> Graph {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnProcess");
         let acao = adiciona(&mut g, "ActionPressed");
@@ -360,7 +975,7 @@ mod tests {
             let program = compiled.programs_for("OnReady").next().unwrap();
             let mut host = Mock::default();
             Vm::run(program, &mut host, &mut compiled.new_context(1)).unwrap();
-            assert_eq!(host.impressos, [esperado]);
+            assert_eq!(host.impressos, [(LogLevel::Info, esperado.to_string())]);
         }
     }
 
@@ -381,7 +996,7 @@ mod tests {
         let program = compiled.programs_for("OnReady").next().unwrap();
         let mut host = Mock::default();
         Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap();
-        assert_eq!(host.impressos, ["primeiro"]);
+        assert_eq!(host.impressos, [(LogLevel::Info, "primeiro".to_string())]);
         assert_eq!(host.destruidos, [7]);
     }
 
@@ -418,7 +1033,10 @@ mod tests {
         let mut host = Mock::default();
         host.pressionadas.push("ui_right".into());
         let erro = Vm::run(program, &mut host, &mut compiled.new_context(7)).unwrap_err();
-        assert!(matches!(erro, VmError::PropertyFailed { write: false, .. }), "{erro:?}");
+        assert!(
+            matches!(erro, VmError::PropertyFailed { write: false, .. }),
+            "{erro:?}"
+        );
     }
 
     #[test]
@@ -430,11 +1048,13 @@ mod tests {
             ops: vec![Op::Jump { target: 0 }],
             sources: vec![5],
             regs: 0,
+            estado: None,
         };
         let mut ctx = Context {
             owner: 5,
             delta: 0.0,
             vars: Vec::new(),
+            estado: String::new(),
         };
         let erro = Vm::run(&program, &mut Mock::default(), &mut ctx).unwrap_err();
         assert_eq!(
@@ -444,5 +1064,26 @@ mod tests {
                 node: 5
             }
         );
+    }
+
+    #[test]
+    fn divisao_por_zero_vira_erro() {
+        // OnReady -> SetProperty(self, "x", 1 / 0). O divisor zero tem de virar erro, não infinito.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let dv = adiciona(&mut g, "Divide");
+        g.set_value(dv, "a", Value::Float(1.0)).unwrap();
+        g.set_value(dv, "b", Value::Float(0.0)).unwrap();
+        let sp = adiciona(&mut g, "SetProperty");
+        texto(&mut g, sp, "name", "x");
+        g.connect((ev, "exec"), (sp, "exec")).unwrap();
+        g.connect((ev, "self"), (sp, "node")).unwrap();
+        g.connect((dv, "result"), (sp, "value")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let program = compiled.programs_for("OnReady").next().unwrap();
+        let mut host = Mock::default();
+        host.props.insert((3, "x".to_string()), 0.0);
+        let erro = Vm::run(program, &mut host, &mut compiled.new_context(3)).unwrap_err();
+        assert_eq!(erro, VmError::DivisionByZero { node: dv });
     }
 }

@@ -1,51 +1,258 @@
-//! Compilador do grafo para a IR (VIS-023). Cada nó de evento vira um programa linear de ops. Os pinos de
-//! dados viram registradores, preenchidos logo antes do nó que os consome. O Branch vira um salto
-//! condicional. Os erros de ligação e de entrada obrigatória são reunidos e devolvidos ao editor, cada um
-//! com o id do nó onde foi achado.
+//! Compilador do grafo para a IR (VIS-023, VIS-025). Cada nó de evento vira um programa linear de ops. Os pinos
+//! de dados viram registradores, preenchidos logo antes do nó que os consome. Branch, While e ForEach viram
+//! saltos. Nós latentes (Wait, Tween, Move To, Await Signal, Timer) viram ops que a VM suspende e retoma. Os
+//! erros são reunidos pela validação do grafo e devolvidos ao editor, cada um com o id do nó onde foi achado.
 
-use crate::graph::{Graph, GraphNode, def_of};
+use crate::graph::{Graph, GraphNode, REROUTE, def_of};
 use crate::library;
-use crate::types::{Value, Variable};
+use crate::types::{LogLevel, Value, Variable};
 use crate::vm::Context;
-use std::collections::HashSet;
-use std::fmt;
+use std::collections::BTreeMap;
+
+pub use crate::graph::CompileError;
 
 /// Índice de um registrador do programa.
 pub type Reg = usize;
+
+/// Comando de áudio na IR. Os valores vêm de registradores, como os de qualquer op.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AudioOp {
+    Play {
+        sound: Reg,
+        bus: Reg,
+        volume: Reg,
+    },
+    Stop {
+        sound: Reg,
+    },
+    Fade {
+        sound: Reg,
+        volume: Reg,
+        seconds: Reg,
+    },
+    SetBus {
+        bus: Reg,
+        volume: Reg,
+    },
+}
 
 /// Instrução da IR. Um registrador é escrito antes de ser lido, e cada valor tem o seu.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
     /// `dst` recebe um valor fixo (embutido ou padrão do pino).
-    Const { dst: Reg, value: Value },
+    Const {
+        dst: Reg,
+        value: Value,
+    },
     /// `dst` recebe o id do nó dono do script (saída "self").
-    Owner { dst: Reg },
+    Owner {
+        dst: Reg,
+    },
     /// `dst` recebe o delta do quadro (saída "delta").
-    Delta { dst: Reg },
+    Delta {
+        dst: Reg,
+    },
     /// `dst` recebe o valor da variável `var` da instância.
-    GetVar { dst: Reg, var: usize },
+    GetVar {
+        dst: Reg,
+        var: usize,
+    },
     /// A variável `var` da instância recebe o valor de `src`.
-    SetVar { var: usize, src: Reg },
-    /// `dst` = `a` + `b`, em decimal.
-    Add { dst: Reg, a: Reg, b: Reg },
-    /// `dst` = `a` * `b`, em decimal.
-    Mul { dst: Reg, a: Reg, b: Reg },
-    /// `dst` = `a` > `b`.
-    Greater { dst: Reg, a: Reg, b: Reg },
-    /// `dst` = a ação `action` está pressionada.
-    ActionPressed { dst: Reg, action: Reg },
+    SetVar {
+        var: usize,
+        src: Reg,
+    },
+    /// Decimais: soma, subtração, produto, quociente (erro se o divisor é zero).
+    Add {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Sub {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Mul {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Div {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    /// Comparações de decimais: `dst` = a > b, a < b, a == b.
+    Greater {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Less {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    Equal {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    /// Inteiros: `dst` = a + b, e `dst` = a < b (usado pelo ForEach).
+    IntAdd {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    IntLess {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    /// Vetores 2D: monta [x, y]; soma; escala por um decimal; comprimento.
+    MakeVec {
+        dst: Reg,
+        x: Reg,
+        y: Reg,
+    },
+    AddVec {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    ScaleVec {
+        dst: Reg,
+        vector: Reg,
+        scale: Reg,
+    },
+    VecLength {
+        dst: Reg,
+        vector: Reg,
+    },
+    /// Texto: `dst` = a seguido de b.
+    Concat {
+        dst: Reg,
+        a: Reg,
+        b: Reg,
+    },
+    /// Escreve `msg` no console, no nível dado (CON-004).
+    Log {
+        level: LogLevel,
+        msg: Reg,
+    },
+    /// Entrada: ação pressionada, pressionada neste quadro, solta neste quadro.
+    ActionPressed {
+        dst: Reg,
+        action: Reg,
+    },
+    ActionJustPressed {
+        dst: Reg,
+        action: Reg,
+    },
+    ActionReleased {
+        dst: Reg,
+        action: Reg,
+    },
+    /// Eixo (-1, 0 ou 1) e vetor das quatro ações.
+    GetAxis {
+        dst: Reg,
+        negative: Reg,
+        positive: Reg,
+    },
+    GetVector {
+        dst: Reg,
+        left: Reg,
+        right: Reg,
+        up: Reg,
+        down: Reg,
+    },
+    /// Posição do mouse no mundo e na tela.
+    MouseWorld {
+        dst: Reg,
+    },
+    MouseScreen {
+        dst: Reg,
+    },
     /// `dst` = propriedade `name` do nó `node`.
-    GetProp { dst: Reg, node: Reg, name: Reg },
+    GetProp {
+        dst: Reg,
+        node: Reg,
+        name: Reg,
+    },
     /// Grava `value` na propriedade `name` do nó `node`.
-    SetProp { node: Reg, name: Reg, value: Reg },
-    /// Escreve o texto `msg` no console.
-    Print { msg: Reg },
+    SetProp {
+        node: Reg,
+        name: Reg,
+        value: Reg,
+    },
+    /// `dst` = o nó da cena com o nome dado (0 quando não existe).
+    FindNode {
+        dst: Reg,
+        name: Reg,
+    },
+    /// `dst` = referência do nó criado ao instanciar a cena no ponto dado.
+    InstanceScene {
+        dst: Reg,
+        scene: Reg,
+        position: Reg,
+    },
     /// Remove o nó `node` da cena.
-    Destroy { node: Reg },
+    Destroy {
+        node: Reg,
+    },
+    /// `dst` = se o corpo está no chão depois de mover com a velocidade dada.
+    MoveAndSlide {
+        dst: Reg,
+        node: Reg,
+        velocity: Reg,
+    },
+    /// Comando de áudio para o host.
+    Audio(AudioOp),
     /// Salta para a op de índice `target`.
-    Jump { target: usize },
+    Jump {
+        target: usize,
+    },
     /// Salta para `target` quando `cond` é falso.
-    JumpIfFalse { cond: Reg, target: usize },
+    JumpIfFalse {
+        cond: Reg,
+        target: usize,
+    },
+    /// Latente: pausa a tarefa pelos segundos em `seconds`.
+    Wait {
+        seconds: Reg,
+    },
+    /// Latente: interpola a propriedade `name` do nó `node` até `to`, em `seconds`.
+    Tween {
+        node: Reg,
+        name: Reg,
+        to: Reg,
+        seconds: Reg,
+    },
+    /// Latente: interpola a posição do nó até `target`, em `seconds`.
+    MoveTo {
+        node: Reg,
+        target: Reg,
+        seconds: Reg,
+    },
+    /// Latente: espera o sinal com o nome `name` ser emitido.
+    AwaitSignal {
+        name: Reg,
+    },
+    /// Emite o sinal `name`. Acorda as tarefas que aguardam esse nome no próximo quadro.
+    EmitSignal {
+        name: Reg,
+    },
+    /// Cria uma tarefa nova que começa em `entry` depois de `seconds`. A tarefa atual segue adiante.
+    Spawn {
+        seconds: Reg,
+        entry: usize,
+    },
+    /// Pede a troca do estado ativo para o nome em `name`. A VM anota o pedido e o agendador faz a troca
+    /// (sai o estado antigo, entra o novo) logo depois da op.
+    GoToState {
+        name: Reg,
+    },
 }
 
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
@@ -56,27 +263,32 @@ pub struct Program {
     /// Id do nó de evento de onde o programa veio.
     pub node: u64,
     pub ops: Vec<Op>,
-    /// Nó de origem de cada op, no mesmo índice de `ops`. Serve para os erros e, depois, para a depuração.
+    /// Nó de origem de cada op, no mesmo índice de `ops`. Serve para os erros, o rastro e os pontos de parada.
     pub sources: Vec<u64>,
     /// Quantidade de registradores que o programa usa.
     pub regs: usize,
+    /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
+    pub estado: Option<String>,
 }
 
-/// Resultado da compilação: as variáveis do script e um programa por nó de evento.
+/// Resultado da compilação: as variáveis do script, um programa por nó de evento e o estado inicial.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Compiled {
     /// Variáveis do script, na ordem em que as ops `GetVar` e `SetVar` as indexam.
     pub variables: Vec<Variable>,
     pub programs: Vec<Program>,
+    /// Estado inicial: o primeiro nó "State" do grafo. `None` quando o grafo não tem estados.
+    pub estado_inicial: Option<String>,
 }
 
 impl Compiled {
-    /// Contexto de uma instância do script, com as variáveis no valor padrão.
+    /// Contexto de uma instância do script, com as variáveis no valor padrão e no estado inicial.
     pub fn new_context(&self, owner: u64) -> Context {
         Context {
             owner,
             delta: 0.0,
             vars: self.variables.iter().map(|v| v.default.clone()).collect(),
+            estado: self.estado_inicial.clone().unwrap_or_default(),
         }
     }
 
@@ -86,21 +298,6 @@ impl Compiled {
     }
 }
 
-/// Erro de validação. `node` é o nó onde o problema foi achado, quando há um.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CompileError {
-    pub node: Option<u64>,
-    pub message: String,
-}
-
-impl fmt::Display for CompileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for CompileError {}
-
 fn err(node: u64, message: impl Into<String>) -> CompileError {
     CompileError {
         node: Some(node),
@@ -108,10 +305,13 @@ fn err(node: u64, message: impl Into<String>) -> CompileError {
     }
 }
 
-/// Compila o grafo: um programa por nó de evento. Devolve todos os erros de validação que achar.
+/// Compila o grafo: um programa por nó de evento. Primeiro roda `Graph::validate` (o mesmo que o editor usa),
+/// e só compila se não houver erro. Devolve todos os erros de validação que achar.
 pub fn compile(graph: &Graph) -> Result<Compiled, Vec<CompileError>> {
-    let mut errors = Vec::new();
-    check_graph(graph, &mut errors);
+    let mut errors = graph.validate();
+    if !errors.is_empty() {
+        return Err(errors);
+    }
     let mut programs = Vec::new();
     for event in graph.nodes.iter().filter(|n| is_event(n)) {
         match compile_event(graph, event) {
@@ -122,44 +322,19 @@ pub fn compile(graph: &Graph) -> Result<Compiled, Vec<CompileError>> {
     if !errors.is_empty() {
         return Err(errors);
     }
+    let estado_inicial = programs
+        .iter()
+        .find(|p| p.event == "State")
+        .and_then(|p| p.estado.clone());
     Ok(Compiled {
         variables: graph.variables.clone(),
         programs,
+        estado_inicial,
     })
 }
 
 fn is_event(node: &GraphNode) -> bool {
     library::find(&node.kind).is_some_and(|d| d.event)
-}
-
-/// Checagens que valem para o grafo inteiro, mesmo nos nós que nenhum evento alcança.
-fn check_graph(graph: &Graph, errors: &mut Vec<CompileError>) {
-    let mut ids = HashSet::new();
-    for node in &graph.nodes {
-        if !ids.insert(node.id) {
-            errors.push(err(node.id, format!("id de nó repetido: {}", node.id)));
-        }
-        if let Err(msg) = def_of(node) {
-            errors.push(err(node.id, msg));
-        }
-    }
-    // Fios montados à mão (por exemplo, num arquivo editado) não passaram pelo `connect`.
-    let mut ligadas = HashSet::new();
-    for w in &graph.wires {
-        if let Err(msg) = graph.endpoint_type(&w.from, &w.to) {
-            errors.push(err(w.to.node, msg));
-            continue;
-        }
-        if !ligadas.insert(&w.to) {
-            errors.push(err(
-                w.to.node,
-                format!(
-                    "a entrada '{}' do nó {} está ligada mais de uma vez",
-                    w.to.pin, w.to.node
-                ),
-            ));
-        }
-    }
 }
 
 fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileError> {
@@ -170,15 +345,32 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         regs: 0,
         flow_stack: Vec::new(),
         value_stack: Vec::new(),
+        produzidas: BTreeMap::new(),
+        chamadas: Vec::new(),
+        retornos: Vec::new(),
     };
     e.flow(event.id, "exec")?;
+    // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
+    let estado = match event.kind.as_str() {
+        "State" | "StateEnter" | "StateExit" => Some(texto_embutido(event, "state")),
+        _ => None,
+    };
     Ok(Program {
         event: event.kind.clone(),
         node: event.id,
         ops: e.ops,
         sources: e.sources,
         regs: e.regs,
+        estado,
     })
+}
+
+/// Texto embutido num pino do nó, ou vazio quando o pino não tem valor embutido.
+fn texto_embutido(node: &GraphNode, pin: &str) -> String {
+    match node.values.get(pin) {
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
 }
 
 /// Estado da compilação de um evento.
@@ -191,6 +383,14 @@ struct Emitter<'g> {
     flow_stack: Vec<u64>,
     /// Nós de dados em avaliação. Um nó que aparece de novo aqui forma um ciclo de dados.
     value_stack: Vec<u64>,
+    /// Saídas de dados que um nó de fluxo produz quando roda (índice do ForEach, instância criada, no chão).
+    /// Quem lê essas saídas usa o registrador que o nó preencheu, sem refazer a operação.
+    produzidas: BTreeMap<(u64, String), Reg>,
+    /// Funções em compilação, pelo id do nó "Function". As chamadas são embutidas no lugar (sem pilha de
+    /// execução), então uma função que chama a si mesma é recusada.
+    chamadas: Vec<u64>,
+    /// Saltos de Return à espera do fim do corpo da função que está sendo embutida, uma lista por chamada.
+    retornos: Vec<Vec<usize>>,
 }
 
 impl<'g> Emitter<'g> {
@@ -208,8 +408,10 @@ impl<'g> Emitter<'g> {
 
     /// Ajusta o alvo de um salto já emitido.
     fn patch(&mut self, at: usize, target: usize) {
-        if let Op::Jump { target: t } | Op::JumpIfFalse { target: t, .. } = &mut self.ops[at] {
-            *t = target;
+        match &mut self.ops[at] {
+            Op::Jump { target: t } | Op::JumpIfFalse { target: t, .. } => *t = target,
+            Op::Spawn { entry, .. } => *entry = target,
+            _ => {}
         }
     }
 
@@ -217,7 +419,11 @@ impl<'g> Emitter<'g> {
     /// na ordem em que foram criados.
     fn flow(&mut self, from: u64, pin: &str) -> Result<(), CompileError> {
         let graph = self.graph;
-        for w in graph.wires.iter().filter(|w| w.from.node == from && w.from.pin == pin) {
+        for w in graph
+            .wires
+            .iter()
+            .filter(|w| w.from.node == from && w.from.pin == pin)
+        {
             self.exec(w.to.node)?;
         }
         Ok(())
@@ -241,9 +447,14 @@ impl<'g> Emitter<'g> {
     fn exec_node(&mut self, node: &'g GraphNode) -> Result<(), CompileError> {
         let id = node.id;
         match node.kind.as_str() {
-            "Print" => {
+            "Print" | "Warn" | "Error" => {
+                let level = match node.kind.as_str() {
+                    "Warn" => LogLevel::Warning,
+                    "Error" => LogLevel::Error,
+                    _ => LogLevel::Info,
+                };
                 let msg = self.input(node, "msg")?;
-                self.emit(Op::Print { msg }, id);
+                self.emit(Op::Log { level, msg }, id);
                 self.flow(id, "exec")
             }
             "Destroy" => {
@@ -252,14 +463,12 @@ impl<'g> Emitter<'g> {
                 self.flow(id, "exec")
             }
             "SetProperty" => {
-                let target = self.input(node, "node")?;
-                let name = self.input(node, "name")?;
-                let value = self.input(node, "value")?;
+                let r = self.entradas(node, &["node", "name", "value"])?;
                 self.emit(
                     Op::SetProp {
-                        node: target,
-                        name,
-                        value,
+                        node: r[0],
+                        name: r[1],
+                        value: r[2],
                     },
                     id,
                 );
@@ -288,14 +497,244 @@ impl<'g> Emitter<'g> {
                 self.flow(id, "then_0")?;
                 self.flow(id, "then_1")
             }
+            "ForEach" => {
+                // idx = 0; cabeça: se !(idx < count) vai ao fim; corpo; idx += 1; volta à cabeça; fim:
+                let count = self.input(node, "count")?;
+                let idx = self.reg();
+                self.emit(
+                    Op::Const {
+                        dst: idx,
+                        value: Value::Int(0),
+                    },
+                    id,
+                );
+                self.produzidas.insert((id, "index".into()), idx);
+                let head = self.ops.len();
+                let cond = self.reg();
+                self.emit(
+                    Op::IntLess {
+                        dst: cond,
+                        a: idx,
+                        b: count,
+                    },
+                    id,
+                );
+                let to_end = self.emit(Op::JumpIfFalse { cond, target: 0 }, id);
+                self.flow(id, "body")?;
+                let um = self.reg();
+                self.emit(
+                    Op::Const {
+                        dst: um,
+                        value: Value::Int(1),
+                    },
+                    id,
+                );
+                self.emit(
+                    Op::IntAdd {
+                        dst: idx,
+                        a: idx,
+                        b: um,
+                    },
+                    id,
+                );
+                self.emit(Op::Jump { target: head }, id);
+                let end = self.ops.len();
+                self.patch(to_end, end);
+                self.flow(id, "done")
+            }
+            "While" => {
+                // cabeça: condição avaliada a cada volta; se falsa vai ao fim; corpo; volta à cabeça; fim:
+                let head = self.ops.len();
+                let cond = self.input(node, "condition")?;
+                let to_end = self.emit(Op::JumpIfFalse { cond, target: 0 }, id);
+                self.flow(id, "body")?;
+                self.emit(Op::Jump { target: head }, id);
+                let end = self.ops.len();
+                self.patch(to_end, end);
+                self.flow(id, "done")
+            }
+            "Wait" => {
+                let seconds = self.input(node, "seconds")?;
+                self.emit(Op::Wait { seconds }, id);
+                self.flow(id, "exec")
+            }
+            "Tween" => {
+                let r = self.entradas(node, &["node", "property", "to", "seconds"])?;
+                self.emit(
+                    Op::Tween {
+                        node: r[0],
+                        name: r[1],
+                        to: r[2],
+                        seconds: r[3],
+                    },
+                    id,
+                );
+                self.flow(id, "exec")
+            }
+            "MoveTo" => {
+                let r = self.entradas(node, &["node", "target", "seconds"])?;
+                self.emit(
+                    Op::MoveTo {
+                        node: r[0],
+                        target: r[1],
+                        seconds: r[2],
+                    },
+                    id,
+                );
+                self.flow(id, "exec")
+            }
+            "AwaitSignal" => {
+                let name = self.input(node, "name")?;
+                self.emit(Op::AwaitSignal { name }, id);
+                self.flow(id, "exec")
+            }
+            "EmitSignal" => {
+                let name = self.input(node, "name")?;
+                self.emit(Op::EmitSignal { name }, id);
+                self.flow(id, "exec")
+            }
+            "TimerStart" => {
+                // Spawn(segundos, entrada) cria a tarefa do temporizador; a atual segue por "Iniciado".
+                let seconds = self.input(node, "seconds")?;
+                let spawn = self.emit(Op::Spawn { seconds, entry: 0 }, id);
+                self.flow(id, "started")?;
+                let to_end = self.emit(Op::Jump { target: 0 }, id);
+                let entry = self.ops.len();
+                self.patch(spawn, entry);
+                self.flow(id, "timeout")?;
+                let end = self.ops.len();
+                self.patch(to_end, end);
+                Ok(())
+            }
+            "InstanceScene" => {
+                let r = self.entradas(node, &["scene", "position"])?;
+                let dst = self.reg();
+                self.emit(
+                    Op::InstanceScene {
+                        dst,
+                        scene: r[0],
+                        position: r[1],
+                    },
+                    id,
+                );
+                self.produzidas.insert((id, "instance".into()), dst);
+                self.flow(id, "exec")
+            }
+            "MoveAndSlide" => {
+                let r = self.entradas(node, &["node", "velocity"])?;
+                let dst = self.reg();
+                self.emit(
+                    Op::MoveAndSlide {
+                        dst,
+                        node: r[0],
+                        velocity: r[1],
+                    },
+                    id,
+                );
+                self.produzidas.insert((id, "on_floor".into()), dst);
+                self.flow(id, "exec")
+            }
+            "PlaySound" => {
+                let r = self.entradas(node, &["sound", "bus", "volume"])?;
+                self.emit(
+                    Op::Audio(AudioOp::Play {
+                        sound: r[0],
+                        bus: r[1],
+                        volume: r[2],
+                    }),
+                    id,
+                );
+                self.flow(id, "exec")
+            }
+            "StopSound" => {
+                let sound = self.input(node, "sound")?;
+                self.emit(Op::Audio(AudioOp::Stop { sound }), id);
+                self.flow(id, "exec")
+            }
+            "FadeSound" => {
+                let r = self.entradas(node, &["sound", "volume", "seconds"])?;
+                self.emit(
+                    Op::Audio(AudioOp::Fade {
+                        sound: r[0],
+                        volume: r[1],
+                        seconds: r[2],
+                    }),
+                    id,
+                );
+                self.flow(id, "exec")
+            }
+            "SetBusVolume" => {
+                let r = self.entradas(node, &["bus", "volume"])?;
+                self.emit(
+                    Op::Audio(AudioOp::SetBus {
+                        bus: r[0],
+                        volume: r[1],
+                    }),
+                    id,
+                );
+                self.flow(id, "exec")
+            }
+            // O reroute só repassa o fluxo: a execução segue pelos fios que saem dele.
+            REROUTE => self.flow(id, "out"),
+            "CallFunction" => {
+                // O corpo da função é embutido aqui. O que vem depois do Return cai no fim do corpo, e a
+                // chamada segue pelo fluxo de saída.
+                let graph = self.graph;
+                let nome = texto_embutido(node, "name");
+                let def = graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.kind == "Function" && texto_embutido(n, "name") == nome)
+                    .ok_or_else(|| err(id, format!("função '{nome}' não existe")))?;
+                if self.chamadas.contains(&def.id) {
+                    return Err(err(id, format!("chamada recursiva da função '{nome}'")));
+                }
+                self.chamadas.push(def.id);
+                self.retornos.push(Vec::new());
+                self.flow(def.id, "exec")?;
+                let fim = self.ops.len();
+                for salto in self.retornos.pop().unwrap_or_default() {
+                    self.patch(salto, fim);
+                }
+                self.chamadas.pop();
+                self.flow(id, "exec")
+            }
+            "Return" => {
+                if self.retornos.is_empty() {
+                    return Err(err(id, "retorno fora de uma função"));
+                }
+                let salto = self.emit(Op::Jump { target: 0 }, id);
+                if let Some(corpo) = self.retornos.last_mut() {
+                    corpo.push(salto);
+                }
+                Ok(())
+            }
+            "GoToState" => {
+                let name = self.input(node, "state")?;
+                self.emit(Op::GoToState { name }, id);
+                self.flow(id, "exec")
+            }
             other => Err(err(id, format!("{other} não é um nó de fluxo"))),
         }
+    }
+
+    /// Registradores das entradas `pins`, na mesma ordem. Cada uma segue a regra de `input`.
+    fn entradas(&mut self, node: &'g GraphNode, pins: &[&str]) -> Result<Vec<Reg>, CompileError> {
+        let mut regs = Vec::with_capacity(pins.len());
+        for pin in pins {
+            regs.push(self.input(node, pin)?);
+        }
+        Ok(regs)
     }
 
     /// Registrador com o valor da entrada `pin`: pelo fio, se houver; senão, pelo valor embutido ou pelo padrão.
     fn input(&mut self, node: &'g GraphNode, pin: &str) -> Result<Reg, CompileError> {
         let graph = self.graph;
-        if let Some(w) = graph.wires.iter().find(|w| w.to.node == node.id && w.to.pin == pin) {
+        if let Some(w) = graph
+            .wires
+            .iter()
+            .find(|w| w.to.node == node.id && w.to.pin == pin)
+        {
             return self.output(w.from.node, &w.from.pin);
         }
         let expected = graph.input_type(node, pin).map_err(|m| err(node.id, m))?;
@@ -308,7 +747,10 @@ impl<'g> Emitter<'g> {
         let value = node.values.get(pin).cloned().or(default).ok_or_else(|| {
             err(
                 node.id,
-                format!("entrada obrigatória '{pin}' de {} não está conectada", node.etiqueta()),
+                format!(
+                    "entrada obrigatória '{pin}' de {} não está conectada",
+                    node.etiqueta()
+                ),
             )
         })?;
         if value.ty() != expected {
@@ -349,7 +791,8 @@ impl<'g> Emitter<'g> {
     }
 
     /// Registrador com o valor da saída `pin` do nó `id`. Cada uso avalia o nó de novo. Isso é seguro: nós de
-    /// dados não têm efeito colateral, quem age é o fluxo.
+    /// dados não têm efeito colateral, quem age é o fluxo. As saídas que o fluxo produz são lidas do registrador
+    /// que o nó preencheu.
     fn output(&mut self, id: u64, pin: &str) -> Result<Reg, CompileError> {
         if self.value_stack.contains(&id) {
             return Err(err(id, format!("ciclo de dados no nó {id}")));
@@ -358,6 +801,9 @@ impl<'g> Emitter<'g> {
         let node = graph
             .node(id)
             .ok_or_else(|| err(id, format!("nó {id} não existe no grafo")))?;
+        if let Some(&reg) = self.produzidas.get(&(id, pin.to_string())) {
+            return Ok(reg);
+        }
         self.value_stack.push(id);
         let result = self.output_node(node, pin);
         self.value_stack.pop();
@@ -377,33 +823,108 @@ impl<'g> Emitter<'g> {
                 self.emit(Op::Delta { dst }, id);
                 Ok(dst)
             }
-            ("Add" | "Multiply" | "Greater", "result") => {
-                let a = self.input(node, "a")?;
-                let b = self.input(node, "b")?;
+            ("Add", "result") => self.binario(node, |dst, a, b| Op::Add { dst, a, b }),
+            ("Subtract", "result") => self.binario(node, |dst, a, b| Op::Sub { dst, a, b }),
+            ("Multiply", "result") => self.binario(node, |dst, a, b| Op::Mul { dst, a, b }),
+            ("Divide", "result") => self.binario(node, |dst, a, b| Op::Div { dst, a, b }),
+            ("Greater", "result") => self.binario(node, |dst, a, b| Op::Greater { dst, a, b }),
+            ("Less", "result") => self.binario(node, |dst, a, b| Op::Less { dst, a, b }),
+            ("Equal", "result") => self.binario(node, |dst, a, b| Op::Equal { dst, a, b }),
+            ("Concat", "result") => self.binario(node, |dst, a, b| Op::Concat { dst, a, b }),
+            ("AddVector2", "result") => self.binario(node, |dst, a, b| Op::AddVec { dst, a, b }),
+            ("MakeVector2", "result") => {
+                let r = self.entradas(node, &["x", "y"])?;
                 let dst = self.reg();
-                let op = match node.kind.as_str() {
-                    "Add" => Op::Add { dst, a, b },
-                    "Multiply" => Op::Mul { dst, a, b },
-                    _ => Op::Greater { dst, a, b },
-                };
-                self.emit(op, id);
+                self.emit(
+                    Op::MakeVec {
+                        dst,
+                        x: r[0],
+                        y: r[1],
+                    },
+                    id,
+                );
+                Ok(dst)
+            }
+            ("ScaleVector2", "result") => {
+                let r = self.entradas(node, &["vector", "scale"])?;
+                let dst = self.reg();
+                self.emit(
+                    Op::ScaleVec {
+                        dst,
+                        vector: r[0],
+                        scale: r[1],
+                    },
+                    id,
+                );
+                Ok(dst)
+            }
+            ("VectorLength", "result") => {
+                let vector = self.input(node, "vector")?;
+                let dst = self.reg();
+                self.emit(Op::VecLength { dst, vector }, id);
                 Ok(dst)
             }
             ("ActionPressed", "pressed") => {
-                let action = self.input(node, "action")?;
+                self.acao(node, |dst, action| Op::ActionPressed { dst, action })
+            }
+            ("ActionJustPressed", "pressed") => {
+                self.acao(node, |dst, action| Op::ActionJustPressed { dst, action })
+            }
+            ("ActionReleased", "released") => {
+                self.acao(node, |dst, action| Op::ActionReleased { dst, action })
+            }
+            ("GetAxis", "value") => {
+                let r = self.entradas(node, &["negative", "positive"])?;
                 let dst = self.reg();
-                self.emit(Op::ActionPressed { dst, action }, id);
+                self.emit(
+                    Op::GetAxis {
+                        dst,
+                        negative: r[0],
+                        positive: r[1],
+                    },
+                    id,
+                );
+                Ok(dst)
+            }
+            ("GetVector", "value") => {
+                let r = self.entradas(node, &["left", "right", "up", "down"])?;
+                let dst = self.reg();
+                self.emit(
+                    Op::GetVector {
+                        dst,
+                        left: r[0],
+                        right: r[1],
+                        up: r[2],
+                        down: r[3],
+                    },
+                    id,
+                );
+                Ok(dst)
+            }
+            ("MousePositionWorld", "position") => {
+                let dst = self.reg();
+                self.emit(Op::MouseWorld { dst }, id);
+                Ok(dst)
+            }
+            ("MousePositionScreen", "position") => {
+                let dst = self.reg();
+                self.emit(Op::MouseScreen { dst }, id);
+                Ok(dst)
+            }
+            ("GetNode", "node") => {
+                let name = self.input(node, "name")?;
+                let dst = self.reg();
+                self.emit(Op::FindNode { dst, name }, id);
                 Ok(dst)
             }
             ("GetProperty", "value") => {
-                let target = self.input(node, "node")?;
-                let name = self.input(node, "name")?;
+                let r = self.entradas(node, &["node", "name"])?;
                 let dst = self.reg();
                 self.emit(
                     Op::GetProp {
                         dst,
-                        node: target,
-                        name,
+                        node: r[0],
+                        name: r[1],
                     },
                     id,
                 );
@@ -415,8 +936,55 @@ impl<'g> Emitter<'g> {
                 self.emit(Op::GetVar { dst, var }, id);
                 Ok(dst)
             }
-            _ => Err(err(id, format!("{} não tem a saída de valor '{pin}'", node.etiqueta()))),
+            // O valor do reroute é o valor do fio que chega nele.
+            (REROUTE, "out") => {
+                let graph = self.graph;
+                let w = graph
+                    .wires
+                    .iter()
+                    .find(|w| w.to.node == id && w.to.pin == "in")
+                    .ok_or_else(|| err(id, format!("{} sem fio de entrada", node.etiqueta())))?;
+                self.output(w.from.node, &w.from.pin)
+            }
+            // Saídas de nós de fluxo: só existem depois que o nó roda, e ficam no mapa `produzidas`.
+            ("InstanceScene", "instance") | ("MoveAndSlide", "on_floor") | ("ForEach", "index") => {
+                Err(err(
+                    id,
+                    format!(
+                        "a saída '{pin}' de {} é lida antes do nó rodar: ligue o nó ao fluxo antes de usar a saída",
+                        node.etiqueta()
+                    ),
+                ))
+            }
+            _ => Err(err(
+                id,
+                format!("{} não tem a saída de valor '{pin}'", node.etiqueta()),
+            )),
         }
+    }
+
+    /// Op binária de decimais ou vetores: lê as entradas `a` e `b` e grava a saída num registrador novo.
+    fn binario(
+        &mut self,
+        node: &'g GraphNode,
+        make: impl FnOnce(Reg, Reg, Reg) -> Op,
+    ) -> Result<Reg, CompileError> {
+        let r = self.entradas(node, &["a", "b"])?;
+        let dst = self.reg();
+        self.emit(make(dst, r[0], r[1]), node.id);
+        Ok(dst)
+    }
+
+    /// Consulta de ação de entrada: lê o nome da ação e grava o resultado num registrador novo.
+    fn acao(
+        &mut self,
+        node: &'g GraphNode,
+        make: impl FnOnce(Reg, Reg) -> Op,
+    ) -> Result<Reg, CompileError> {
+        let action = self.input(node, "action")?;
+        let dst = self.reg();
+        self.emit(make(dst, action), node.id);
+        Ok(dst)
     }
 }
 
@@ -482,7 +1050,10 @@ mod tests {
             },
         });
         let erros = compile(&g).unwrap_err();
-        assert!(erros.iter().any(|e| e.message.contains("ciclo de fluxo")), "{erros:?}");
+        assert!(
+            erros.iter().any(|e| e.message.contains("ciclo de fluxo")),
+            "{erros:?}"
+        );
     }
 
     #[test]
@@ -505,5 +1076,29 @@ mod tests {
             ]
         );
         assert_eq!(c.programs[0].regs, 1);
+    }
+
+    #[test]
+    fn saida_de_no_de_fluxo_lida_antes_de_rodar_e_recusada() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        // O InstanceScene roda só no OnProcess; o SetProperty do OnReady lê a instância antes de ela existir.
+        let ep = adiciona(&mut g, "OnProcess");
+        let inst = adiciona(&mut g, "InstanceScene");
+        g.set_value(inst, "scene", Value::String("bala.scene".into()))
+            .unwrap();
+        g.connect((ep, "exec"), (inst, "exec")).unwrap();
+        let sp = adiciona(&mut g, "SetProperty");
+        g.set_value(sp, "name", Value::String("position_x".into()))
+            .unwrap();
+        g.connect((ev, "exec"), (sp, "exec")).unwrap();
+        g.connect((inst, "instance"), (sp, "node")).unwrap();
+        let erros = compile(&g).unwrap_err();
+        assert!(
+            erros
+                .iter()
+                .any(|e| e.node == Some(inst) && e.message.contains("antes do nó rodar")),
+            "{erros:?}"
+        );
     }
 }
