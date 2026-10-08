@@ -745,4 +745,23 @@ mod tests {
         let pitch = serde_json::to_value(prop_def("AudioStreamPlayer", "pitch_scale").unwrap()).unwrap();
         assert_eq!(pitch["slider"], json!(true));
     }
+
+    #[test]
+    fn physics_node_types_are_2d_in_physics_category() {
+        // SCN-013 guard: the six body and shape types stay registered, 2D, and listed under "Física".
+        for name in [
+            "StaticBody2D",
+            "RigidBody2D",
+            "CharacterBody2D",
+            "Area2D",
+            "CollisionShape2D",
+            "CollisionPolygon2D",
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} is not registered"));
+            assert_eq!(def.category, "Física", "{name}");
+            assert!(is_2d(name), "{name}");
+        }
+        // The polygon's points are edited as a list of [x, y] pairs (PHY-011).
+        assert_eq!(prop_def("CollisionPolygon2D", "points").unwrap().kind, PropKind::Points);
+    }
 }

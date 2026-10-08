@@ -834,6 +834,27 @@ fn poligono_com_poucos_pontos_e_ignorado() {
     assert!(pos(&s, caixa)[1] > 300.0);
 }
 
+#[test]
+fn disabled_polygon_gives_no_collider() {
+    // SCN-013 guard: a disabled CollisionPolygon2D is skipped, like a disabled CollisionShape2D.
+    let mut s = Scene::new("teste", 91);
+    let root = raiz(&mut s);
+    let floor = node(&mut s, Some(root), "StaticBody2D", json!({"position": [0.0, 300.0]}));
+    node(
+        &mut s,
+        Some(floor),
+        "CollisionPolygon2D",
+        json!({"points": [[-150.0, -16.0], [150.0, -16.0], [150.0, 16.0], [-150.0, 16.0]], "disabled": true}),
+    );
+    let block = caixa_em(&mut s, root, 0.0, 0.0, json!({}));
+
+    let mut p = Physics::build(&s, &cfg());
+    run(&mut p, &mut s, 2.0);
+
+    // Active, the polygon's top (y = 284) would stop the box at y = 268; disabled, the box falls past y = 300.
+    assert!(pos(&s, block)[1] > 300.0);
+}
+
 // ---------- PHY-020, PHY-021, PHY-022: camadas, gravidade e matriz ----------
 
 #[test]
