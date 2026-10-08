@@ -7,15 +7,17 @@
 //! Gravidade, camadas, matriz de colisão e materiais vêm de `ProjectSettings` (PHY-021).
 
 mod character;
+mod debug;
 mod hooks;
 mod shapes;
 #[cfg(test)]
 mod tests;
 
 pub use character::CharacterState;
+pub use debug::{BodyRole, DebugContact, DebugDraw, DebugShape, DebugVelocity};
 
 use character::Character;
-use hooks::{ONE_WAY, Rules};
+use hooks::{Belt, ONE_WAY, Rules};
 use nexo_core::query::{self, Xf};
 use nexo_core::scene::{as_vec2, value_of};
 use nexo_core::settings::{LAYER_COUNT, PhysicsMaterial};
@@ -285,11 +287,16 @@ impl Physics {
 
         let groups = layer_groups(node, settings);
         let material = if is_area { None } else { material_of(settings, &text(node, "physics_material")) };
+        // Esteira (PHY-002): velocidade linear e angular constantes do corpo imóvel, em torno da sua origem.
         let belt = if kind == "StaticBody2D" {
             let v = as_vec2(&value_of(node, "constant_linear_velocity"));
-            Vector::new(v[0] as f32, v[1] as f32)
+            Belt {
+                linear: Vector::new(v[0] as f32, v[1] as f32),
+                angular: to_rad(num(node, "constant_angular_velocity")),
+                center: Vector::new(body_xf.x as f32, body_xf.y as f32),
+            }
         } else {
-            Vector::ZERO
+            Belt::default()
         };
 
         let mut colliders = Vec::new();
@@ -331,7 +338,7 @@ impl Physics {
                     b = b.user_data(ONE_WAY);
                     active |= ActiveHooks::MODIFY_SOLVER_CONTACTS;
                 }
-                if belt != Vector::ZERO {
+                if belt.is_active() {
                     active |= ActiveHooks::MODIFY_SOLVER_CONTACTS;
                 }
                 b = b.active_hooks(active);
@@ -359,7 +366,7 @@ impl Physics {
         for c in colliders {
             let ch = self.world.colliders.insert_with_parent(c, handle, &mut self.world.bodies);
             self.owner.insert(ch, uid);
-            if belt != Vector::ZERO && !is_area {
+            if belt.is_active() && !is_area {
                 self.rules.belts.insert(ch, belt);
             }
             if first_collider.is_none() {
@@ -384,6 +391,7 @@ impl Physics {
             "CharacterBody2D" => {
                 if let Some(collider) = first_collider {
                     let velocity = as_vec2(&value_of(node, "velocity"));
+                    let snap = num(node, "floor_snap_length") as f32;
                     let pose = Pose2d::of(&self.world.bodies[handle]);
                     self.index.insert(uid, self.driven.len());
                     self.driven.push(Driven {
@@ -395,7 +403,7 @@ impl Physics {
                         dynamic: false,
                         gravity_scale: 0.0,
                         linear_damping: 0.0,
-                        character: Some(Character::new(velocity, collider, self.up)),
+                        character: Some(Character::new(velocity, collider, self.up, snap)),
                     });
                 }
             }
@@ -487,9 +495,11 @@ impl Physics {
         }
     }
 
-    /// Velocidade da superfície de um colisor (px/s): a da esteira, ou a do corpo que o contém.
-    fn surface_velocity(&self, c: ColliderHandle) -> [f64; 2] {
-        if let Some(v) = self.rules.belts.get(&c) {
+    /// Velocidade da superfície de um colisor no ponto `p` do mundo (px/s): a da esteira, ou a do corpo
+    /// que o contém. O corpo dinâmico dá a velocidade do próprio ponto, com a rotação (PHY-004).
+    fn surface_velocity(&self, c: ColliderHandle, p: Vector) -> [f64; 2] {
+        if let Some(b) = self.rules.belts.get(&c) {
+            let v = b.at(p);
             return [v.x as f64, v.y as f64];
         }
         let Some(&i) = self.owner.get(&c).and_then(|uid| self.index.get(uid)) else {
@@ -499,7 +509,7 @@ impl Physics {
         match &d.character {
             Some(ch) => ch.velocity,
             None => {
-                let v = self.world.bodies[d.handle].linvel();
+                let v = self.world.bodies[d.handle].velocity_at_point(p);
                 [v.x as f64, v.y as f64]
             }
         }

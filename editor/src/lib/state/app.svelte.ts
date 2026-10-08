@@ -32,6 +32,8 @@ class AppState {
   paused = $state(false);
   /** Pedido de um único quadro (Passo a passo), consumido pelo laço do viewport. */
   stepRequested = $state(false);
+  /** Desenho de depuração da física (DBG-004). Só vale nesta sessão: não entra em `persistUi`. */
+  physicsDebug = $state(false);
   paletteOpen = $state(false);
   theme = $state<'dark' | 'light'>(saved.theme ?? 'dark');
   layout = $state<'padrao' | 'cena' | 'programacao' | 'viewport'>(saved.layout ?? 'padrao');
