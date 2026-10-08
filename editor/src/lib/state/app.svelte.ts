@@ -2,6 +2,8 @@ import type { ProjectInfo } from '../platform';
 
 export type Workspace = 'cena' | 'jogo' | 'logica' | 'animacao' | 'sprite';
 export type BottomTab = 'assets' | 'console' | 'depurador' | 'csharp' | 'mixer';
+/** Tabs of the right panel: Inspector (properties) and Node (signals, SCN-034). */
+export type RightTab = 'inspector' | 'no';
 /** Ferramentas de transformação, como no Unity (VPT-001). */
 export type Tool = 'hand' | 'move' | 'rotate' | 'scale' | 'rect';
 
@@ -19,6 +21,7 @@ class AppState {
   project = $state<ProjectInfo | null>(null);
   workspace = $state<Workspace>('cena');
   bottomTab = $state<BottomTab>(saved.bottomTab ?? 'assets');
+  rightTab = $state<RightTab>(saved.rightTab ?? 'inspector');
   tool = $state<Tool>('move');
   /** Snap de grade e de rotação (VPT-002). Ctrl inverte enquanto arrasta. */
   snap = $state(saved.snap ?? false);
@@ -63,6 +66,7 @@ class AppState {
         panels: this.panels,
         sizes: this.sizes,
         bottomTab: this.bottomTab,
+        rightTab: this.rightTab,
         snap: this.snap,
         gridSize: this.gridSize,
         rotationSnap: this.rotationSnap,

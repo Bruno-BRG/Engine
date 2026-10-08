@@ -749,7 +749,7 @@ mod tests {
         let rel = create_scene(p.clone(), "scenes/Nova".into(), "Nova".into()).unwrap();
         assert_eq!(rel, "scenes/Nova.scene.ron");
         let text = fs::read_to_string(dir.join(&rel)).unwrap();
-        assert!(text.contains("format: 2"));
+        assert!(text.contains(&format!("format: {}", nexo_core::SCENE_FORMAT)));
         assert!(create_scene(p, "scenes/Nova".into(), "Nova".into()).is_err());
         fs::remove_dir_all(&dir).ok();
     }

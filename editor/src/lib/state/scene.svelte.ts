@@ -35,6 +35,19 @@ export interface NodeType {
   props: PropDef[];
 }
 
+/** Signal a node type emits (SCN-034). `name` goes into the connection; `label` is the interface text. */
+export interface SignalDef {
+  name: string;
+  label: string;
+}
+
+/** Connection from a node's signal to a target node (SCN-034). `method` is the event on the target's script that receives the signal. */
+export interface Connection {
+  signal: string;
+  target: string;
+  method: string;
+}
+
 /** Forma de colisão no mundo: `points` são os cantos (retângulo) ou pontos do círculo. */
 export interface ShapeOutline {
   uid: string;
@@ -52,6 +65,10 @@ export interface NodeView {
   visible: boolean;
   world: { x: number; y: number; rot: number; sx: number; sy: number };
   props: Record<string, any>;
+  /** Signals the type emits (empty for types that emit none). */
+  signals: SignalDef[];
+  /** Connections from this node as emitter. */
+  connections: Connection[];
 }
 
 export interface Outline {
@@ -313,6 +330,26 @@ class SceneState {
 
   changeKind(uid: string, kind: string) {
     this.#run((ed) => ed.change_kind(uid, kind));
+  }
+
+  /**
+   * Connects the signal of `emitter` to node `target`, calling `method` on it (SCN-034). Returns the reason for
+   * refusal for the dialog to show, or null if the connection was made.
+   */
+  connect(emitter: string, signal: string, target: string, method: string): string | null {
+    if (!this.#ed) return 'A cena ainda não foi carregada';
+    try {
+      this.#ed.connect(emitter, signal, target, method);
+    } catch (e) {
+      return message(e);
+    }
+    this.#refresh();
+    return null;
+  }
+
+  /** Removes a connection from the emitter (the one with the same signal, target and method). */
+  disconnect(emitter: string, link: Connection) {
+    this.#run((ed) => ed.disconnect(emitter, link.signal, link.target, link.method));
   }
 
   /** Fecha o agrupamento de alterações (soltar o mouse, sair de um campo numérico). */

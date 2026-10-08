@@ -139,8 +139,9 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> CmdResult<()> {
     Ok(())
 }
 
-/// Formato 2 é RON com o campo `format`. O formato 1 é JSON, ou RON sem esse campo.
-fn is_format_2(text: &str) -> bool {
+/// Format 2 or later is RON with a `format` field. Format 1 is JSON, or RON without that field.
+/// Counts as `>= 2`: a format 3 file is already current and must not be rewritten on every open.
+fn is_format_2_or_later(text: &str) -> bool {
     #[derive(Deserialize)]
     struct Probe {
         format: u32,
@@ -148,14 +149,14 @@ fn is_format_2(text: &str) -> bool {
     let t = text.trim_start();
     !t.starts_with('{')
         && ron::from_str::<Probe>(t)
-            .map(|p| p.format == 2)
+            .map(|p| p.format >= 2)
             .unwrap_or(false)
 }
 
-/// Migra o layout antigo para o atual (SCN-001). Pode rodar a cada abertura: sem efeito quando já está em dia.
-/// Renomeia `projeto.nexo` e `cenas/` e reescreve a cena principal no formato 2. Antes de reescrever,
-/// copia o original para `scenes/principal.scene.ron.v1.bak` (sem sobrescrever um backup existente).
-/// Nunca apaga arquivos do usuário.
+/// Migrates the old layout to the current one (SCN-001). Can run on every open: it has no effect when the layout is already current.
+/// Renames `projeto.nexo` and `cenas/` and rewrites the main scene in the current format. Before rewriting,
+/// copies the original to `scenes/principal.scene.ron.v1.bak` (without overwriting an existing backup).
+/// Never deletes user files.
 fn migrate_layout(dir: &Path, seed: u64) -> CmdResult<()> {
     let legacy_project = dir.join(LEGACY_PROJECT_FILE);
     if legacy_project.is_file() && !dir.join(PROJECT_FILE).exists() {
@@ -179,7 +180,7 @@ fn migrate_layout(dir: &Path, seed: u64) -> CmdResult<()> {
     }
 
     let text = fs::read_to_string(&target).map_err(err)?;
-    if is_format_2(&text) {
+    if is_format_2_or_later(&text) {
         return Ok(());
     }
     let scene = Scene::from_text(&text, seed)
@@ -359,11 +360,12 @@ pub(crate) mod testes {
         assert!(!dir.join(LEGACY_PROJECT_FILE).exists());
         assert!(!dir.join(LEGACY_SCENE_DIR).exists());
         let migrated = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
+        let expected = format!("format: {}", nexo_core::SCENE_FORMAT);
         assert!(
-            migrated.contains("format: 2"),
-            "cena migrada sem format 2:\n{migrated}"
+            migrated.contains(&expected),
+            "migrated scene without {expected}:\n{migrated}"
         );
-        assert!(is_format_2(&migrated));
+        assert!(is_format_2_or_later(&migrated));
         let backup =
             fs::read_to_string(dir.join(SCENE_DIR).join(format!("{SCENE_FILE}.v1.bak"))).unwrap();
         assert_eq!(backup, legacy);
@@ -393,18 +395,27 @@ pub(crate) mod testes {
         migrate_layout(&dir, 7).unwrap();
 
         let migrated = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
-        assert!(is_format_2(&migrated));
+        assert!(is_format_2_or_later(&migrated));
         let scene = Scene::from_text(&migrated, 7).unwrap();
         assert_eq!(scene.name, "Principal");
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn criar_projeto_grava_cena_no_formato_2() {
+    fn newer_format_counts_as_current_and_is_not_migrated() {
+        // A format 3 (or later) file is not rewritten by the migration.
+        assert!(is_format_2_or_later("(\n    format: 3,\n    name: \"x\",\n)"));
+        assert!(!is_format_2_or_later("(\n    name: \"x\",\n)"));
+        assert!(!is_format_2_or_later("{\"version\": 1}"));
+    }
+
+    #[test]
+    fn create_project_writes_scene_in_current_format() {
         let dir = pasta_temporaria("novo");
         let info = scaffold(&dir, "Novo", "vazio", &cena_v1()).unwrap();
         let text = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
-        assert!(is_format_2(&text));
+        assert!(is_format_2_or_later(&text));
+        assert!(text.contains(&format!("format: {}", nexo_core::SCENE_FORMAT)));
         assert_eq!(info.name, "Novo");
         assert!(dir.join("assets").is_dir() && dir.join(".nexo/cache").is_dir());
         fs::remove_dir_all(&dir).ok();

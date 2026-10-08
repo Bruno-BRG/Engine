@@ -164,6 +164,21 @@ impl SceneEditor {
         self.scene.change_kind(parse_uid(uid)?, kind).map_err(js_err)
     }
 
+    /// Connects signal `signal` of node `emitter` to node `target`, calling `method` (SCN-034). Errors if the
+    /// emitter's type does not emit the signal, the method is invalid, the target does not exist, or the connection already exists.
+    pub fn connect(&mut self, emitter: &str, signal: &str, target: &str, method: &str) -> Result<(), JsError> {
+        self.scene
+            .connect(parse_uid(emitter)?, signal, parse_uid(target)?, method)
+            .map_err(js_err)
+    }
+
+    /// Removes the connection from `emitter` with the same signal, target and method (SCN-034).
+    pub fn disconnect(&mut self, emitter: &str, signal: &str, target: &str, method: &str) -> Result<(), JsError> {
+        self.scene
+            .disconnect(parse_uid(emitter)?, signal, parse_uid(target)?, method)
+            .map_err(js_err)
+    }
+
     /// Fecha o agrupamento de alterações (soltar o mouse, sair de um campo numérico).
     pub fn end_group(&mut self) {
         self.scene.end_group();
