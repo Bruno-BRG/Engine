@@ -39,6 +39,8 @@
   let box = $state<Box>(null);
   let dropActive = $state(false);
   let dirty = true;
+  /** Ponteiro sobre este viewport, em pixels do canvas. Na reprodução, vai aos scripts (INP-003). */
+  let pointerAt: Pt | null = null;
 
   const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
   const toWorld = (sx: number, sy: number): Pt => ({
@@ -180,16 +182,27 @@
       floats[i * 12 + 7] = uid ? textures.slotOf(uid) : 0;
     }
     const dpr = window.devicePixelRatio || 1;
+    // Centro e zoom (pixels da janela por unidade de mundo) desta vista: o ponteiro usa os mesmos valores.
+    let centro: Pt;
+    let zoom: number;
     if (mode === 'cena') {
-      vp.set_camera(cam.x, cam.y, cam.zoom * dpr, t / 1000, scene.data.screen[0], scene.data.screen[1]);
+      centro = { x: cam.x, y: cam.y };
+      zoom = cam.zoom;
+      vp.set_camera(cam.x, cam.y, zoom * dpr, t / 1000, scene.data.screen[0], scene.data.screen[1]);
     } else {
       // Jogo: a câmera atual define o centro e o zoom; a moldura cabe na área com margem.
       const frame = frameSize();
       const cur = scene.camera() ?? [scene.data.screen[0] / 2, scene.data.screen[1] / 2, 1];
       const fit = Math.min(size.w / frame.w, size.h / frame.h) * 0.92;
       const z = fit * cur[2] * app.gameScale;
+      centro = { x: cur[0], y: cur[1] };
+      zoom = z;
       // Moldura em unidades de mundo divididas pelo zoom da câmera: ela fica do tamanho certo na tela.
       vp.set_camera(cur[0], cur[1], z * dpr, t / 1000, frame.w / cur[2], frame.h / cur[2]);
+    }
+    if (playing && pointerAt) {
+      const p = pointerAt;
+      ed.pointer_event(p.x, p.y, centro.x + (p.x - size.w / 2) / zoom, centro.y + (p.y - size.h / 2) / zoom);
     }
     vp.set_sprites(floats);
     try {
@@ -483,6 +496,7 @@
 
   function move(e: PointerEvent) {
     const p = local(e);
+    pointerAt = p;
     if (drag?.kind === 'pan') {
       if (Math.hypot(p.x - drag.sx, p.y - drag.sy) > 4) panMoved = true;
       cam.x = drag.cx - (p.x - drag.sx) / cam.zoom;
@@ -704,7 +718,10 @@
     onpointermove={move}
     onpointerup={up}
     onpointercancel={up}
-    onpointerleave={() => !drag && isScene && (scene.hoveredId = null)}
+    onpointerleave={() => {
+      pointerAt = null;
+      if (!drag && isScene) scene.hoveredId = null;
+    }}
     onwheel={wheel}
   ></canvas>
 

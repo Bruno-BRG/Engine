@@ -85,7 +85,8 @@ export function togglePlay() {
     log.info('Jogo parado. A cena voltou ao estado de edição.');
   } else {
     app.workspace = 'cena';
-    runtime.start();
+    // Um script com erro de compilação impede o início: o erro já foi para o Console.
+    if (!runtime.start()) return;
     log.onPlayStart();
     app.playing = true;
     log.info('Jogo iniciado no viewport.');

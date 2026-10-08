@@ -546,6 +546,17 @@ impl Scene {
     pub fn set_runtime_prop(&mut self, uid: Uid, key: &str, value: Value) -> Result<(), String> {
         self.put_raw(uid, key, value)
     }
+
+    /// Remove o nó e tudo abaixo dele sem histórico. Usado por Destruir nó na reprodução (VIS-023): a cópia de
+    /// reprodução não tem desfazer, e cada remoção com histórico copiaria a árvore inteira.
+    pub fn remove_runtime(&mut self, uid: Uid) -> Result<(), String> {
+        self.node_or_err(uid)?;
+        self.detach(uid);
+        for u in self.subtree(uid) {
+            self.nodes.remove(&u);
+        }
+        Ok(())
+    }
 }
 
 fn check_kind(kind: &str) -> Result<(), String> {
@@ -779,6 +790,20 @@ mod tests {
         assert!(s.node(a).is_none());
         assert!(s.node(b).is_none());
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn remocao_de_reproducao_nao_empilha_desfazer() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        let b = s.add_node(Some(a), "Sprite2D", None).unwrap();
+        let antes = s.undo.len();
+        s.remove_runtime(a).unwrap();
+        assert!(s.node(a).is_none() && s.node(b).is_none());
+        assert!(!s.node(root).unwrap().children.contains(&a));
+        assert_eq!(s.undo.len(), antes, "a remoção de reprodução não entra no histórico");
+        assert!(s.remove_runtime(a).is_err(), "nó já removido não existe mais");
     }
 
     #[test]

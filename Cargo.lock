@@ -2545,6 +2545,7 @@ dependencies = [
 name = "nexo-graph"
 version = "0.1.0"
 dependencies = [
+ "nexo-core",
  "ron",
  "serde",
  "serde_json",
@@ -2575,6 +2576,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "nexo-core",
+ "nexo-graph",
  "nexo-physics",
  "nexo-render",
  "serde",

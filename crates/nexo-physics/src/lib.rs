@@ -613,6 +613,41 @@ impl Physics {
     pub fn take_events(&mut self) -> Vec<PhysicsEvent> {
         std::mem::take(&mut self.events)
     }
+
+    /// Tira o corpo do nó do mundo (Destruir nó na reprodução, VIS-023): corpo, colisores, juntas e o registro
+    /// de pose. Nó sem corpo é ignorado. Quem remove a árvore chama uma vez por nó da subárvore.
+    pub fn remove(&mut self, uid: Uid) {
+        let Some(handle) = self.bodies.remove(&uid) else {
+            return;
+        };
+        let w = &mut self.world;
+        w.bodies.remove(
+            handle,
+            &mut w.islands,
+            &mut w.colliders,
+            &mut w.impulse_joints,
+            &mut w.multibody_joints,
+            &mut w.soft_bodies,
+            true,
+        );
+        self.owner.retain(|_, dono| *dono != uid);
+        let owner = &self.owner;
+        self.rules.belts.retain(|c, _| owner.contains_key(c));
+        if let Some(i) = self.index.remove(&uid) {
+            self.driven.swap_remove(i);
+            if let Some(movido) = self.driven.get(i) {
+                self.index.insert(movido.uid, i);
+            }
+        }
+        self.areas.remove(&uid);
+        self.inside.remove(&uid);
+        self.inside.retain(|_, areas| {
+            areas.remove(&uid);
+            !areas.is_empty()
+        });
+        self.overlaps.retain(|(a, b), _| *a != uid && *b != uid);
+        self.events.retain(|e| e.node != uid && e.other != uid);
+    }
 }
 
 /// Confere uma referência por nome contra as configurações do projeto: a camada (`layer`) precisa existir

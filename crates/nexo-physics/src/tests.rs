@@ -948,3 +948,34 @@ fn gravidade_zero_usa_a_direcao_da_tela_para_cima() {
     assert_eq!(up_of([0.0, 980.0]), Vector::new(0.0, -1.0));
     assert_eq!(up_of([0.0, -980.0]), Vector::new(0.0, 1.0));
 }
+
+#[test]
+fn corpo_removido_deixa_de_colidir() {
+    let mut s = Scene::new("teste", 21);
+    let root = raiz(&mut s);
+    let chao = piso(&mut s, root, 0.0, 300.0, 400.0);
+    let caixa = caixa_em(&mut s, root, 0.0, 0.0, json!({}));
+    let mut p = Physics::build(&s, &cfg());
+    // Sem o chão (topo em y = 300), a caixa cai além dele e não há contato nenhum.
+    p.remove(chao);
+    p.remove(Uid(999));
+    let ev = eventos(&mut p, &mut s, 3.0);
+    assert!(pos(&s, caixa)[1] > 300.0, "y = {}", pos(&s, caixa)[1]);
+    assert!(!ev.iter().any(|e| e.other == chao || e.node == chao));
+}
+
+#[test]
+fn remover_um_corpo_mantem_os_outros_simulados() {
+    let mut s = Scene::new("teste", 22);
+    let root = raiz(&mut s);
+    piso(&mut s, root, 0.0, 300.0, 400.0);
+    let a = caixa_em(&mut s, root, -100.0, 0.0, json!({}));
+    let b = caixa_em(&mut s, root, 100.0, 0.0, json!({}));
+    let mut p = Physics::build(&s, &cfg());
+    // `b` está depois de `a` na lista de corpos simulados: a remoção de `a` troca os índices.
+    p.remove(a);
+    run(&mut p, &mut s, 3.0);
+    // O topo do chão está em y = 300, então a caixa pousa com o centro em y = 284.
+    let y = pos(&s, b)[1];
+    assert!((y - 284.0).abs() < 1.0, "y = {y}");
+}
