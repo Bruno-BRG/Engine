@@ -4,10 +4,13 @@
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { assets } from '$lib/state/assets.svelte';
   import { textures } from '$lib/state/textures.svelte';
+  import { projectSettings } from '$lib/state/settings.svelte';
+  import { withValue } from '$lib/settings';
   import { OBJECT_PALETTE } from '$lib/palette';
   import PanelHeader from './PanelHeader.svelte';
   import NodeIcon from './NodeIcon.svelte';
   import NumberField from './NumberField.svelte';
+  import LayerMaskField from './settings/LayerMaskField.svelte';
   import { ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Lock, LockOpen, Plus, Search, Braces } from '@lucide/svelte';
 
   const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -19,11 +22,15 @@
     tag: { untagged: 'Sem tag', player: 'Jogador', enemy: 'Inimigo', coin: 'Moeda' },
     layer: { default: 'Padrão', ground: 'Chão', player: 'Jogador', enemy: 'Inimigo' },
   };
-  const TAGS = ['untagged', 'player', 'enemy', 'coin'];
-  const LAYERS = ['default', 'ground', 'player', 'enemy'];
-
   const node = $derived(scene.selected);
   const multi = $derived(scene.selection.length > 1);
+
+  // Tag e Layer vêm das Configurações do Projeto (SCN-033). Um valor da cena que não está mais na
+  // lista continua aparecendo, para o nó não perder o nome.
+  const tagOptions = $derived(withValue(projectSettings.tags, String(node?.props.tag ?? 'untagged')));
+  const layerOptions = $derived(
+    withValue(projectSettings.layers.filter(Boolean), String(node?.props.layer ?? 'default')),
+  );
 
   /** Tipos da cadeia de herança do nó, do mais específico ao `Node` (INS-002). */
   const chain = $derived.by<NodeType[]>(() => {
@@ -189,13 +196,13 @@
       <label class="field">
         <span class="flabel">Tag</span>
         <select class="sel" value={String(node.props.tag ?? 'untagged')} onchange={(e) => scene.setProp(node!.uid, 'tag', e.currentTarget.value)}>
-          {#each TAGS as tag (tag)}<option value={tag}>{ENUM_LABELS.tag[tag] ?? tag}</option>{/each}
+          {#each tagOptions as tag (tag)}<option value={tag}>{ENUM_LABELS.tag[tag] ?? tag}</option>{/each}
         </select>
       </label>
       <label class="field">
         <span class="flabel">Layer</span>
         <select class="sel" value={String(node.props.layer ?? 'default')} onchange={(e) => scene.setProp(node!.uid, 'layer', e.currentTarget.value)}>
-          {#each LAYERS as layer (layer)}<option value={layer}>{ENUM_LABELS.layer[layer] ?? layer}</option>{/each}
+          {#each layerOptions as layer (layer)}<option value={layer}>{ENUM_LABELS.layer[layer] ?? layer}</option>{/each}
         </select>
       </label>
     </div>
@@ -282,6 +289,8 @@
                             />
                           </div>
                         </div>
+                      {:else if def.kind === 'mask'}
+                        <LayerMaskField label={def.label} value={Number(v)} onchange={(m) => setProp(def, m)} />
                       {:else if def.kind === 'enum'}
                         <label class="field">
                           <span class="flabel">{def.label}</span>

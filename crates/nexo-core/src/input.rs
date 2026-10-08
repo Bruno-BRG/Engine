@@ -51,6 +51,12 @@ impl InputMap {
         }
     }
 
+    /// Religa a ação só a esta tecla (INP-005): as ligações anteriores da ação são trocadas e a
+    /// ação é criada se não existia. Outras ações não mudam, mesmo que usem a mesma tecla.
+    pub fn rebind(&mut self, action: &str, key: &str) {
+        self.actions.insert(action.to_string(), vec![key.to_string()]);
+    }
+
     /// Remove a ação inteira.
     pub fn remove_action(&mut self, action: &str) {
         self.actions.remove(action);
@@ -185,5 +191,50 @@ mod tests {
         map.bind("jump", "KeyZ");
         let text = map.to_ron().unwrap();
         assert_eq!(InputMap::from_ron(&text).unwrap(), map);
+    }
+
+    #[test]
+    fn religar_troca_as_teclas_da_acao_e_cria_acao_nova() {
+        let mut map = InputMap::defaults();
+        map.bind("ui_accept", "KeyZ");
+        map.rebind("ui_accept", "KeyX");
+        assert_eq!(map.keys("ui_accept"), ["KeyX".to_string()]);
+        map.rebind("jump", "KeyJ");
+        assert_eq!(map.keys("jump"), ["KeyJ".to_string()]);
+    }
+
+    #[test]
+    fn religar_nao_mexe_nas_outras_acoes_que_usam_a_mesma_tecla() {
+        // Space é de ui_accept por padrão. Religar "jump" a Space não tira Space de ui_accept.
+        let mut map = InputMap::defaults();
+        map.rebind("jump", "Space");
+        assert!(map.keys("ui_accept").contains(&"Space".to_string()));
+        let mut input = Input::default();
+        input.set_key("Space", true);
+        assert!(input.action_pressed(&map, "jump"));
+        assert!(input.action_pressed(&map, "ui_accept"));
+    }
+
+    #[test]
+    fn religar_em_tempo_de_execucao_muda_quem_esta_pressionado() {
+        let mut map = InputMap::defaults();
+        let mut input = Input::default();
+        map.rebind("jump", "KeyZ");
+        input.set_key("KeyZ", true);
+        assert!(input.action_pressed(&map, "jump"));
+        map.rebind("jump", "KeyX");
+        assert!(!input.action_pressed(&map, "jump"));
+        input.set_key("KeyX", true);
+        assert!(input.action_pressed(&map, "jump"));
+    }
+
+    #[test]
+    fn mapa_ida_e_volta_json_com_nomes_de_acao() {
+        let mut map = InputMap::defaults();
+        map.bind("jump", "KeyZ");
+        let json = serde_json::to_value(&map).unwrap();
+        assert_eq!(json["actions"]["jump"][0], "KeyZ");
+        let back: InputMap = serde_json::from_value(json).unwrap();
+        assert_eq!(back, map);
     }
 }

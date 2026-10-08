@@ -23,6 +23,8 @@ pub enum PropKind {
     Enum,
     /// Referência a um recurso pelo UID (hexadecimal de 16 dígitos). Vazio = nenhum.
     Uid,
+    /// Máscara de bits das camadas de colisão (INS-003): um inteiro, um bit por camada.
+    Mask,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -96,14 +98,13 @@ pub struct NodeType {
 const SHAPES: &[&str] = &["rect", "circle", "diamond"];
 const COLLIDER_SHAPES: &[&str] = &["rect", "circle"];
 const BEHAVIOR_KINDS: &[&str] = &["spin", "float", "pulse"];
-/// Tags e layers fixos até o gerenciador de tags (SCN-033, P1). As layers também são as camadas de
-/// colisão: a layer de um corpo vira um bit, e a máscara diz com quais camadas ele colide.
-const TAGS: &[&str] = &["untagged", "player", "enemy", "coin"];
+/// Camadas padrão do registro (usadas pela física até ela ler as Configurações do Projeto, PHY-021).
+/// Tag e Layer são texto: os nomes válidos vêm de `ProjectSettings` (SCN-033, INS-001), não daqui.
 pub const LAYERS: &[&str] = &["default", "ground", "player", "enemy"];
 
 /// Máscara de colisão: bits das camadas que o corpo detecta. -1 significa todas.
 fn collision_mask() -> PropDef {
-    PropDef::new("collision_mask", "Máscara de colisão", "Colisão", PropKind::Int, json!(-1))
+    PropDef::new("collision_mask", "Máscara de colisão", "Colisão", PropKind::Mask, json!(-1))
 }
 
 fn build() -> Vec<NodeType> {
@@ -114,8 +115,8 @@ fn build() -> Vec<NodeType> {
             category: "Básico",
             description: "Base de todos os nós da cena.",
             props: vec![
-                PropDef::new("tag", "Tag", "Identificação", PropKind::Enum, json!("untagged")).options(TAGS),
-                PropDef::new("layer", "Layer", "Identificação", PropKind::Enum, json!("default")).options(LAYERS),
+                PropDef::new("tag", "Tag", "Identificação", PropKind::Str, json!("untagged")),
+                PropDef::new("layer", "Layer", "Identificação", PropKind::Str, json!("default")),
                 PropDef::new("locked", "Estático", "Editor", PropKind::Bool, json!(false)),
             ],
         },

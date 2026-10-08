@@ -1,5 +1,6 @@
 import { app, type Workspace } from './state/app.svelte';
 import { scene } from './state/scene.svelte';
+import { loadProjectSettings, unloadProjectSettings } from './state/settings.svelte';
 import { runtime } from './state/runtime.svelte';
 import { assets } from './state/assets.svelte';
 import { textures } from './state/textures.svelte';
@@ -14,6 +15,7 @@ export async function openProject(info: ProjectInfo) {
   try {
     const text = await platform.loadScene(info.path);
     await scene.load(text);
+    await loadProjectSettings(info.path);
     textures.reset();
     await assets.setProject(info.path);
     app.project = info;
@@ -48,6 +50,7 @@ export async function pickAndOpenProject() {
 export async function closeProject() {
   if (app.playing) togglePlay();
   if (app.dirty) await save(true);
+  await unloadProjectSettings();
   app.project = null;
   textures.reset();
 }

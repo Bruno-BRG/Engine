@@ -256,6 +256,22 @@ impl SceneEditor {
         Ok(())
     }
 
+    /// Configurações do projeto em JSON (os mesmos nomes de campo do RON). É o formato do TypeScript.
+    pub fn settings_json(&self) -> Result<String, JsError> {
+        self.settings.to_json().map_err(js_err)
+    }
+
+    /// Substitui as configurações do projeto por um JSON. Texto vazio usa os padrões.
+    pub fn set_settings_json(&mut self, text: &str) -> Result<(), JsError> {
+        self.settings = ProjectSettings::from_json(text).map_err(js_err)?;
+        Ok(())
+    }
+
+    /// Religa a ação só a esta tecla, em tempo de execução (INP-005). Vale para o jogo em curso.
+    pub fn rebind(&mut self, action: &str, key: &str) {
+        self.settings.input.rebind(action, key);
+    }
+
     // ---------- Consultas (seguem o modo atual: edição ou reprodução) ----------
 
     fn view(&self) -> (&Scene, Option<f64>) {
