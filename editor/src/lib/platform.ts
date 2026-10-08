@@ -15,6 +15,12 @@ export interface RecentProject {
   openedAt: number;
 }
 
+/** Resultado de trocar um nome nas cenas do disco: caminhos alterados e falhas (cena ilegível, por exemplo). */
+export interface SceneRenameReport {
+  changed: string[];
+  failed: string[];
+}
+
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -83,6 +89,15 @@ export const platform = {
     const all = readWeb();
     all[path].scene = text;
     writeWeb(all);
+  },
+
+  /**
+   * Troca um nome de referência (PHY-023: o material de física) nas cenas do projeto gravadas no disco.
+   * `skip` é a cena aberta, que o editor atualiza e grava sozinho. A versão web tem uma cena por projeto.
+   */
+  async renameInSceneFiles(path: string, skip: string, key: string, from: string, to: string): Promise<SceneRenameReport> {
+    if (isTauri) return invoke('rename_prop_in_scenes', { project: path, skip, key, from, to });
+    return { changed: [], failed: [] };
   },
 
   /** Configurações do projeto em JSON (settings.ron no disco). Sem arquivo, texto vazio (padrões). */

@@ -222,3 +222,36 @@ export function renameInScene(prop: 'tag' | 'layer', from: string, to: string): 
     if ((n.props[prop] ?? padrao) === from) scene.setProp(n.uid, prop, to);
   }
 }
+
+/** Cena aberta no editor: sempre a principal (`openProject` em actions.ts a carrega). Igual a MAIN_SCENE no Rust. */
+const CENA_ABERTA = 'scenes/principal.scene.ron';
+
+/**
+ * Renomeia o material de física `index` em todo o projeto (PHY-023): a lista das configurações, os corpos da
+ * cena aberta (um passo de desfazer) e os corpos das outras cenas no disco. As configurações vão primeiro, porque
+ * o editor confere o nome novo contra elas. Nunca lança: falhas aparecem como aviso.
+ */
+export async function renameMaterialInProject(index: number, to: string): Promise<void> {
+  const from = projectSettings.physics_materials[index]?.name;
+  if (from == null || from === to) return;
+  if (settingsStatus.error) {
+    log.toast('warn', 'Material não renomeado', 'settings.ron está ilegível. Corrija o arquivo para renomear.');
+    return;
+  }
+  editSettings((s) => {
+    const m = s.physics_materials[index];
+    if (m) m.name = to;
+  });
+  scene.renameRefs('physics_material', from, to);
+  const path = settingsStatus.path;
+  if (!path) return;
+  try {
+    const report = await platform.renameInSceneFiles(path, CENA_ABERTA, 'physics_material', from, to);
+    if (report.changed.length) {
+      log.info(`Material "${from}" trocado por "${to}" em ${report.changed.length} cena(s) do disco.`);
+    }
+    if (report.failed.length) log.toast('warn', 'Cenas não atualizadas', report.failed.join('; '));
+  } catch (e) {
+    log.toast('error', 'Cenas não atualizadas', message(e));
+  }
+}

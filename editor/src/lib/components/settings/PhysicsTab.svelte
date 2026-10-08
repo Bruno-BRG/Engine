@@ -4,6 +4,7 @@
     editSettings,
     nameError,
     renameInScene,
+    renameMaterialInProject,
   } from '$lib/state/settings.svelte';
   import { LAYER_COUNT } from '$lib/settings';
   import NumberField from '../NumberField.svelte';
@@ -47,7 +48,8 @@
     });
   }
 
-  function renameMaterial(i: number, el: HTMLInputElement) {
+  /** Renomeia o material e os corpos que o usam, em todas as cenas (PHY-023). */
+  async function renameMaterial(i: number, el: HTMLInputElement) {
     const current = projectSettings.physics_materials[i]?.name ?? '';
     const names = projectSettings.physics_materials.map((m) => m.name);
     const err = nameError(names, el.value, current);
@@ -57,10 +59,7 @@
       return;
     }
     materialError = null;
-    editSettings((s) => {
-      const m = s.physics_materials[i];
-      if (m) m.name = el.value.trim();
-    });
+    await renameMaterialInProject(i, el.value.trim());
   }
 </script>
 
@@ -118,7 +117,7 @@
 <h3>Materiais de física</h3>
 <p class="hint">
   Atrito e quique de uma superfície. Áspero usa o maior atrito entre os dois corpos; absorvente usa o menor quique.
-  Um corpo usa o material pelo nome.
+  Um corpo usa o material pelo nome. Renomear um material atualiza os corpos que o usam em todas as cenas do projeto.
 </p>
 {#if materialError}<p class="err" role="alert">{materialError}</p>{/if}
 {#if projectSettings.physics_materials.length}

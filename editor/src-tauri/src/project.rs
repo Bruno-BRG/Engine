@@ -303,6 +303,74 @@ pub fn save_scene(path: String, text: String) -> CmdResult<()> {
     write_atomic(&Path::new(&path).join(MAIN_SCENE), text.as_bytes())
 }
 
+/// Resultado de `rename_prop_in_scenes`: as cenas do disco que mudaram e as que não puderam ser lidas ou gravadas.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneRenameReport {
+    pub changed: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// Caminhos relativos (com `/`) de todas as cenas do projeto, em qualquer pasta. Itens ocultos e links
+/// simbólicos ficam de fora: a troca nunca escreve fora da pasta do projeto.
+fn scene_files(dir: &Path, rel: &str, out: &mut Vec<String>) -> CmdResult<()> {
+    for entry in fs::read_dir(dir).map_err(err)? {
+        let entry = entry.map_err(err)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        let kind = entry.file_type().map_err(err)?;
+        if kind.is_dir() {
+            scene_files(&entry.path(), &child, out)?;
+        } else if kind.is_file() && name.to_lowercase().ends_with(".scene.ron") {
+            out.push(child);
+        }
+    }
+    Ok(())
+}
+
+/// Troca `from` por `to` na propriedade `key` de uma cena do disco. Só regrava o arquivo se algum nó mudou.
+fn rename_in_scene_file(path: &Path, key: &str, from: &str, to: &str) -> CmdResult<bool> {
+    let text = fs::read_to_string(path).map_err(err)?;
+    let mut scene = Scene::from_text(&text, seed_now())?;
+    if scene.rename_prop_value(key, from, to)? == 0 {
+        return Ok(false);
+    }
+    write_atomic(path, scene.to_ron()?.as_bytes())?;
+    Ok(true)
+}
+
+/// Troca um nome de referência (PHY-023: o material de física) nas cenas do projeto gravadas no disco.
+/// `skip` é o caminho relativo da cena aberta: o editor a atualiza na memória e a grava pelo autosave, então
+/// o disco dela não é mexido aqui. Cena que não pode ser lida ou gravada vai para `failed`; as outras seguem.
+#[tauri::command]
+pub fn rename_prop_in_scenes(
+    project: String,
+    skip: String,
+    key: String,
+    from: String,
+    to: String,
+) -> CmdResult<SceneRenameReport> {
+    let dir = PathBuf::from(&project);
+    if !project_file_exists(&dir) {
+        return Err(format!("{project} não é um projeto Nexo"));
+    }
+    let skip = skip.replace('\\', "/");
+    let mut files = Vec::new();
+    scene_files(&dir, "", &mut files)?;
+    let mut report = SceneRenameReport::default();
+    for rel in files.into_iter().filter(|rel| *rel != skip) {
+        match rename_in_scene_file(&dir.join(&rel), &key, &from, &to) {
+            Ok(true) => report.changed.push(rel),
+            Ok(false) => {}
+            Err(e) => report.failed.push(format!("{rel}: {e}")),
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 pub(crate) mod testes {
     use super::*;
@@ -420,6 +488,66 @@ pub(crate) mod testes {
         assert_eq!(settings, ProjectSettings::default());
         assert!(settings.input.keys("ui_left").contains(&"dpad_left".to_string()));
         assert!(settings.input.keys("ui_accept").contains(&"gamepad_a".to_string()));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renomear_material_nas_cenas_do_disco_poupa_a_cena_aberta() {
+        let dir = pasta_temporaria("renomear-cenas");
+        scaffold(&dir, "Teste", "vazio", &cena_v1()).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        // Uma cena nova com um corpo que usa o material dado.
+        let com_material = |material: &str| {
+            let mut s = Scene::new_default("Cena", 3);
+            let root = s.roots()[0];
+            let corpo = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+            s.set_prop(corpo, "physics_material", json!(material), None).unwrap();
+            s.to_ron().unwrap()
+        };
+        let pasta = dir.join(SCENE_DIR);
+        save_scene(path.clone(), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("Nova.scene.ron"), com_material("Gelo")).unwrap();
+        fs::create_dir_all(pasta.join("fases")).unwrap();
+        fs::write(pasta.join("fases").join("Fase 2.scene.ron"), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("Borracha.scene.ron"), com_material("Borracha")).unwrap();
+        fs::write(pasta.join(".rascunho.scene.ron"), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("quebrada.scene.ron"), "isto não é ron (").unwrap();
+        let aberta_antes = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
+        let borracha_antes = fs::read_to_string(pasta.join("Borracha.scene.ron")).unwrap();
+
+        let report = rename_prop_in_scenes(
+            path.clone(),
+            MAIN_SCENE.to_string(),
+            "physics_material".into(),
+            "Gelo".into(),
+            "Gelo2".into(),
+        )
+        .unwrap();
+
+        let mut changed = report.changed.clone();
+        changed.sort();
+        assert_eq!(changed, ["scenes/Nova.scene.ron", "scenes/fases/Fase 2.scene.ron"]);
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert!(report.failed[0].starts_with("scenes/quebrada.scene.ron: "));
+        // A cena aberta fica como está: quem a grava é o editor (autosave).
+        assert_eq!(fs::read_to_string(dir.join(MAIN_SCENE)).unwrap(), aberta_antes);
+        // Cena sem o nome antigo e item oculto não são regravados.
+        assert_eq!(fs::read_to_string(pasta.join("Borracha.scene.ron")).unwrap(), borracha_antes);
+        assert!(fs::read_to_string(pasta.join(".rascunho.scene.ron")).unwrap().contains("\"Gelo\""));
+        // A cena alterada usa o nome novo.
+        let nova = fs::read_to_string(pasta.join("Nova.scene.ron")).unwrap();
+        assert!(nova.contains("Gelo2") && !nova.contains("\"Gelo\""), "{nova}");
+
+        let fora = pasta_temporaria("renomear-sem-projeto");
+        let recusa = rename_prop_in_scenes(
+            fora.to_string_lossy().into_owned(),
+            MAIN_SCENE.to_string(),
+            "physics_material".into(),
+            "Gelo".into(),
+            "Gelo2".into(),
+        );
+        assert!(recusa.is_err());
+        fs::remove_dir_all(&fora).ok();
         fs::remove_dir_all(&dir).ok();
     }
 

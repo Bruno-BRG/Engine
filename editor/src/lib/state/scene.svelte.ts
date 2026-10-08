@@ -306,6 +306,11 @@ class SceneState {
     this.setProps(uid, { [key]: value }, coalesceKey);
   }
 
+  /** Troca um nome de referência (ex.: o material de física) em todos os nós que o usam. Um passo de desfazer. */
+  renameRefs(prop: string, from: string, to: string): number {
+    return this.#run((ed) => ed.rename_prop_value(prop, from, to)) ?? 0;
+  }
+
   /** Move o nó para `parent` (ou raiz) na posição final `index` entre os irmãos. */
   move(uid: string, parent: string | null, index: number) {
     this.#run((ed) => ed.move_node(uid, parent ?? undefined, index));

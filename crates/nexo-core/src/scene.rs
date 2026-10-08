@@ -231,6 +231,34 @@ impl Scene {
         Ok(())
     }
 
+    /// Troca `from` por `to` na propriedade de texto `key` de todos os nós que a têm com esse valor, como
+    /// quando um material de física é renomeado (PHY-023). Os outros nós não mudam. A troca inteira é um
+    /// passo de desfazer; sem nenhum nó afetado, não entra no histórico. Devolve quantos nós mudaram.
+    pub fn rename_prop_value(&mut self, key: &str, from: &str, to: &str) -> Result<usize, String> {
+        let to = to.trim();
+        if to.is_empty() {
+            return Err("O nome não pode ficar vazio".into());
+        }
+        let targets: Vec<(Uid, &'static PropDef)> = self
+            .nodes
+            .iter()
+            .filter_map(|(uid, n)| {
+                let def = registry::prop_def(&n.kind, key).filter(|d| d.kind == PropKind::Str)?;
+                (value_of(n, key) == json!(from)).then_some((*uid, def))
+            })
+            .collect();
+        if targets.is_empty() || from == to {
+            return Ok(0);
+        }
+        // O novo nome é validado antes da primeira mudança, para não deixar a troca pela metade.
+        let value = coerce(targets[0].1, &json!(to))?;
+        self.begin(&format!("Renomear {}", targets[0].1.label), None);
+        for (uid, def) in &targets {
+            self.store(*uid, def, value.clone());
+        }
+        Ok(targets.len())
+    }
+
     /// Move o nó para `parent` (ou raiz), na posição final `index` entre os irmãos.
     pub fn move_node(&mut self, uid: Uid, parent: Option<Uid>, index: usize) -> Result<(), String> {
         let node = self.node_or_err(uid)?;
@@ -901,6 +929,55 @@ mod tests {
         s.set_prop(a, "layer", json!("moeda"), None).unwrap();
         assert_eq!(value_of(s.node(a).unwrap(), "layer"), json!("moeda"));
         assert!(s.set_prop(a, "layer", json!(3), None).is_err());
+    }
+
+    #[test]
+    fn renomear_material_troca_so_os_nos_com_o_nome_antigo() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        let b = s.add_node(Some(root), "RigidBody2D", None).unwrap();
+        let c = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        let sem = s.add_node(Some(root), "Node2D", None).unwrap();
+        s.set_prop(a, "physics_material", json!("Gelo"), None).unwrap();
+        s.set_prop(b, "physics_material", json!("Gelo"), None).unwrap();
+        s.set_prop(c, "physics_material", json!("Borracha"), None).unwrap();
+        let antes = s.undo.len();
+
+        assert_eq!(s.rename_prop_value("physics_material", "Gelo", "Gelo2").unwrap(), 2);
+        assert_eq!(value_of(s.node(a).unwrap(), "physics_material"), json!("Gelo2"));
+        assert_eq!(value_of(s.node(b).unwrap(), "physics_material"), json!("Gelo2"));
+        assert_eq!(value_of(s.node(c).unwrap(), "physics_material"), json!("Borracha"));
+        assert!(!s.node(sem).unwrap().props.contains_key("physics_material"));
+        // Os dois nós mudam num único passo de desfazer.
+        assert_eq!(s.undo.len(), antes + 1);
+        assert_eq!(s.undo_label(), Some("Renomear Material de física"));
+        s.undo();
+        assert_eq!(value_of(s.node(a).unwrap(), "physics_material"), json!("Gelo"));
+        assert_eq!(value_of(s.node(b).unwrap(), "physics_material"), json!("Gelo"));
+    }
+
+    #[test]
+    fn renomear_material_sem_nos_afetados_nao_entra_no_historico() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        s.set_prop(a, "physics_material", json!("Gelo"), None).unwrap();
+        let antes = s.undo.len();
+        assert_eq!(s.rename_prop_value("physics_material", "Madeira", "Pedra").unwrap(), 0);
+        assert_eq!(s.rename_prop_value("physics_material", "Gelo", "Gelo").unwrap(), 0);
+        assert_eq!(s.undo.len(), antes);
+        assert_eq!(value_of(s.node(a).unwrap(), "physics_material"), json!("Gelo"));
+    }
+
+    #[test]
+    fn renomear_material_recusa_nome_vazio_sem_mexer_na_cena() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        s.set_prop(a, "physics_material", json!("Gelo"), None).unwrap();
+        assert!(s.rename_prop_value("physics_material", "Gelo", "  ").is_err());
+        assert_eq!(value_of(s.node(a).unwrap(), "physics_material"), json!("Gelo"));
     }
 
     #[test]
