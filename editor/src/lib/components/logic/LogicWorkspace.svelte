@@ -9,7 +9,7 @@
   import UsedByPanel from './UsedByPanel.svelte';
   import VariablesPanel from './VariablesPanel.svelte';
   import CSharpLogicPanel from './CSharpLogicPanel.svelte';
-  import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare, Braces } from '@lucide/svelte';
+  import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare, Braces, Workflow, Map as MapIcon } from '@lucide/svelte';
 
   let nomeFuncao = $state('');
   /** Side panel with the C# generated from the script (VIS-024). Opened by the toolbar button. */
@@ -51,6 +51,12 @@
       </button>
       <button class="icon-btn" title="Caixa de comentário no centro da tela" aria-label="Adicionar caixa de comentário" disabled={!logic.active} onclick={() => logic.addCommentAtCenter()}>
         <MessageSquare size={12} />
+      </button>
+      <button class="icon-btn" title="Organizar os nós em colunas pelo fluxo (os selecionados, ou todos)" aria-label="Organizar os nós pelo fluxo" disabled={!logic.active} onclick={() => logic.autoLayout()}>
+        <Workflow size={13} />
+      </button>
+      <button class="icon-btn" class:active={logic.minimapVisible} title="Mostrar o minimapa" aria-label="Mostrar o minimapa" aria-pressed={logic.minimapVisible} disabled={!logic.active} onclick={() => (logic.minimapVisible = !logic.minimapVisible)}>
+        <MapIcon size={13} />
       </button>
       <span class="sep"></span>
       <button class="icon-btn" class:active={csharpOpen} title="Mostrar o C# gerado do script" aria-label="Mostrar o C# gerado do script" aria-pressed={csharpOpen} onclick={() => (csharpOpen = !csharpOpen)}>

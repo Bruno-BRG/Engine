@@ -115,3 +115,147 @@ export function zoomAt(cam: Camera, factor: number, sx: number, sy: number): Cam
 export function toWorld(cam: Camera, sx: number, sy: number): Vec {
   return [(sx - cam.x) / cam.zoom, (sy - cam.y) / cam.zoom];
 }
+
+/**
+ * Below this zoom, nodes drop their labels and value fields, and comment boxes show a preview (semantic zoom, VIS-014).
+ */
+export const DETAIL_MIN_ZOOM = 0.6;
+
+/** True when the canvas draws labels, value fields and the editable comment text at this zoom (VIS-014). */
+export function showsDetail(zoom: number): boolean {
+  return zoom >= DETAIL_MIN_ZOOM;
+}
+
+/** Gap between two columns, and between two nodes stacked in the same column, in the flow layout (VIS-014). */
+export const LAYOUT_GAP_X = 80;
+export const LAYOUT_GAP_Y = 40;
+
+/** A node for the flow layout: its id, its size and its current position. */
+export interface LayoutNode {
+  id: number;
+  size: Vec;
+  position: Vec;
+}
+
+/** A wire for the flow layout: the node that outputs (`from`) and the node that takes the input (`to`). */
+export interface LayoutEdge {
+  from: number;
+  to: number;
+}
+
+/**
+ * Flow layout (VIS-014): puts each node in the column of the longest chain of wires that leads to it, so the flow
+ * reads from left to right and a data node sits left of the node that consumes it. Inside a column the nodes keep
+ * their current top-to-bottom order, stacked without overlap. A wire that closes a loop (a While whose body goes
+ * back to it) does not count, so the layout always ends. Wires to nodes outside `nodes` are ignored. Returns the new
+ * position of each node; the nodes themselves are not moved here.
+ */
+export function flowLayout(nodes: LayoutNode[], edges: LayoutEdge[]): Map<number, Vec> {
+  const out = new Map<number, Vec>();
+  if (!nodes.length) return out;
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  // Top to bottom, then left to right: the order the nodes already have, used for ties and for the depth-first roots.
+  const order = [...nodes]
+    .sort((a, b) => a.position[1] - b.position[1] || a.position[0] - b.position[0] || a.id - b.id)
+    .map((n) => n.id);
+
+  const next = new Map<number, number[]>(nodes.map((n) => [n.id, []] as const));
+  for (const e of edges) {
+    if (e.from !== e.to && byId.has(e.from) && byId.has(e.to)) next.get(e.from)?.push(e.to);
+  }
+
+  // Depth-first search: an edge that reaches a node still on the current path closes a loop, so it is dropped.
+  // What is left is acyclic.
+  const state = new Map<number, 'onPath' | 'done'>();
+  const acyclic = new Map<number, number[]>(nodes.map((n) => [n.id, []] as const));
+  for (const root of order) {
+    if (state.has(root)) continue;
+    state.set(root, 'onPath');
+    const path: { id: number; step: number }[] = [{ id: root, step: 0 }];
+    while (path.length) {
+      const top = path[path.length - 1];
+      if (!top) break;
+      const targets = next.get(top.id) ?? [];
+      if (top.step >= targets.length) {
+        state.set(top.id, 'done');
+        path.pop();
+        continue;
+      }
+      const target = targets[top.step];
+      if (target === undefined) break;
+      top.step += 1;
+      const seen = state.get(target);
+      if (seen === 'onPath') continue;
+      acyclic.get(top.id)?.push(target);
+      if (seen === undefined) {
+        state.set(target, 'onPath');
+        path.push({ id: target, step: 0 });
+      }
+    }
+  }
+
+  // Column of each node: one more than its deepest input. Kahn's order visits every node, since the graph is acyclic.
+  const inputs = new Map<number, number>(nodes.map((n) => [n.id, 0] as const));
+  for (const targets of acyclic.values()) {
+    for (const t of targets) inputs.set(t, (inputs.get(t) ?? 0) + 1);
+  }
+  const column = new Map<number, number>(nodes.map((n) => [n.id, 0] as const));
+  const queue = order.filter((id) => inputs.get(id) === 0);
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    if (id === undefined) break;
+    for (const t of acyclic.get(id) ?? []) {
+      column.set(t, Math.max(column.get(t) ?? 0, (column.get(id) ?? 0) + 1));
+      const left = (inputs.get(t) ?? 0) - 1;
+      inputs.set(t, left);
+      if (left === 0) queue.push(t);
+    }
+  }
+
+  // Columns in order, each one stacked from the top-left corner of the whole set. A column is as wide as its
+  // widest node.
+  const columns: number[][] = [];
+  for (const id of order) {
+    const c = column.get(id) ?? 0;
+    (columns[c] ??= []).push(id);
+  }
+  const originX = Math.min(...nodes.map((n) => n.position[0]));
+  const originY = Math.min(...nodes.map((n) => n.position[1]));
+  let x = originX;
+  for (const members of columns) {
+    if (!members) continue;
+    let y = originY;
+    let width = 0;
+    for (const id of members) {
+      const n = byId.get(id);
+      if (!n) continue;
+      out.set(id, [Math.round(x), Math.round(y)]);
+      y += n.size[1] + LAYOUT_GAP_Y;
+      width = Math.max(width, n.size[0]);
+    }
+    x += width + LAYOUT_GAP_X;
+  }
+  return out;
+}
+
+/** Where a point of the world lands on a map: `map = world * scale + (x, y)`, in pixels of the map (VIS-014). */
+export interface MapTransform {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+/** Transform that fits the world rectangle `r` in a map of `w` by `h` pixels, centred, with `margin` pixels around. */
+export function fitMap(r: Rect, w: number, h: number, margin = 0): MapTransform {
+  const scale = Math.min((w - margin * 2) / Math.max(r[2], 1), (h - margin * 2) / Math.max(r[3], 1));
+  return {
+    scale,
+    x: w / 2 - (r[0] + r[2] / 2) * scale,
+    y: h / 2 - (r[1] + r[3] / 2) * scale,
+  };
+}
+
+/** Camera that puts the world point (wx, wy) at the centre of a `w` by `h` canvas, keeping the zoom (map click). */
+export function centerCamera(cam: Camera, wx: number, wy: number, w: number, h: number): Camera {
+  return { x: w / 2 - wx * cam.zoom, y: h / 2 - wy * cam.zoom, zoom: cam.zoom };
+}

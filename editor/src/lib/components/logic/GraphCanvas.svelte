@@ -15,6 +15,7 @@
     normRect,
     pinPoint,
     rectsTouch,
+    showsDetail,
     toWorld,
     wirePath,
     zoomAt,
@@ -38,6 +39,7 @@
   import NodeSearch from './NodeSearch.svelte';
   import PinShape from './PinShape.svelte';
   import PinValue from './PinValue.svelte';
+  import Minimap from './Minimap.svelte';
 
   /** Arrasto em andamento: pan, mover seleção, fio a partir de um pino, caixa de seleção ou redimensionar. */
   type Drag =
@@ -103,6 +105,8 @@
   let targets = $state.raw<Map<string, Refusal | null>>(new Map());
 
   const cam = $derived(logic.camera);
+  /** Semantic zoom (VIS-014): when false, nodes drop their labels and value fields, and comments show a preview. */
+  const detailed = $derived(showsDetail(cam.zoom));
   const nodes = $derived(logic.snap.nodes);
   const wires = $derived(logic.snap.wires);
   const nodePorId = $derived(new Map(nodes.map((n) => [n.id, n] as const)));
@@ -583,14 +587,19 @@
         style="left: {c.position[0]}px; top: {c.position[1]}px; width: {c.size[0]}px; height: {c.size[1]}px"
       >
         <div class="cabeca" data-comment={c.id}>Comentário</div>
-        <textarea
-          class="corpo"
-          value={c.text}
-          aria-label="Texto do comentário"
-          onpointerdown={(e) => e.stopPropagation()}
-          onchange={(e) =>
-            logic.setCommentBox(c.id, e.currentTarget.value, c.position[0], c.position[1], c.size[0], c.size[1])}
-        ></textarea>
+        {#if detailed}
+          <textarea
+            class="corpo"
+            value={c.text}
+            aria-label="Texto do comentário"
+            onpointerdown={(e) => e.stopPropagation()}
+            onchange={(e) =>
+              logic.setCommentBox(c.id, e.currentTarget.value, c.position[0], c.position[1], c.size[0], c.size[1])}
+          ></textarea>
+        {:else}
+          <!-- Zoomed out, the text is only a preview: the box still moves and selects through its body (VIS-014). -->
+          <div class="corpo resumo" data-comment={c.id}>{c.text}</div>
+        {/if}
         <span class="alca" data-resize={c.id} aria-hidden="true"></span>
       </div>
     {/each}
@@ -661,17 +670,19 @@
                 >
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? pi.ty} />
                 </span>
-                <span class="rotulo">{pi.label}</span>
-                {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name)) && pi.ty && pi.ty !== 'Flow' && pi.ty !== 'Node'}
-                  <PinValue
-                    ty={pi.ty}
-                    valor={n.values?.[pi.name] ?? pi.default ?? undefined}
-                    onchange={(v) => logic.setValue(n.id, pi.name, v)}
-                  />
+                {#if detailed}
+                  <span class="rotulo">{pi.label}</span>
+                  {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name)) && pi.ty && pi.ty !== 'Flow' && pi.ty !== 'Node'}
+                    <PinValue
+                      ty={pi.ty}
+                      valor={n.values?.[pi.name] ?? pi.default ?? undefined}
+                      onchange={(v) => logic.setValue(n.id, pi.name, v)}
+                    />
+                  {/if}
                 {/if}
               {/if}
               {#if po}
-                <span class="rotulo direita">{po.label}</span>
+                {#if detailed}<span class="rotulo direita">{po.label}</span>{/if}
                 <span
                   class="pino saida"
                   class:aceita={alvoDoArrasto(n.id, po.name, true) === 'aceita'}
@@ -719,6 +730,10 @@
   <div class="dica" aria-hidden="true">
     <kbd>Botão do meio</kbd> ou <kbd>Espaço</kbd> arrastar · roda zoom · <kbd>Shift</kbd> arrastar seleciona
   </div>
+
+  {#if logic.minimapVisible}
+    <Minimap />
+  {/if}
 </div>
 
 <style>
@@ -959,6 +974,13 @@
     font-size: var(--fs-12);
     color: var(--text);
     user-select: text;
+  }
+  /* Zoomed out (semantic zoom, VIS-014): the text is a read-only preview, cut at the box edge. */
+  .corpo.resumo {
+    overflow: hidden;
+    white-space: pre-wrap;
+    user-select: none;
+    color: var(--text-dim);
   }
   .alca {
     position: absolute;

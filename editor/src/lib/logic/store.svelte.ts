@@ -13,6 +13,7 @@ import {
   type Camera,
   type Rect,
   boundsOf,
+  flowLayout,
   frameCamera,
   nodeSize,
   toWorld,
@@ -95,6 +96,8 @@ class LogicState {
   selWire = $state<Wire | null>(null);
   /** Câmera do canvas. Cada script guarda a sua ao trocar de aba. */
   camera = $state<Camera>({ x: 120, y: 90, zoom: 1 });
+  /** Whether the minimap in the corner of the canvas is shown (VIS-014). */
+  minimapVisible = $state(true);
   canUndo = $state(false);
   canRedo = $state(false);
   /** Texto copiado (JSON de um trecho). Vale entre scripts. */
@@ -605,6 +608,35 @@ class LogicState {
     });
     if (ok && out.id !== undefined) this.select([out.id], [], false);
     return ok;
+  }
+
+  /**
+   * Flow layout (VIS-014): puts the selected nodes, or every node when none is selected, in columns by the flow. Only
+   * the nodes that move are written, and the whole arrangement is one undo step. Returns false when nothing moves.
+   */
+  autoLayout(): boolean {
+    const ed = this.#ed();
+    if (!ed) return false;
+    const chosen = this.selNodes.length
+      ? this.snap.nodes.filter((n) => this.selNodes.includes(n.id))
+      : this.snap.nodes;
+    if (!chosen.length) return false;
+    const spots = flowLayout(
+      chosen.map((n) => ({ id: n.id, size: nodeSize(n.kind, this.defsByKind.get(n.kind)), position: n.position })),
+      this.snap.wires.map((w) => ({ from: w.from.node, to: w.to.node })),
+    );
+    const moves = chosen.flatMap((n) => {
+      const spot = spots.get(n.id);
+      if (!spot || (spot[0] === n.position[0] && spot[1] === n.position[1])) return [];
+      return [{ id: n.id, x: spot[0], y: spot[1] }];
+    });
+    if (!moves.length) return false;
+    ed.begin_group();
+    this.#run('Não foi possível organizar os nós', (e) => {
+      for (const m of moves) e.set_position(m.id, m.x, m.y);
+    });
+    ed.end_group();
+    return true;
   }
 
   // ---------- Seleção, câmera e pontos de parada ----------
