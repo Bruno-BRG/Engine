@@ -605,7 +605,69 @@ fn build() -> Vec<NodeDef> {
             vec![PinDef::segue_o_fio("in", "Entrada")],
             vec![PinDef::segue_o_fio("out", "Saída")],
         ),
+        // Funções (VIS-026). Entradas e saídas passam por variáveis do script de nome combinado.
+        def(
+            "Function",
+            "Funções",
+            "Função",
+            "Define uma função com este nome. O corpo começa na saída Corpo. Não roda sozinha: use Chamar função.",
+            vec![texto("name", "Nome", "")],
+            vec![saida_fluxo("exec", "Corpo")],
+        ),
+        def(
+            "CallFunction",
+            "Funções",
+            "Chamar função",
+            "Roda o corpo da função com este nome no lugar da chamada. Quando o corpo termina, a chamada segue.",
+            vec![exec(), texto("name", "Nome", "")],
+            vec![exec()],
+        ),
+        def(
+            "Return",
+            "Funções",
+            "Retornar",
+            "Encerra a função atual. O que viria depois deste nó no corpo não roda.",
+            vec![exec()],
+            vec![],
+        ),
+        // Estados (VIS-027). O primeiro estado do grafo é o inicial.
+        estado_evento(
+            "State",
+            "Estado",
+            "Roda a cada quadro enquanto este estado está ativo.",
+        ),
+        estado_evento(
+            "StateEnter",
+            "Ao entrar no estado",
+            "Roda uma vez quando o estado com este nome passa a ser o ativo.",
+        ),
+        estado_evento(
+            "StateExit",
+            "Ao sair do estado",
+            "Roda uma vez quando o estado com este nome deixa de ser o ativo.",
+        ),
+        def(
+            "GoToState",
+            "Estados",
+            "Ir para estado",
+            "Troca o estado ativo. Sai o estado antigo, entra o novo.",
+            vec![exec(), texto("state", "Estado", "")],
+            vec![exec()],
+        ),
     ]
+}
+
+/// Evento de estado: tem o nome do estado como valor embutido, e não tem entrada de fluxo.
+fn estado_evento(kind: &'static str, label: &'static str, description: &'static str) -> NodeDef {
+    NodeDef {
+        kind,
+        category: "Estados",
+        label,
+        description,
+        event: true,
+        inputs: vec![texto("state", "Estado", "")],
+        outputs: vec![exec(), no("self", "Este nó")],
+    }
 }
 
 /// Todos os tipos de nó, na ordem em que aparecem no menu.
@@ -625,7 +687,7 @@ mod tests {
 
     #[test]
     fn biblioteca_serializa_para_o_editor() {
-        assert_eq!(library().len(), 47);
+        assert_eq!(library().len(), 54);
         assert!(find("Branch").is_some_and(|d| !d.event));
         assert!(find("OnProcess").is_some_and(|d| d.event));
         assert!(find("Nada").is_none());

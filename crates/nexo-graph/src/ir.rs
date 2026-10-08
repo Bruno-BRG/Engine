@@ -248,6 +248,11 @@ pub enum Op {
         seconds: Reg,
         entry: usize,
     },
+    /// Pede a troca do estado ativo para o nome em `name`. A VM anota o pedido e o agendador faz a troca
+    /// (sai o estado antigo, entra o novo) logo depois da op.
+    GoToState {
+        name: Reg,
+    },
 }
 
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
@@ -262,23 +267,28 @@ pub struct Program {
     pub sources: Vec<u64>,
     /// Quantidade de registradores que o programa usa.
     pub regs: usize,
+    /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
+    pub estado: Option<String>,
 }
 
-/// Resultado da compilação: as variáveis do script e um programa por nó de evento.
+/// Resultado da compilação: as variáveis do script, um programa por nó de evento e o estado inicial.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Compiled {
     /// Variáveis do script, na ordem em que as ops `GetVar` e `SetVar` as indexam.
     pub variables: Vec<Variable>,
     pub programs: Vec<Program>,
+    /// Estado inicial: o primeiro nó "State" do grafo. `None` quando o grafo não tem estados.
+    pub estado_inicial: Option<String>,
 }
 
 impl Compiled {
-    /// Contexto de uma instância do script, com as variáveis no valor padrão.
+    /// Contexto de uma instância do script, com as variáveis no valor padrão e no estado inicial.
     pub fn new_context(&self, owner: u64) -> Context {
         Context {
             owner,
             delta: 0.0,
             vars: self.variables.iter().map(|v| v.default.clone()).collect(),
+            estado: self.estado_inicial.clone().unwrap_or_default(),
         }
     }
 
@@ -312,9 +322,14 @@ pub fn compile(graph: &Graph) -> Result<Compiled, Vec<CompileError>> {
     if !errors.is_empty() {
         return Err(errors);
     }
+    let estado_inicial = programs
+        .iter()
+        .find(|p| p.event == "State")
+        .and_then(|p| p.estado.clone());
     Ok(Compiled {
         variables: graph.variables.clone(),
         programs,
+        estado_inicial,
     })
 }
 
@@ -331,15 +346,31 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         flow_stack: Vec::new(),
         value_stack: Vec::new(),
         produzidas: BTreeMap::new(),
+        chamadas: Vec::new(),
+        retornos: Vec::new(),
     };
     e.flow(event.id, "exec")?;
+    // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
+    let estado = match event.kind.as_str() {
+        "State" | "StateEnter" | "StateExit" => Some(texto_embutido(event, "state")),
+        _ => None,
+    };
     Ok(Program {
         event: event.kind.clone(),
         node: event.id,
         ops: e.ops,
         sources: e.sources,
         regs: e.regs,
+        estado,
     })
+}
+
+/// Texto embutido num pino do nó, ou vazio quando o pino não tem valor embutido.
+fn texto_embutido(node: &GraphNode, pin: &str) -> String {
+    match node.values.get(pin) {
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
 }
 
 /// Estado da compilação de um evento.
@@ -355,6 +386,11 @@ struct Emitter<'g> {
     /// Saídas de dados que um nó de fluxo produz quando roda (índice do ForEach, instância criada, no chão).
     /// Quem lê essas saídas usa o registrador que o nó preencheu, sem refazer a operação.
     produzidas: BTreeMap<(u64, String), Reg>,
+    /// Funções em compilação, pelo id do nó "Function". As chamadas são embutidas no lugar (sem pilha de
+    /// execução), então uma função que chama a si mesma é recusada.
+    chamadas: Vec<u64>,
+    /// Saltos de Return à espera do fim do corpo da função que está sendo embutida, uma lista por chamada.
+    retornos: Vec<Vec<usize>>,
 }
 
 impl<'g> Emitter<'g> {
@@ -640,6 +676,44 @@ impl<'g> Emitter<'g> {
             }
             // O reroute só repassa o fluxo: a execução segue pelos fios que saem dele.
             REROUTE => self.flow(id, "out"),
+            "CallFunction" => {
+                // O corpo da função é embutido aqui. O que vem depois do Return cai no fim do corpo, e a
+                // chamada segue pelo fluxo de saída.
+                let graph = self.graph;
+                let nome = texto_embutido(node, "name");
+                let def = graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.kind == "Function" && texto_embutido(n, "name") == nome)
+                    .ok_or_else(|| err(id, format!("função '{nome}' não existe")))?;
+                if self.chamadas.contains(&def.id) {
+                    return Err(err(id, format!("chamada recursiva da função '{nome}'")));
+                }
+                self.chamadas.push(def.id);
+                self.retornos.push(Vec::new());
+                self.flow(def.id, "exec")?;
+                let fim = self.ops.len();
+                for salto in self.retornos.pop().unwrap_or_default() {
+                    self.patch(salto, fim);
+                }
+                self.chamadas.pop();
+                self.flow(id, "exec")
+            }
+            "Return" => {
+                if self.retornos.is_empty() {
+                    return Err(err(id, "retorno fora de uma função"));
+                }
+                let salto = self.emit(Op::Jump { target: 0 }, id);
+                if let Some(corpo) = self.retornos.last_mut() {
+                    corpo.push(salto);
+                }
+                Ok(())
+            }
+            "GoToState" => {
+                let name = self.input(node, "state")?;
+                self.emit(Op::GoToState { name }, id);
+                self.flow(id, "exec")
+            }
             other => Err(err(id, format!("{other} não é um nó de fluxo"))),
         }
     }

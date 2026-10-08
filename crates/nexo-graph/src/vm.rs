@@ -57,6 +57,8 @@ pub struct Context {
     pub delta: f64,
     /// Valores das variáveis, na ordem de `Compiled::variables`.
     pub vars: Vec<Value>,
+    /// Estado ativo (VIS-027). Vazio quando o grafo não tem estados.
+    pub estado: String,
 }
 
 /// Evento de rastro (VIS-030, DBG-003). O editor usa para pulsar os fios e mostrar valores no hover.
@@ -192,6 +194,8 @@ pub(crate) struct Ambiente<'a> {
     pub novas: Vec<Tarefa>,
     /// Sinais emitidos por EmitSignal, para o agendador.
     pub sinais: Vec<String>,
+    /// Trocas de estado pedidas por GoToState, para o agendador.
+    pub transicoes: Vec<String>,
 }
 
 /// A máquina virtual. Não guarda estado: tudo fica no `Context`, no `Host` e na `Tarefa`.
@@ -223,6 +227,7 @@ impl Vm {
             trace: None,
             novas: Vec::new(),
             sinais: Vec::new(),
+            transicoes: Vec::new(),
         };
         match avancar(&mut tarefa, program, &mut amb, limit)? {
             Parada::Fim => Ok(()),
@@ -569,6 +574,10 @@ fn executa(
         Op::AwaitSignal { name } => {
             let nome = text(regs, *name, origem)?.to_string();
             return Ok(Some(Parada::Latente(Latente::Sinal { nome })));
+        }
+        Op::GoToState { name } => {
+            let nome = text(regs, *name, origem)?.to_string();
+            amb.transicoes.push(nome);
         }
         Op::EmitSignal { name } => {
             let nome = text(regs, *name, origem)?.to_string();
@@ -1039,11 +1048,13 @@ pub(crate) mod tests {
             ops: vec![Op::Jump { target: 0 }],
             sources: vec![5],
             regs: 0,
+            estado: None,
         };
         let mut ctx = Context {
             owner: 5,
             delta: 0.0,
             vars: Vec::new(),
+            estado: String::new(),
         };
         let erro = Vm::run(&program, &mut Mock::default(), &mut ctx).unwrap_err();
         assert_eq!(

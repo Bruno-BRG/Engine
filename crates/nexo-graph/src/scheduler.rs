@@ -132,6 +132,28 @@ impl Scheduler {
         recarregar_contexto(ctx, antigo, novo)
     }
 
+    /// Troca o estado ativo: sai o estado antigo (StateExit) e entra o novo (StateEnter). As tarefas dos dois
+    /// eventos entram na fila do quadro corrente.
+    fn transitar(&mut self, compiled: &Compiled, ctx: &mut Context, novo: String) {
+        let antigo = std::mem::replace(&mut ctx.estado, novo.clone());
+        self.iniciar_evento(compiled, "StateExit", &antigo);
+        self.iniciar_evento(compiled, "StateEnter", &novo);
+    }
+
+    fn iniciar_evento(&mut self, compiled: &Compiled, evento: &str, estado: &str) {
+        for (i, programa) in compiled.programs.iter().enumerate() {
+            if programa.event == evento && programa.estado.as_deref() == Some(estado) {
+                self.tarefas.push(Tarefa::nova(i, programa));
+            }
+        }
+    }
+
+    /// Cria uma tarefa para cada nó "State" do estado dado. Chame a cada quadro, com o estado ativo do contexto
+    /// (`ctx.estado`), antes do `tick`.
+    pub fn iniciar_estado(&mut self, compiled: &Compiled, estado: &str) {
+        self.iniciar_evento(compiled, "State", estado);
+    }
+
     fn acordar_sinais(&mut self) {
         let emitidos = std::mem::take(&mut self.sinais);
         for t in &mut self.tarefas {
@@ -186,7 +208,7 @@ impl Scheduler {
             }
 
             let programa = &compiled.programs[self.tarefas[i].programa];
-            let (resultado, novas, sinais, restante) = {
+            let (resultado, novas, sinais, transicoes, restante) = {
                 let mut amb = Ambiente {
                     host: &mut *host,
                     ctx: &mut *ctx,
@@ -199,13 +221,17 @@ impl Scheduler {
                     },
                     novas: Vec::new(),
                     sinais: Vec::new(),
+                    transicoes: Vec::new(),
                 };
                 let r = avancar(&mut self.tarefas[i], programa, &mut amb, Vm::MAX_STEPS);
-                (r, amb.novas, amb.sinais, amb.passo)
+                (r, amb.novas, amb.sinais, amb.transicoes, amb.passo)
             };
             passo = restante;
             self.tarefas.extend(novas);
             self.sinais.extend(sinais);
+            for estado in transicoes {
+                self.transitar(compiled, ctx, estado);
+            }
             match resultado {
                 Err(e) => {
                     self.tarefas.remove(i);
@@ -256,6 +282,7 @@ pub fn recarregar_contexto(ctx: &Context, antigo: &Compiled, novo: &Compiled) ->
         owner: ctx.owner,
         delta: ctx.delta,
         vars,
+        estado: ctx.estado.clone(),
     }
 }
 
@@ -668,6 +695,214 @@ mod tests {
                 bus: "Master".into(),
                 volume: 0.5
             }]
+        );
+    }
+
+    /// Função "soma": lê `soma.a` e `soma.b` e grava a soma em `soma.resultado`. Quem chama preenche as
+    /// entradas antes e lê a saída depois, pelas variáveis de nome combinado.
+    fn grafo_com_funcao_soma() -> Graph {
+        let mut g = Graph::default();
+        for nome in ["soma.a", "soma.b", "soma.resultado", "total"] {
+            g.add_variable(nome, PinType::Float, Value::Float(0.0), false)
+                .unwrap();
+        }
+        // Corpo da função.
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "soma");
+        let la = adiciona(&mut g, "GetVariable");
+        texto(&mut g, la, "name", "soma.a");
+        let lb = adiciona(&mut g, "GetVariable");
+        texto(&mut g, lb, "name", "soma.b");
+        let add = adiciona(&mut g, "Add");
+        let grava = adiciona(&mut g, "SetVariable");
+        texto(&mut g, grava, "name", "soma.resultado");
+        let ret = adiciona(&mut g, "Return");
+        g.connect((def, "exec"), (grava, "exec")).unwrap();
+        g.connect((la, "value"), (add, "a")).unwrap();
+        g.connect((lb, "value"), (add, "b")).unwrap();
+        g.connect((add, "result"), (grava, "value")).unwrap();
+        g.connect((grava, "exec"), (ret, "exec")).unwrap();
+        // Quem chama: preenche as entradas, chama e lê o resultado.
+        let ev = adiciona(&mut g, "OnReady");
+        let pa = adiciona(&mut g, "SetVariable");
+        texto(&mut g, pa, "name", "soma.a");
+        g.set_value(pa, "value", Value::Float(2.0)).unwrap();
+        let pb = adiciona(&mut g, "SetVariable");
+        texto(&mut g, pb, "name", "soma.b");
+        g.set_value(pb, "value", Value::Float(3.0)).unwrap();
+        let chama = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chama, "name", "soma");
+        let le = adiciona(&mut g, "GetVariable");
+        texto(&mut g, le, "name", "soma.resultado");
+        let total = adiciona(&mut g, "SetVariable");
+        texto(&mut g, total, "name", "total");
+        g.connect((ev, "exec"), (pa, "exec")).unwrap();
+        g.connect((pa, "exec"), (pb, "exec")).unwrap();
+        g.connect((pb, "exec"), (chama, "exec")).unwrap();
+        g.connect((chama, "exec"), (total, "exec")).unwrap();
+        g.connect((le, "value"), (total, "value")).unwrap();
+        g
+    }
+
+    #[test]
+    fn funcao_chamada_com_retorno() {
+        // A função soma 2 + 3; quem chama lê o resultado e grava em "total", depois que a função termina.
+        let compiled = compile(&grafo_com_funcao_soma()).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        let valor = |nome: &str| {
+            let i = compiled
+                .variables
+                .iter()
+                .position(|v| v.name == nome)
+                .unwrap();
+            ctx.vars[i].clone()
+        };
+        assert_eq!(valor("soma.resultado"), Value::Float(5.0));
+        assert_eq!(valor("total"), Value::Float(5.0));
+    }
+
+    #[test]
+    fn return_interrompe_o_corpo_da_funcao() {
+        // Corpo: Sequência; passo 1 é Retornar; passo 2 marcaria "marca". O passo 2 nunca roda.
+        let mut g = Graph::default();
+        g.add_variable("marca", PinType::Float, Value::Float(0.0), false)
+            .unwrap();
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "parar");
+        let seq = adiciona(&mut g, "Sequence");
+        let ret = adiciona(&mut g, "Return");
+        let marca = adiciona(&mut g, "SetVariable");
+        texto(&mut g, marca, "name", "marca");
+        g.set_value(marca, "value", Value::Float(1.0)).unwrap();
+        g.connect((def, "exec"), (seq, "exec")).unwrap();
+        g.connect((seq, "then_0"), (ret, "exec")).unwrap();
+        g.connect((seq, "then_1"), (marca, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let chama = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chama, "name", "parar");
+        g.connect((ev, "exec"), (chama, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut sched = Scheduler::new();
+        sched.iniciar(&compiled, "OnReady");
+        sched
+            .tick(&compiled, &mut ctx, &mut Mock::default(), 0.0)
+            .unwrap();
+        assert_eq!(ctx.vars[0], Value::Float(0.0));
+    }
+
+    #[test]
+    fn chamada_recursiva_e_recusada() {
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "loop");
+        // A função chama a si mesma, e um OnReady a chama para o embutimento acontecer.
+        let chama = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chama, "name", "loop");
+        g.connect((def, "exec"), (chama, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let de_fora = adiciona(&mut g, "CallFunction");
+        texto(&mut g, de_fora, "name", "loop");
+        g.connect((ev, "exec"), (de_fora, "exec")).unwrap();
+        let erros = compile(&g).unwrap_err();
+        assert!(
+            erros.iter().any(|e| e.message.contains("recursiva")),
+            "{erros:?}"
+        );
+    }
+
+    #[test]
+    fn chamada_de_funcao_inexistente_e_recusada() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let chama = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chama, "name", "nada");
+        g.connect((ev, "exec"), (chama, "exec")).unwrap();
+        let erros = compile(&g).unwrap_err();
+        assert!(
+            erros.iter().any(|e| e.message.contains("não existe")),
+            "{erros:?}"
+        );
+    }
+
+    /// Três estados: "Parado" espera "ui_accept" e vai para "Andando"; "Andando" só imprime. Entrar e sair
+    /// de estado imprime uma mensagem.
+    fn grafo_de_estados() -> Graph {
+        let mut g = Graph::default();
+        let parado = adiciona(&mut g, "State");
+        texto(&mut g, parado, "state", "Parado");
+        let acao = adiciona(&mut g, "ActionJustPressed");
+        texto(&mut g, acao, "action", "ui_accept");
+        let br = adiciona(&mut g, "Branch");
+        let vai = adiciona(&mut g, "GoToState");
+        texto(&mut g, vai, "state", "Andando");
+        g.connect((parado, "exec"), (br, "exec")).unwrap();
+        g.connect((acao, "pressed"), (br, "condition")).unwrap();
+        g.connect((br, "true"), (vai, "exec")).unwrap();
+        let andando = adiciona(&mut g, "State");
+        texto(&mut g, andando, "state", "Andando");
+        imprime(&mut g, (andando, "exec"), "andando");
+        let entra = adiciona(&mut g, "StateEnter");
+        texto(&mut g, entra, "state", "Andando");
+        imprime(&mut g, (entra, "exec"), "entrei");
+        let sai = adiciona(&mut g, "StateExit");
+        texto(&mut g, sai, "state", "Parado");
+        imprime(&mut g, (sai, "exec"), "saí");
+        g
+    }
+
+    #[test]
+    fn maquina_de_estados_troca_de_estado() {
+        let compiled = compile(&grafo_de_estados()).unwrap();
+        assert_eq!(compiled.estado_inicial.as_deref(), Some("Parado"));
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+
+        // Quadro 1: nada apertado, o estado segue "Parado" e nada imprime.
+        sched.iniciar_estado(&compiled, &ctx.estado);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(ctx.estado, "Parado");
+        assert!(host.impressos.is_empty());
+
+        // Quadro 2: o botão é apertado. A troca sai de "Parado" e entra em "Andando" no mesmo quadro.
+        host.pressionadas.push("ui_accept".into());
+        sched.iniciar_estado(&compiled, &ctx.estado);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(ctx.estado, "Andando");
+        assert_eq!(
+            host.impressos,
+            [
+                (LogLevel::Info, "saí".to_string()),
+                (LogLevel::Info, "entrei".to_string())
+            ]
+        );
+
+        // Quadro 3: o estado "Andando" é o que roda agora.
+        sched.iniciar_estado(&compiled, &ctx.estado);
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(
+            host.impressos.last(),
+            Some(&(LogLevel::Info, "andando".to_string()))
+        );
+    }
+
+    #[test]
+    fn estado_inexistente_e_recusado_na_validacao() {
+        let mut g = grafo_de_estados();
+        let vai = g.nodes.iter().find(|n| n.kind == "GoToState").unwrap().id;
+        g.set_value(vai, "state", Value::String("Nada".into()))
+            .unwrap();
+        let erros = compile(&g).unwrap_err();
+        assert!(
+            erros
+                .iter()
+                .any(|e| e.node == Some(vai) && e.message.contains("estado 'Nada' não existe")),
+            "{erros:?}"
         );
     }
 }

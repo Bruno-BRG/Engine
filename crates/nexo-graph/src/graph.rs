@@ -623,7 +623,57 @@ impl Graph {
         if let Some(id) = self.ciclo(false) {
             erros.push(erro(id, format!("ciclo de dados no nó {id}")));
         }
+
+        // Funções e estados (VIS-026, VIS-027): nomes únicos, sem vazio, e referências que apontam para algo.
+        let mut funcoes = HashSet::new();
+        let mut estados = HashSet::new();
+        for node in &self.nodes {
+            match node.kind.as_str() {
+                "Function" => {
+                    let nome = texto_do(node, "name");
+                    if nome.trim().is_empty() {
+                        erros.push(erro(node.id, format!("{} sem nome", node.etiqueta())));
+                    } else if !funcoes.insert(nome.clone()) {
+                        erros.push(erro(node.id, format!("função '{nome}' repetida")));
+                    }
+                }
+                "State" => {
+                    let nome = texto_do(node, "state");
+                    if nome.trim().is_empty() {
+                        erros.push(erro(node.id, format!("{} sem nome", node.etiqueta())));
+                    } else if !estados.insert(nome.clone()) {
+                        erros.push(erro(node.id, format!("estado '{nome}' repetido")));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for node in &self.nodes {
+            match node.kind.as_str() {
+                "CallFunction" => {
+                    let nome = texto_do(node, "name");
+                    if !funcoes.contains(&nome) {
+                        erros.push(erro(node.id, format!("função '{nome}' não existe")));
+                    }
+                }
+                "GoToState" | "StateEnter" | "StateExit" => {
+                    let nome = texto_do(node, "state");
+                    if !estados.contains(&nome) {
+                        erros.push(erro(node.id, format!("estado '{nome}' não existe")));
+                    }
+                }
+                _ => {}
+            }
+        }
         erros
+    }
+}
+
+/// Texto embutido no pino do nó, ou vazio quando o pino não tem valor embutido (o padrão da biblioteca é "").
+fn texto_do(node: &GraphNode, pin: &str) -> String {
+    match node.values.get(pin) {
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
     }
 }
 

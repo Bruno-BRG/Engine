@@ -313,6 +313,7 @@ fn instrucao(c: &Compiled, op: &Op) -> String {
                 "Nexo.StartTimer(r{seconds}); // o caminho que começa em L{entry} roda ao esgotar o tempo"
             )
         }
+        Op::GoToState { name } => format!("Nexo.GoToState(r{name});"),
     }
 }
 
