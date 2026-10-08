@@ -6,8 +6,10 @@ pub mod io;
 pub mod query;
 pub mod registry;
 pub mod scene;
+pub mod settings;
 
 pub use input::{Input, InputMap};
+pub use settings::ProjectSettings;
 pub use io::FORMAT as SCENE_FORMAT;
 pub use scene::{Node, Scene, Uid};
 
