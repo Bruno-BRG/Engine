@@ -83,8 +83,8 @@ impl Value {
                 Value::String(json.as_str()?.to_string())
             }
             PropKind::Vec2 => {
-                let par = json.as_array().filter(|a| a.len() == 2)?;
-                Value::Vec2([par[0].as_f64()?, par[1].as_f64()?])
+                let pair = json.as_array().filter(|a| a.len() == 2)?;
+                Value::Vec2([pair[0].as_f64()?, pair[1].as_f64()?])
             }
             PropKind::Points | PropKind::Map => return None,
         })

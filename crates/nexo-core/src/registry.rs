@@ -590,6 +590,18 @@ pub fn default_value(kind: &str, prop: &str) -> Option<Value> {
     prop_def(kind, prop).map(|p| p.default.clone())
 }
 
+/// Vector component named as a property: "position_x" is the X of "position", and "scale_y" the Y of "scale". Returns
+/// the vector property and the index of the component. Scripts use these names (Move To, Tween) as numeric properties.
+pub fn componente(nome: &str) -> Option<(&'static str, usize)> {
+    match nome {
+        "position_x" => Some(("position", 0)),
+        "position_y" => Some(("position", 1)),
+        "scale_x" => Some(("scale", 0)),
+        "scale_y" => Some(("scale", 1)),
+        _ => None,
+    }
+}
+
 /// True quando o tipo é ou herda de `Node2D`.
 pub fn is_2d(kind: &str) -> bool {
     chain(kind).iter().any(|t| t.name == "Node2D")

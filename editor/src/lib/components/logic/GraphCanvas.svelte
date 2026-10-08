@@ -526,7 +526,7 @@
   /** Registry property chosen on a property node (by its embedded type and name), or undefined. */
   function propOfNode(n: GraphNode) {
     const nodeType = embeddedText(n, 'type');
-    return nodeType ? propertyOfType(logic.tipos, nodeType, embeddedText(n, 'name')) : undefined;
+    return nodeType ? propertyOfType(logic.nodeTypes, nodeType, embeddedText(n, 'name')) : undefined;
   }
 
   /** Type of an input pin's field. On property nodes, the value pin has the type the graph resolved. */
@@ -546,11 +546,11 @@
   }
 
   /** Options of the type picker: every type in the registry. */
-  const typeOptions = $derived(logic.tipos.map((t) => ({ value: t.name, label: t.name })));
+  const typeOptions = $derived(logic.nodeTypes.map((t) => ({ value: t.name, label: t.name })));
 
-  /** Options of the name picker: the properties of the type chosen on the node (inherited ones included). */
+  /** Suggestions under the name field: the properties of the type chosen on the node (inherited ones included). */
   function nameOptions(n: GraphNode) {
-    return propertiesOfType(logic.tipos, embeddedText(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
+    return propertiesOfType(logic.nodeTypes, embeddedText(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
   }
 
   function temPontoDeParada(id: number) {
@@ -707,11 +707,11 @@
                       onchange={(v) => logic.setValue(n.id, 'type', { String: v })}
                     />
                   {:else if isPropertyNode(n.kind) && pi.name === 'name'}
-                    <PropSelect
-                      selected={embeddedText(n, 'name')}
-                      options={nameOptions(n)}
-                      emptyLabel="Escolha a propriedade"
-                      onchange={(v) => logic.setValue(n.id, 'name', { String: v })}
+                    <PinValue
+                      ty="String"
+                      valor={fieldValue(n, pi)}
+                      suggestions={nameOptions(n)}
+                      onchange={(v) => logic.setValue(n.id, 'name', v)}
                     />
                   {:else if fieldPinType && fieldPinType !== 'Flow' && fieldPinType !== 'Node'}
                     <PinValue

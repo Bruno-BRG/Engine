@@ -3,7 +3,7 @@
 //! quadro de cada script. O `Mundo` guarda o nó dono do script, para o console dizer de onde veio cada mensagem.
 
 use nexo_core::audio::DEFAULT_BUS;
-use nexo_core::registry::{self, PropKind};
+use nexo_core::registry::{self, PropKind, componente};
 use nexo_core::scene::{as_vec2, value_of};
 use nexo_core::{AudioCommand, AudioPlayback, Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Host, LogLevel, Value};
@@ -40,18 +40,6 @@ pub(crate) struct Mundo<'a> {
     pub console: &'a mut Vec<Mensagem>,
     /// Nó que roda o script: é a saída "self" dos eventos, e o dono das mensagens do console.
     pub dono: Uid,
-}
-
-/// Componente de uma propriedade de vetor: "position_x" é o X de "position". Os scripts usam esses nomes (Mover até,
-/// Tween) como se fossem propriedades numéricas.
-fn componente(nome: &str) -> Option<(&'static str, usize)> {
-    match nome {
-        "position_x" => Some(("position", 0)),
-        "position_y" => Some(("position", 1)),
-        "scale_x" => Some(("scale", 0)),
-        "scale_y" => Some(("scale", 1)),
-        _ => None,
-    }
 }
 
 fn e_vetor(kind: &str, prop: &str) -> bool {
@@ -123,7 +111,7 @@ impl Host for Mundo<'_> {
         let Some(n) = self.cena.node(uid) else {
             return false;
         };
-        let (prop, valor) = if let Some((prop, i)) = componente(name) {
+        let (prop, stored) = if let Some((prop, i)) = componente(name) {
             if !e_vetor(&n.kind, prop) {
                 return false;
             }
@@ -137,12 +125,12 @@ impl Host for Mundo<'_> {
             let Some(def) = registry::prop_def(&n.kind, name) else {
                 return false;
             };
-            let Some(valor) = json_for_kind(def.kind, &value) else {
+            let Some(stored) = json_for_kind(def.kind, &value) else {
                 return false;
             };
-            (name, valor)
+            (name, stored)
         };
-        self.cena.set_runtime_prop(uid, prop, valor).is_ok()
+        self.cena.set_runtime_prop(uid, prop, stored).is_ok()
     }
 
     fn action_pressed(&self, action: &str) -> bool {
@@ -254,8 +242,8 @@ mod tests {
 
     /// Parts of the playback the host uses, with a Sprite2D scene.
     struct Parts {
-        cena: Scene,
-        fisica: Physics,
+        scene: Scene,
+        physics: Physics,
         audio: AudioPlayback,
         entrada: Input,
         ajustes: ProjectSettings,
@@ -265,13 +253,13 @@ mod tests {
 
     impl Parts {
         fn create() -> Parts {
-            let mut cena = Scene::new("teste", 1);
-            let uid = cena.add_node(None, "Sprite2D", None).unwrap();
+            let mut scene = Scene::new("teste", 1);
+            let uid = scene.add_node(None, "Sprite2D", None).unwrap();
             let ajustes = ProjectSettings::default();
-            let fisica = Physics::build(&cena, &ajustes);
+            let physics = Physics::build(&scene, &ajustes);
             Parts {
-                cena,
-                fisica,
+                scene,
+                physics,
                 audio: AudioPlayback::default(),
                 entrada: Input::default(),
                 ajustes,
@@ -280,10 +268,10 @@ mod tests {
             }
         }
 
-        fn mundo(&mut self) -> Mundo<'_> {
+        fn world(&mut self) -> Mundo<'_> {
             Mundo {
-                cena: &mut self.cena,
-                fisica: &mut self.fisica,
+                cena: &mut self.scene,
+                fisica: &mut self.physics,
                 audio: &mut self.audio,
                 entrada: &self.entrada,
                 ajustes: &self.ajustes,
@@ -298,7 +286,7 @@ mod tests {
     fn read_returns_property_type() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         assert_eq!(m.get_property(uid, "modulate"), Some(Value::String("#ffffff".into())));
         assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([0.0, 0.0])));
         assert_eq!(m.get_property(uid, "centered"), Some(Value::Bool(true)));
@@ -311,7 +299,7 @@ mod tests {
     fn wrong_type_write_returns_false() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         assert!(m.set_property(uid, "modulate", Value::String("#ff0000".into())));
         // Decimal into a colour, text into a boolean, decimal into a vector, and a missing property: all refused.
         assert!(!m.set_property(uid, "modulate", Value::Float(1.0)));
@@ -330,7 +318,7 @@ mod tests {
     fn vector_component_stays_decimal() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         assert!(m.set_property(uid, "position_x", Value::Float(12.0)));
         assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([12.0, 0.0])));
         assert_eq!(m.get_property(uid, "position_x"), Some(Value::Float(12.0)));
@@ -341,7 +329,7 @@ mod tests {
     fn write_bool_succeeds() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         assert!(m.set_property(uid, "centered", Value::Bool(false)));
         assert_eq!(m.get_property(uid, "centered"), Some(Value::Bool(false)));
     }
@@ -350,7 +338,7 @@ mod tests {
     fn write_vec2_succeeds() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         assert!(m.set_property(uid, "position", Value::Vec2([3.0, 4.0])));
         assert_eq!(m.get_property(uid, "position"), Some(Value::Vec2([3.0, 4.0])));
         assert_eq!(m.get_property(uid, "position_y"), Some(Value::Float(4.0)));
@@ -360,7 +348,7 @@ mod tests {
     fn write_enum_succeeds() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         // "circle" is one of the options of `shape`; the core refuses the others.
         assert!(m.set_property(uid, "shape", Value::String("circle".into())));
         assert_eq!(m.get_property(uid, "shape"), Some(Value::String("circle".into())));
@@ -370,7 +358,7 @@ mod tests {
     fn write_uid_succeeds() {
         let mut p = Parts::create();
         let uid = p.uid.0;
-        let mut m = p.mundo();
+        let mut m = p.world();
         // A uid is a hexadecimal asset id, so "ff" is valid.
         assert!(m.set_property(uid, "texture", Value::String("ff".into())));
         assert_eq!(m.get_property(uid, "texture"), Some(Value::String("ff".into())));
@@ -379,8 +367,8 @@ mod tests {
     #[test]
     fn write_mask_succeeds() {
         let mut p = Parts::create();
-        let body = p.cena.add_node(None, "RigidBody2D", None).unwrap().0;
-        let mut m = p.mundo();
+        let body = p.scene.add_node(None, "RigidBody2D", None).unwrap().0;
+        let mut m = p.world();
         assert!(m.set_property(body, "collision_mask", Value::Int(5)));
         assert_eq!(m.get_property(body, "collision_mask"), Some(Value::Int(5)));
     }

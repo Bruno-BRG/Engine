@@ -59,7 +59,7 @@ class LogicState {
   defs = $state.raw<NodeDef[]>([]);
   defsByKind = $derived(new Map(this.defs.map((d) => [d.kind, d] as const)));
   /** Registry types (with each one's properties), to pick the type and name of property nodes. */
-  tipos = $state.raw<NodeType[]>([]);
+  nodeTypes = $state.raw<NodeType[]>([]);
 
   /** Pasta do projeto aberto, ou null. */
   project = $state<string | null>(null);
@@ -111,7 +111,7 @@ class LogicState {
     try {
       if (!this.defs.length) {
         this.defs = JSON.parse(await readNodeLibrary()) as NodeDef[];
-        this.tipos = JSON.parse(readNodeRegistry()) as NodeType[];
+        this.nodeTypes = JSON.parse(readNodeRegistry()) as NodeType[];
       }
       await this.#reload();
     } catch (e) {

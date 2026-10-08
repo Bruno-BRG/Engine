@@ -11,7 +11,8 @@ GetProperty and SetProperty (VIS-021) read and write only decimals. The compiler
 - A property node declares its target type and property name as embedded text: the `type` pin (a node type of the registry, for example "Sprite2D") and the `name` pin. Both are fixed on the node, as the variable name is in GetVariable. A wire into `type` is refused by `validate`. A wire into `name` is refused once a type is declared.
 - Without a declared type, a graph from before typed properties keeps working: its `name` may still come from a wire, and its `value` pin is decimal.
 - The `value` pin takes the type of the property in the registry, looked up through the inheritance chain. An empty `type` means decimal, as before this change, so graphs saved before it keep working.
-- Properties of kind `Points` have no pin type and are refused.
+- Properties of kind `Points` and `Map` have no pin type and are refused.
+- A vector component (`position_x`, `position_y`, `scale_x`, `scale_y`) is accepted on a declared type. It is decimal, and its default is that component of the vector's default. The host reads and writes it as before, through `nexo_core::registry::componente`.
 - Without a wire or an embedded value, the `value` pin uses the default of the property in the registry. Without a declared type, it uses decimal zero.
 - Changing `type` or `name` removes the embedded `value`, because it may be of another type. It also removes the wires of the `value` pin (its input, its output, and the wires downstream of it through reroutes) that no longer type-check. The engine returns those wires, and the editor warns the user.
 - The IR ops `GetProp` and `SetProp` carry the type. The VM expects the host to return that type on a read. A decimal read from an integer property is accepted, because graphs without a declared type read integer properties as decimal. A read of any other type is a runtime error (`PropertyType`, which names the property and both types).

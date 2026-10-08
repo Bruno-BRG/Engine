@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Picker for the type or the name of a property node (VIS-021). The value is what the node stores, even when it is
-  // not in the list (a name the type does not have), so the user sees what to fix.
+  // Picker for the type of a property node (VIS-021). The value is what the node stores, even when it is not in
+  // the list, so the user sees what to fix.
   let {
     selected,
     options,
@@ -9,7 +9,7 @@
   }: {
     selected: string;
     options: { value: string; label: string }[];
-    /** Text of the empty option: "no type" for the type, "pick one" for the name. */
+    /** Text of the empty option ("no type"). */
     emptyLabel: string;
     onchange: (v: string) => void;
   } = $props();

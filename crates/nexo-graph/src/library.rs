@@ -7,9 +7,9 @@ use crate::types::{PinType, Value};
 use serde::Serialize;
 use std::sync::OnceLock;
 
-/// Pino de um nó. `ty` vazio quer dizer "o tipo que o próprio nó decide": o da variável nomeada (GetVariable e
-/// SetVariable), the named property's (GetProperty and SetProperty), or the incoming wire's (Reroute). `default`
-/// empty makes the input required: with no wire and no embedded value, validation fails. On property pins the
+/// A pin of a node. An empty `ty` means "the type the node decides itself": the named variable's (GetVariable and
+/// SetVariable), the named property's (GetProperty and SetProperty), or the incoming wire's (Reroute). An empty
+/// `default` makes the input required: with no wire and no embedded value, validation fails. On property pins the
 /// default comes from the registry (see `graph::input_default`).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -754,9 +754,9 @@ mod tests {
         // The node type is embedded text with an empty default (= no type, decimal). The value follows the registry.
         for kind in ["GetProperty", "SetProperty"] {
             let def = find(kind).unwrap();
-            let tipo = def.inputs.iter().find(|p| p.name == "type").unwrap();
-            assert_eq!(tipo.ty, Some(PinType::String), "{kind}");
-            assert_eq!(tipo.default, Some(Value::String(String::new())), "{kind}");
+            let type_pin = def.inputs.iter().find(|p| p.name == "type").unwrap();
+            assert_eq!(type_pin.ty, Some(PinType::String), "{kind}");
+            assert_eq!(type_pin.default, Some(Value::String(String::new())), "{kind}");
         }
         let get = find("GetProperty").unwrap();
         assert!(get.outputs.iter().any(|p| p.name == "value" && p.ty.is_none()));

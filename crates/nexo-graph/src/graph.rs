@@ -4,7 +4,7 @@
 
 use crate::library::{self, NodeDef, PinDef};
 use crate::types::{PinType, Value, Variable};
-use nexo_core::registry::{self, PropDef};
+use nexo_core::registry::{self, PropKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -343,10 +343,16 @@ pub(crate) fn is_property_node(kind: &str) -> bool {
     matches!(kind, "GetProperty" | "SetProperty")
 }
 
-/// The registry property a property node declares, and the type of its value pin. Refuses when the type is not in
-/// the registry, when the property is not in that type or its ancestors, when no name is embedded, and when the
-/// property is a list of points.
-fn declared_property(node: &GraphNode) -> Result<(&'static PropDef, PinType), Refusal> {
+/// What a property node declares (VIS-021): the type of its value pin, and the value that pin uses without a wire.
+struct DeclaredProperty {
+    ty: PinType,
+    default: Option<Value>,
+}
+
+/// The property a property node declares. Refuses when the type is not in the registry, when the property is not in
+/// that type or its ancestors, when no name is embedded, and when the property is a list of points. A vector
+/// component ("position_x") is decimal, and its default is that component of the vector's default.
+fn declared_property(node: &GraphNode) -> Result<DeclaredProperty, Refusal> {
     let node_type = texto_do(node, "type");
     let name = texto_do(node, "name");
     let label = node.etiqueta();
@@ -356,13 +362,33 @@ fn declared_property(node: &GraphNode) -> Result<(&'static PropDef, PinType), Re
     if name.is_empty() {
         return Err(Refusal::PropertyWithoutName { label });
     }
+    if let Some((vector, index)) = registry::componente(&name) {
+        let def = registry::prop_def(&node_type, vector)
+            .filter(|d| d.kind == PropKind::Vec2)
+            .ok_or(Refusal::UnknownProperty {
+                label,
+                node_type,
+                name,
+            })?;
+        let default = match Value::from_json(PropKind::Vec2, &def.default) {
+            Some(Value::Vec2(pair)) => pair.get(index).copied().unwrap_or(0.0),
+            _ => 0.0,
+        };
+        return Ok(DeclaredProperty {
+            ty: PinType::Float,
+            default: Some(Value::Float(default)),
+        });
+    }
     let def = registry::prop_def(&node_type, &name).ok_or_else(|| Refusal::UnknownProperty {
         label: label.clone(),
         node_type: node_type.clone(),
         name: name.clone(),
     })?;
     let ty = PinType::of_prop(def.kind).ok_or(Refusal::PointsProperty { label, name })?;
-    Ok((def, ty))
+    Ok(DeclaredProperty {
+        ty,
+        default: Value::from_json(def.kind, &def.default),
+    })
 }
 
 /// Type of the value pin of a property node (VIS-021). Without a declared type it is decimal, as before typed
@@ -371,7 +397,7 @@ pub(crate) fn property_pin_type(node: &GraphNode) -> Result<PinType, Refusal> {
     if texto_do(node, "type").is_empty() {
         return Ok(PinType::Float);
     }
-    declared_property(node).map(|(_, ty)| ty)
+    declared_property(node).map(|declared| declared.ty)
 }
 
 /// Value an input uses when it has no wire and no embedded value (VIS-021). The value pin of a property node uses
@@ -381,9 +407,7 @@ pub(crate) fn input_default(node: &GraphNode, pin: &PinDef) -> Option<Value> {
         if texto_do(node, "type").is_empty() {
             return Some(Value::Float(0.0));
         }
-        return declared_property(node)
-            .ok()
-            .and_then(|(def, _)| Value::from_json(def.kind, &def.default));
+        return declared_property(node).ok().and_then(|declared| declared.default);
     }
     pin.default.clone()
 }
@@ -2185,6 +2209,28 @@ mod tests {
         // The pin shows with its resolved type for the editor.
         let pin = g.pins().into_iter().find(|p| p.node == legacy && p.pin == "value");
         assert_eq!(pin.and_then(|p| p.ty), Some(PinType::Float));
+    }
+
+    #[test]
+    fn vector_component_is_decimal_with_the_vector_default() {
+        let mut g = Graph::default();
+        // position_x and scale_y are decimal components of the vector properties of Sprite2D.
+        let read = property_node(&mut g, "GetProperty", "Sprite2D", "position_x");
+        let write = property_node(&mut g, "SetProperty", "Sprite2D", "scale_y");
+        assert_eq!(g.output_type(g.node(read).unwrap(), "value"), Ok(PinType::Float));
+        // The value pin without a wire starts at the component of the vector default: scale is [1, 1].
+        let node = g.node(write).unwrap();
+        let pin = def_of(node).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
+        assert_eq!(input_default(node, pin), Some(Value::Float(1.0)));
+        let errors = g.validate();
+        assert!(
+            !errors.iter().any(|e| e.message.contains("scale_y") || e.message.contains("position_x")),
+            "{errors:?}"
+        );
+        // A type without the vector property refuses the component, as it refuses any unknown name.
+        property_node(&mut g, "GetProperty", "VirtualJoystick", "position_x");
+        let errors = g.validate();
+        assert!(errors.iter().any(|e| e.message.contains("'position_x'")), "{errors:?}");
     }
 
     #[test]

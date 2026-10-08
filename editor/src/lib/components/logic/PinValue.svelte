@@ -3,19 +3,23 @@
   import type { PropDef } from '$lib/state/scene.svelte';
 
   // Campo do valor embutido de uma entrada sem fio. Só para os tipos que se digitam (decimal, inteiro,
-  // boolean, text and 2D vector). The others take their value from a wire. On a property node, the property's
-  // registry picks the text field: options for an enum, a picker for a colour (VIS-021).
+  // booleano, texto e vetor 2D). Os demais recebem o valor por fio.
+  // On a property node, the registry property picks the field: options for an enum, a picker for a colour (VIS-021).
   let {
     ty,
     valor,
     onchange,
     prop,
+    suggestions = [],
   }: {
     ty: PinType;
     valor: Value | undefined;
     onchange: (v: Value) => void;
     prop?: PropDef;
+    /** Options offered under a text field. The field still takes any text (VIS-021). */
+    suggestions?: { value: string; label: string }[];
   } = $props();
+  const listId = $props.id();
 
   const pare = (e: Event) => e.stopPropagation();
   const enter = (e: KeyboardEvent) => {
@@ -82,11 +86,19 @@
     class="campo"
     type="text"
     value={texto(valor)}
+    list={suggestions.length ? listId : undefined}
     onpointerdown={pare}
     onkeydown={enter}
     onchange={(e) => envia(e.currentTarget.value)}
     aria-label="Texto"
   />
+  {#if suggestions.length}
+    <datalist id={listId}>
+      {#each suggestions as s (s.value)}
+        <option value={s.value} label={s.label}></option>
+      {/each}
+    </datalist>
+  {/if}
 {:else if ty === 'Vec2'}
   {@const par = vetor(valor)}
   <span class="par">

@@ -1261,23 +1261,23 @@ mod tests {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         // Reads the z_index (integer) of the node itself and writes it to the same property: the IR carries the type in both ops.
-        let le = adiciona(&mut g, "GetProperty");
-        g.set_value(le, "type", Value::String("Sprite2D".into())).unwrap();
-        g.set_value(le, "name", Value::String("z_index".into())).unwrap();
-        let grava = adiciona(&mut g, "SetProperty");
-        g.set_value(grava, "type", Value::String("Sprite2D".into())).unwrap();
-        g.set_value(grava, "name", Value::String("z_index".into())).unwrap();
+        let read_z = adiciona(&mut g, "GetProperty");
+        g.set_value(read_z, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(read_z, "name", Value::String("z_index".into())).unwrap();
+        let write_z = adiciona(&mut g, "SetProperty");
+        g.set_value(write_z, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(write_z, "name", Value::String("z_index".into())).unwrap();
         // Colour (text) written with an embedded value.
-        let cor = adiciona(&mut g, "SetProperty");
-        g.set_value(cor, "type", Value::String("Sprite2D".into())).unwrap();
-        g.set_value(cor, "name", Value::String("modulate".into())).unwrap();
-        g.set_value(cor, "value", Value::String("#ff0000".into())).unwrap();
-        g.connect((ev, "exec"), (grava, "exec")).unwrap();
-        g.connect((grava, "exec"), (cor, "exec")).unwrap();
-        g.connect((ev, "self"), (le, "node")).unwrap();
-        g.connect((ev, "self"), (grava, "node")).unwrap();
-        g.connect((ev, "self"), (cor, "node")).unwrap();
-        g.connect((le, "value"), (grava, "value")).unwrap();
+        let write_color = adiciona(&mut g, "SetProperty");
+        g.set_value(write_color, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(write_color, "name", Value::String("modulate".into())).unwrap();
+        g.set_value(write_color, "value", Value::String("#ff0000".into())).unwrap();
+        g.connect((ev, "exec"), (write_z, "exec")).unwrap();
+        g.connect((write_z, "exec"), (write_color, "exec")).unwrap();
+        g.connect((ev, "self"), (read_z, "node")).unwrap();
+        g.connect((ev, "self"), (write_z, "node")).unwrap();
+        g.connect((ev, "self"), (write_color, "node")).unwrap();
+        g.connect((read_z, "value"), (write_z, "value")).unwrap();
 
         let c = compile(&g).unwrap();
         let ops = &c.programs[0].ops;

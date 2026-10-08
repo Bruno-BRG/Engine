@@ -555,13 +555,13 @@ mod tests {
         g.connect((ev, "exec"), (pr, "exec")).unwrap();
         g.connect((ev, "self"), (gp, "node")).unwrap();
         g.connect((gp, "value"), (pr, "msg")).unwrap();
-        let texto = generate_csharp(&compile(&g).unwrap(), "Teste");
+        let code = generate_csharp(&compile(&g).unwrap(), "Teste");
         // The read register is text, and the call asks for text: it is no longer a fixed decimal.
         assert!(
-            texto.lines().any(|l| l.trim_start().starts_with("string r")),
-            "{texto}"
+            code.lines().any(|l| l.trim_start().starts_with("string r")),
+            "{code}"
         );
-        assert!(texto.contains("Nexo.GetProperty<string>(r"), "{texto}");
-        assert!(!texto.contains("double r2 = default;"), "{texto}");
+        assert!(code.contains("Nexo.GetProperty<string>(r"), "{code}");
+        assert!(!code.contains("double r2 = default;"), "{code}");
     }
 }

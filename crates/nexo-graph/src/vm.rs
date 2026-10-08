@@ -937,16 +937,16 @@ pub(crate) mod tests {
         /// Like the real host: decimal and integer convert (integer becomes decimal, decimal rounds to
         /// integer), and the other value types are refused (`false`). Limit: unlike the host's `coerce`, it does not check enum options, uid format or mask range.
         fn set_property(&mut self, node: u64, name: &str, value: Value) -> bool {
-            let Some(atual) = self.props.get_mut(&(node, name.to_string())) else {
+            let Some(current) = self.props.get_mut(&(node, name.to_string())) else {
                 return false;
             };
-            let novo = match (&*atual, value) {
+            let updated = match (&*current, value) {
                 (Value::Float(_), Value::Int(n)) => Value::Float(n as f64),
                 (Value::Int(_), Value::Float(f)) => Value::Int(f.round() as i64),
-                (antigo, valor) if antigo.ty() == valor.ty() => valor,
+                (previous, incoming) if previous.ty() == incoming.ty() => incoming,
                 _ => return false,
             };
-            *atual = novo;
+            *current = updated;
             true
         }
         fn action_pressed(&self, action: &str) -> bool {
