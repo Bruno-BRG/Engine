@@ -38,7 +38,9 @@ pub struct Bus {
     pub mute: bool,
 }
 
+/// `serde(default)`: um settings.ron de versão anterior, sem os campos novos, ainda abre.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProjectSettings {
     /// Gravidade em pixels por segundo², com Y para baixo.
     pub gravity: [f64; 2],
@@ -103,6 +105,23 @@ impl ProjectSettings {
         s.normalize();
         Ok(s)
     }
+
+    /// JSON com os mesmos nomes de campo do RON (snake_case). É o formato que o editor WASM e o
+    /// TypeScript usam; o arquivo `settings.ron` continua em RON.
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string(self).map_err(|e| e.to_string())
+    }
+
+    /// Lê o JSON das configurações, com as mesmas regras de `from_ron`.
+    pub fn from_json(text: &str) -> Result<ProjectSettings, String> {
+        if text.trim().is_empty() {
+            return Ok(ProjectSettings::default());
+        }
+        let mut s: ProjectSettings = serde_json::from_str(text)
+            .map_err(|e| format!("Configurações do projeto inválidas: {e}"))?;
+        s.normalize();
+        Ok(s)
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +174,74 @@ mod tests {
     fn arquivo_invalido_da_erro_legivel() {
         let err = ProjectSettings::from_ron("isto não é ron (").unwrap_err();
         assert!(err.contains("ilegíveis"));
+    }
+
+    #[test]
+    fn ida_e_volta_json() {
+        let mut s = ProjectSettings::default();
+        s.gravity = [0.0, 1200.0];
+        s.layers[2] = "heroi".into();
+        s.layer_matrix[2] = 0b101;
+        s.tags.push("boss".into());
+        s.physics_materials.push(PhysicsMaterial {
+            name: "Borracha".into(),
+            friction: 0.9,
+            bounce: 0.8,
+            rough: true,
+            absorbent: false,
+        });
+        let json = s.to_json().unwrap();
+        assert_eq!(ProjectSettings::from_json(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn json_usa_os_nomes_de_campo_do_contrato_typescript() {
+        // O TypeScript (editor/src/lib/settings.ts) lê estes nomes. Se mudarem aqui, mude lá também.
+        let mut s = ProjectSettings::default();
+        s.physics_materials.push(PhysicsMaterial {
+            name: "Gelo".into(),
+            friction: 0.05,
+            bounce: 0.0,
+            rough: false,
+            absorbent: true,
+        });
+        let v: serde_json::Value = serde_json::from_str(&s.to_json().unwrap()).unwrap();
+        for campo in ["gravity", "layers", "layer_matrix", "input", "buses", "tags", "physics_materials"] {
+            assert!(v.get(campo).is_some(), "falta o campo {campo}");
+        }
+        assert!(v["buses"][0].get("volume_db").is_some());
+        assert!(v["input"]["actions"].is_object());
+        assert!(v["physics_materials"][0].get("absorbent").is_some());
+        assert!(v["physics_materials"][0].get("friction").is_some());
+    }
+
+    #[test]
+    fn json_vazio_vira_padrao_e_lista_curta_e_corrigida() {
+        assert_eq!(ProjectSettings::from_json("").unwrap(), ProjectSettings::default());
+        let mut s = ProjectSettings::default();
+        s.layers.truncate(3);
+        s.layer_matrix.clear();
+        let fixed = ProjectSettings::from_json(&s.to_json().unwrap()).unwrap();
+        assert_eq!(fixed.layers.len(), LAYER_COUNT);
+        assert_eq!(fixed.layer_matrix.len(), LAYER_COUNT);
+    }
+
+    #[test]
+    fn json_invalido_da_erro_legivel() {
+        let err = ProjectSettings::from_json("{ isto não é json").unwrap_err();
+        assert!(err.contains("inválidas"));
+    }
+
+    #[test]
+    fn campo_faltando_usa_padrao() {
+        // Arquivo de uma versão anterior, sem tags nem materiais: abre com os padrões desses campos.
+        let s = ProjectSettings::from_json(r#"{"gravity":[0.0,500.0]}"#).unwrap();
+        assert_eq!(s.gravity, [0.0, 500.0]);
+        assert_eq!(s.tags, ProjectSettings::default().tags);
+        assert!(s.physics_materials.is_empty());
+        assert_eq!(s.layers.len(), LAYER_COUNT);
+        let r = ProjectSettings::from_ron("(gravity: (0.0, 300.0))").unwrap();
+        assert_eq!(r.gravity, [0.0, 300.0]);
+        assert_eq!(r.tags, ProjectSettings::default().tags);
     }
 }

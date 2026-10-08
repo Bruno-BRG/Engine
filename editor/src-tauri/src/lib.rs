@@ -1,5 +1,6 @@
 mod assets;
 mod project;
+mod settings;
 
 pub fn run() {
     tauri::Builder::default()
@@ -14,6 +15,8 @@ pub fn run() {
             project::open_project,
             project::load_scene,
             project::save_scene,
+            settings::load_settings,
+            settings::save_settings,
             assets::list_dir,
             assets::list_assets,
             assets::read_file,

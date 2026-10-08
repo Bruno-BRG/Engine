@@ -630,6 +630,14 @@ pub(crate) fn coerce(def: &PropDef, v: &Value) -> Result<Value, String> {
             }
             json!(s)
         }
+        PropKind::Mask => {
+            // 32 bits: aceita o inteiro com sinal (-1 = todas) e o sem sinal.
+            let n = v.as_f64().ok_or_else(bad)?.round() as i64;
+            if !(i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&n) {
+                return Err(bad());
+            }
+            json!(n)
+        }
     };
     Ok(out)
 }
@@ -811,6 +819,29 @@ mod tests {
         assert!(s.set_prop(a, "modulate", json!("azul"), None).is_err());
         let sp = s.add_node(Some(root), "Sprite2D", None).unwrap();
         assert!(s.set_prop(sp, "shape", json!("triangulo"), None).is_err());
+    }
+
+    #[test]
+    fn mascara_aceita_32_bits_com_ou_sem_sinal() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let body = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+        s.set_prop(body, "collision_mask", json!(-1), None).unwrap();
+        s.set_prop(body, "collision_mask", json!(4294967295u64), None).unwrap();
+        s.set_prop(body, "collision_mask", json!(0b1010), None).unwrap();
+        assert!(s.set_prop(body, "collision_mask", json!(4294967296u64), None).is_err());
+        assert!(s.set_prop(body, "collision_mask", json!(-2147483649i64), None).is_err());
+    }
+
+    #[test]
+    fn tag_e_layer_aceitam_nomes_do_projeto() {
+        // Os nomes válidos vêm das Configurações do Projeto, então o nó aceita qualquer texto.
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node", None).unwrap();
+        s.set_prop(a, "tag", json!("boss"), None).unwrap();
+        s.set_prop(a, "layer", json!("plataforma"), None).unwrap();
+        assert_eq!(value_of(s.node(a).unwrap(), "tag"), json!("boss"));
     }
 
     #[test]

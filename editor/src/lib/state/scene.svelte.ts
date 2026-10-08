@@ -4,7 +4,7 @@
 import { createSceneEditor, randomSeed, readNodeRegistry, type SceneEditor } from '$lib/runtime/engine';
 import { log } from './log.svelte';
 
-export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid';
+export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask';
 
 export interface PropDef {
   name: string;

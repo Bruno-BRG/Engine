@@ -24,7 +24,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // ---------- Implementação de navegador ----------
 const LS_PROJECTS = 'nexo.web.projects';
-type WebProject = ProjectInfo & { scene: unknown; openedAt: number };
+type WebProject = ProjectInfo & { scene: unknown; openedAt: number; settings?: string };
 const readWeb = (): Record<string, WebProject> => JSON.parse(localStorage.getItem(LS_PROJECTS) ?? '{}');
 const writeWeb = (v: Record<string, WebProject>) => localStorage.setItem(LS_PROJECTS, JSON.stringify(v));
 const now = () => Math.floor(Date.now() / 1000);
@@ -82,6 +82,22 @@ export const platform = {
     if (isTauri) return invoke('save_scene', { path, text });
     const all = readWeb();
     all[path].scene = text;
+    writeWeb(all);
+  },
+
+  /** Configurações do projeto em JSON (settings.ron no disco). Sem arquivo, texto vazio (padrões). */
+  async loadSettings(path: string): Promise<string> {
+    if (isTauri) return invoke('load_settings', { path });
+    const saved = readWeb()[path]?.settings;
+    return typeof saved === 'string' ? saved : '';
+  },
+
+  /** Grava as configurações (JSON) como settings.ron. O Rust valida antes de gravar. */
+  async saveSettings(path: string, json: string): Promise<void> {
+    if (isTauri) return invoke('save_settings', { path, text: json });
+    const all = readWeb();
+    if (!all[path]) throw new Error('Projeto não encontrado');
+    all[path].settings = json;
     writeWeb(all);
   },
 

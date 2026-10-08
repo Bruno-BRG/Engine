@@ -36,6 +36,6 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 - [ ] **SCN-030** (P1) Scene instancing (prefabs) with per-property overrides shown in bold, revert per property. *U: Prefab overrides; G: instanced scenes.*
 - [ ] **SCN-031** (P1) Open instanced scene for editing, "Editable children".
 - [ ] **SCN-032** (P1) Multiple open scenes as tabs; scene switching at runtime.
-- [ ] **SCN-033** (P1) Groups/tags on nodes (`enemies`, `coins`) usable by logic. *G: groups; U: tags.*
+- [ ] **SCN-033** (P1) Groups/tags on nodes (`enemies`, `coins`) usable by logic. *G: groups; U: tags.* *Status (Fase 2): parcial: tags do projeto na aba Camadas e Tags, campo Tag do Inspector com essa lista, renomear atualiza os nós. Uso pela lógica depende da programação visual (VIS).*
 - [ ] **SCN-034** (P1) Signals: list in a Node tab next to Inspector, connect dialog to target node + script event. *G: Node dock > Signals.*
 - [ ] **SCN-035** (P2) Autoloads/singletons (global nodes). *G: Autoload.*

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { app } from '$lib/state/app.svelte';
   import { log } from '$lib/state/log.svelte';
+  import { openProjectSettings, settingsUi } from '$lib/state/settings.svelte';
   import { COMMANDS, keysOf } from '$lib/commands';
   import { isTauri } from '$lib/platform';
+  import ProjectSettingsDialog from './settings/ProjectSettingsDialog.svelte';
   import { Check } from '@lucide/svelte';
 
   // Os itens vêm da lista de comandos: menu, paleta e atalhos ficam sempre iguais.
@@ -62,6 +64,7 @@
         'sep',
         cmd('deselect', 'Limpar seleção'),
         'sep',
+        { label: 'Configurações do projeto…', enabled: () => app.project != null, run: () => openProjectSettings() },
         cmd('shortcuts', 'Atalhos…'),
       ],
     },
@@ -162,6 +165,9 @@
     </div>
   {/each}
 </nav>
+{#if settingsUi.open}
+  <ProjectSettingsDialog />
+{/if}
 
 <style>
   .menubar {

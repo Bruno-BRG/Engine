@@ -22,9 +22,9 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 ## Filtering and settings
 
 - [ ] **PHY-020** (P0) Collision layers and masks (32 named layers) on every body/area. *G: layers/masks.* *Status (Fase 2): parcial: camada do nó (4 camadas fixas, da lista Layer) e máscara como número de bits (-1 = todas). Faltam as 32 camadas nomeadas e a grade de bits.*
-- [ ] **PHY-021** (P0) Project Settings > Physics 2D: gravity vector, layer names, Layer Collision Matrix. *U: Physics 2D settings.* *Status (Fase 2): pendente: gravidade fixa; nomes das camadas e matriz dependem das Configurações do Projeto (EDT-023).*
+- [ ] **PHY-021** (P0) Project Settings > Physics 2D: gravity vector, layer names, Layer Collision Matrix. *U: Physics 2D settings.* *Status (Fase 2): parcial: gravidade, nomes das 32 camadas e matriz (simétrica) são editados em Configurações do Projeto > Física 2D e gravados em settings.ron. Falta a física ler essas configurações (Physics::build ainda usa gravidade fixa de 980 e as camadas padrão), para a mudança valer no próximo Jogar.*
 - [ ] **PHY-022** (P1) Per-body include/exclude layer overrides with priority. *U 6: Include/Exclude Layers, Layer Override Priority.*
-- [ ] **PHY-023** (P1) `PhysicsMaterial` resource: friction, bounce, rough, absorbent.
+- [ ] **PHY-023** (P1) `PhysicsMaterial` resource: friction, bounce, rough, absorbent. *Status (Fase 2): parcial: lista de materiais editável em Configurações do Projeto > Física 2D, gravada em settings.ron. Falta o campo physics_material no Inspector de corpos e a aplicação de atrito e quique na física (agente de física). Renomear um material não atualiza as referências.*
 
 ## Queries and joints
 
