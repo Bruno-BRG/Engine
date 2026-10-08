@@ -11,7 +11,7 @@
 use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
-use nexo_graph::{Compiled, Context, Graph, Host, Pausa, Scheduler, TraceEvent, VmError, compile};
+use nexo_graph::{Compiled, Context, Graph, Host, Pausa, Scheduler, Trace, VmError, compile};
 use nexo_physics::STEP;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use wasm_bindgen::prelude::*;
@@ -131,15 +131,15 @@ pub(crate) fn aplicar_pontos(instancias: &mut [Instancia], pontos: &BTreeMap<Uid
     }
 }
 
-/// Whether an instance records its trace (VIS-030, DBG-003). The trace allocates one event per operation, so it is
-/// on only for the instance the debugger follows, and only when there is a reason to look: the panel is open, the
+/// Whether an instance records its trace (VIS-030, DBG-003). The trace costs a set insert per operation, so it is on
+/// only for the instance the debugger follows, and only when there is a reason to look: the panel is open, the
 /// instance is paused, or it has a breakpoint.
 pub(crate) fn grava_rastro(escolhida: bool, painel_aberto: bool, pausada: bool, tem_ponto: bool) -> bool {
     escolhida && (painel_aberto || pausada || tem_ponto)
 }
 
 /// Turns the trace of each instance on or off, as `grava_rastro` decides. It runs every frame: it only sets flags,
-/// and it drops the pending events of an instance whose trace turns off, so nothing piles up without a reader.
+/// and it clears the trace of an instance whose trace turns off, so nothing is kept without a reader.
 pub(crate) fn atualizar_rastro(instancias: &mut [Instancia], escolhida: Option<Uid>, painel_aberto: bool) {
     for inst in instancias {
         let ligado = grava_rastro(
@@ -322,7 +322,7 @@ impl Instancia {
     }
 
     /// Takes the trace of the instance since the last call (VIS-030, DBG-003). Empty if the trace is off.
-    pub(crate) fn tomar_rastro(&mut self) -> Vec<TraceEvent> {
+    pub(crate) fn tomar_rastro(&mut self) -> Trace {
         self.agenda.tomar_rastro()
     }
 }

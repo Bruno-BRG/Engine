@@ -1,6 +1,6 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
-  import { logicDebug } from '$lib/logic/debug.svelte';
+  import { chaveDoFio, logicDebug } from '$lib/logic/debug.svelte';
   import { scene } from '$lib/state/scene.svelte';
   import { focus, focusPanel } from '$lib/state/focus.svelte';
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
@@ -126,7 +126,9 @@
       ? logicDebug.selecionada
       : null,
   );
-  const executados = $derived(new Set(uidRastro ? (logicDebug.executados[uidRastro] ?? []) : []));
+  // What lights up now: the nodes and flow wires of the followed instance that ran in the last LIT_MS (VIS-030).
+  const litNodes = $derived(new Set(uidRastro && logicDebug.lit.uid === uidRastro ? logicDebug.lit.nodes : []));
+  const litWires = $derived(new Set(uidRastro && logicDebug.lit.uid === uidRastro ? logicDebug.lit.wires : []));
   const pontosDeParada = $derived(new Set(ativo ? logicDebug.breakpointsOf(ativo) : []));
   const valores = $derived<Record<number, Value>>(uidRastro ? (logicDebug.valores[uidRastro] ?? {}) : {});
 
@@ -154,7 +156,8 @@
           d: wirePath(a, b),
           fluxo: ty === 'Flow',
           cor: pinStyle(ty).color,
-          quente: executados.has(w.from.node),
+          // Lit only if this wire was taken: a branch that did not run leaves its wire dark (VIS-030).
+          quente: litWires.has(chaveDoFio(w.from.node, w.from.pin, w.to.node)),
           sel: logic.selWire?.from.node === w.from.node &&
             logic.selWire?.from.pin === w.from.pin &&
             logic.selWire?.to.node === w.to.node &&
@@ -599,7 +602,7 @@
         <div
           class="reroute"
           class:sel={selecionado}
-          class:ativo={executados.has(n.id)}
+          class:ativo={litNodes.has(n.id)}
           class:erro={erros.has(n.id)}
           class:bp={temPontoDeParada(n.id)}
           data-node={n.id}
@@ -630,7 +633,7 @@
         <div
           class="no"
           class:sel={selecionado}
-          class:ativo={executados.has(n.id)}
+          class:ativo={litNodes.has(n.id)}
           class:erro={erros.has(n.id)}
           data-node={n.id}
           style="left: {n.position[0]}px; top: {n.position[1]}px; width: {altura[0]}px; --fam: {familyOf(def.category)}"
@@ -753,6 +756,10 @@
     fill: none;
     stroke-width: 2px;
     pointer-events: none;
+    /* The lit state fades out over the same LIT_MS as the store (VIS-030). */
+    transition:
+      stroke-width 0.3s ease-out,
+      filter 0.3s ease-out;
   }
   /* Fluxo de execução: tracejado animado, como na Fase 0 (VIS-004). */
   .fio.fluxo {
@@ -762,6 +769,10 @@
   .fio.quente {
     stroke-width: 3px;
     filter: drop-shadow(0 0 3px currentColor);
+  }
+  /* A flow wire taken just now runs its dashes faster (VIS-030). The store drops the class LIT_MS later. */
+  .fio.fluxo.quente {
+    animation-duration: 0.4s;
   }
   .fio.sel {
     stroke-width: 3px;

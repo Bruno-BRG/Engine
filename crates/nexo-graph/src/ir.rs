@@ -272,6 +272,15 @@ pub enum Frame {
     Timer { node: u64 },
 }
 
+/// A flow wire: output `pin` of node `from` leads to the execution input of node `to` (VIS-030). It is identified by
+/// the nodes and the pin, not by the wire's index in the graph, which changes when the graph is edited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FlowWire {
+    pub from: u64,
+    pub pin: &'static str,
+    pub to: u64,
+}
+
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
@@ -291,6 +300,10 @@ pub struct Program {
     pub stacks: Vec<Vec<Frame>>,
     /// Index in `stacks` of the call stack of each op, at the same index as `ops`.
     pub stack_of_op: Vec<usize>,
+    /// Flow wires that take control to each op, at the same index as `ops`, plus one more entry for the end of the
+    /// program (VIS-030). A wire is listed on the first op that runs after it, so a branch that is not taken never
+    /// lists its wire. Empty lists are the common case.
+    pub wires_at: Vec<Vec<FlowWire>>,
 }
 
 impl Program {
@@ -387,8 +400,13 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         }],
         stacks: Vec::new(),
         stack_of_op: Vec::new(),
+        pending_wires: Vec::new(),
+        wires_at: Vec::new(),
     };
     e.flow(event.id, "exec")?;
+    // Wires that reach the end of the program with no op after them belong to the end entry.
+    let tail = std::mem::take(&mut e.pending_wires);
+    e.wires_at.push(tail);
     // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
     let estado = match event.kind.as_str() {
         "State" | "StateEnter" | "StateExit" => Some(texto_embutido(event, "state")),
@@ -403,6 +421,7 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         estado,
         stacks: e.stacks,
         stack_of_op: e.stack_of_op,
+        wires_at: e.wires_at,
     })
 }
 
@@ -438,16 +457,30 @@ struct Emitter<'g> {
     stacks: Vec<Vec<Frame>>,
     /// Index in `stacks` of the call stack of each emitted op.
     stack_of_op: Vec<usize>,
+    /// Flow wires entered since the last op was emitted. The next op takes them (VIS-030).
+    pending_wires: Vec<FlowWire>,
+    /// Wires that take control to each emitted op, at the same index as `ops`.
+    wires_at: Vec<Vec<FlowWire>>,
 }
 
 impl<'g> Emitter<'g> {
-    /// Appends an op and returns its index. The op records the current call stack (DBG-003).
+    /// Appends an op and returns its index. The op records the current call stack (DBG-003) and takes the flow
+    /// wires entered since the previous op (VIS-030).
     fn emit(&mut self, op: Op, source: u64) -> usize {
         self.ops.push(op);
         self.sources.push(source);
         let stack = self.stack_index();
         self.stack_of_op.push(stack);
+        self.wires_at.push(std::mem::take(&mut self.pending_wires));
         self.ops.len() - 1
+    }
+
+    /// Index where a forward jump lands, for the code that comes next. The code after a join is also reached by
+    /// the paths that jump over the wires still pending, so those wires are dropped here: they were not taken
+    /// on every path to the join (VIS-030).
+    fn join(&mut self) -> usize {
+        self.pending_wires.clear();
+        self.ops.len()
     }
 
     /// Index in `stacks` of the current call stack. A stack enters the table once, so the table stays small: it grows
@@ -476,13 +509,19 @@ impl<'g> Emitter<'g> {
 
     /// Emite o que vem depois do pino de fluxo `pin` do nó `from`. Vários fios saindo do mesmo pino rodam
     /// na ordem em que foram criados.
-    fn flow(&mut self, from: u64, pin: &str) -> Result<(), CompileError> {
+    fn flow(&mut self, from: u64, pin: &'static str) -> Result<(), CompileError> {
         let graph = self.graph;
         for w in graph
             .wires
             .iter()
             .filter(|w| w.from.node == from && w.from.pin == pin)
         {
+            // The wire is taken when the first op of its destination runs (VIS-030).
+            self.pending_wires.push(FlowWire {
+                from,
+                pin,
+                to: w.to.node,
+            });
             self.exec(w.to.node)?;
         }
         Ok(())
@@ -545,10 +584,10 @@ impl<'g> Emitter<'g> {
                 let to_false = self.emit(Op::JumpIfFalse { cond, target: 0 }, id);
                 self.flow(id, "true")?;
                 let to_end = self.emit(Op::Jump { target: 0 }, id);
-                let false_start = self.ops.len();
+                let false_start = self.join();
                 self.patch(to_false, false_start);
                 self.flow(id, "false")?;
-                let end = self.ops.len();
+                let end = self.join();
                 self.patch(to_end, end);
                 Ok(())
             }
@@ -597,18 +636,20 @@ impl<'g> Emitter<'g> {
                     id,
                 );
                 self.emit(Op::Jump { target: head }, id);
-                let end = self.ops.len();
+                let end = self.join();
                 self.patch(to_end, end);
                 self.flow(id, "done")
             }
             "While" => {
                 // cabeça: condição avaliada a cada volta; se falsa vai ao fim; corpo; volta à cabeça; fim:
+                // The wire into the loop lands on the condition, which runs again on each turn, so that wire is taken
+                // again on each turn (a known limit of VIS-030: it stays lit while the loop runs).
                 let head = self.ops.len();
                 let cond = self.input(node, "condition")?;
                 let to_end = self.emit(Op::JumpIfFalse { cond, target: 0 }, id);
                 self.flow(id, "body")?;
                 self.emit(Op::Jump { target: head }, id);
-                let end = self.ops.len();
+                let end = self.join();
                 self.patch(to_end, end);
                 self.flow(id, "done")
             }
@@ -658,12 +699,12 @@ impl<'g> Emitter<'g> {
                 let spawn = self.emit(Op::Spawn { seconds, entry: 0 }, id);
                 self.flow(id, "started")?;
                 let to_end = self.emit(Op::Jump { target: 0 }, id);
-                let entry = self.ops.len();
+                let entry = self.join();
                 self.patch(spawn, entry);
                 self.frames.push(Frame::Timer { node: id });
                 self.flow(id, "timeout")?;
                 self.frames.pop();
-                let end = self.ops.len();
+                let end = self.join();
                 self.patch(to_end, end);
                 Ok(())
             }
@@ -765,7 +806,7 @@ impl<'g> Emitter<'g> {
                 });
                 self.flow(def.id, "exec")?;
                 self.frames.pop();
-                let fim = self.ops.len();
+                let fim = self.join();
                 for salto in self.retornos.pop().unwrap_or_default() {
                     self.patch(salto, fim);
                 }

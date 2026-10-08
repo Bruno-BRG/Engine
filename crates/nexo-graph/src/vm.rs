@@ -4,10 +4,10 @@
 //! usa as mesmas ops. Cada op conta como um passo. Passado o orçamento, a execução vira erro em vez de travar o
 //! jogo, o que cobre os laços de fluxo infinitos.
 
-use crate::ir::{AudioOp, Op, Program, Reg};
+use crate::ir::{AudioOp, FlowWire, Op, Program, Reg};
 use crate::types::{LogLevel, Value};
 use nexo_core::{AudioCommand, Uid};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// O mundo do jogo visto pela VM. A cena implementa este trait. Cada método abaixo é um contrato: o que
@@ -61,13 +61,61 @@ pub struct Context {
     pub estado: String,
 }
 
-/// Evento de rastro (VIS-030, DBG-003). O editor usa para pulsar os fios e mostrar valores no hover.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TraceEvent {
-    /// Uma op do nó `node` rodou, no evento `evento`.
-    Executou { evento: String, node: u64 },
-    /// A op do nó `node` produziu `valor` no seu registrador de saída. A saída em si é associada pelo editor.
-    Valor { node: u64, valor: Value },
+/// Longest text kept in a trace, in characters. Longer texts are cut (VIS-030).
+pub const TRACE_TEXT_LIMIT: usize = 64;
+
+/// What one instance did since its last read (VIS-030, DBG-003). It is a summary, not a log: its size follows the
+/// graph (nodes, wires and values), not the number of operations, so a loop of 10,000 turns leaves the same trace
+/// as a loop of 2. Each operation costs one set insert while the trace is on, and nothing while it is off.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Trace {
+    /// Nodes that ran at least one operation, and the event node when its program starts.
+    pub nodes: BTreeSet<u64>,
+    /// Flow wires that were taken. A branch that was not taken leaves its wire out.
+    pub wires: BTreeSet<FlowWire>,
+    /// Last value each node produced, with texts cut to `TRACE_TEXT_LIMIT` characters.
+    pub values: BTreeMap<u64, Value>,
+}
+
+impl Trace {
+    /// Whether nothing was recorded since the last read.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.wires.is_empty() && self.values.is_empty()
+    }
+
+    fn record_node(&mut self, node: u64) {
+        self.nodes.insert(node);
+    }
+
+    fn record_wires(&mut self, wires: &[FlowWire]) {
+        for wire in wires {
+            self.wires.insert(*wire);
+        }
+    }
+
+    /// Stores the value of `node` only when it changed, so a loop that writes the same value does not copy it.
+    fn record_value(&mut self, node: u64, value: &Value) {
+        let same = match (self.values.get(&node), value) {
+            (Some(Value::String(kept)), Value::String(text)) => kept.as_str() == cut_text(text),
+            (Some(kept), _) => kept == value,
+            (None, _) => false,
+        };
+        if !same {
+            let kept = match value {
+                Value::String(text) => Value::String(cut_text(text).to_string()),
+                other => other.clone(),
+            };
+            self.values.insert(node, kept);
+        }
+    }
+}
+
+/// The first `TRACE_TEXT_LIMIT` characters of `text`, without a copy.
+fn cut_text(text: &str) -> &str {
+    match text.char_indices().nth(TRACE_TEXT_LIMIT) {
+        Some((end, _)) => &text[..end],
+        None => text,
+    }
 }
 
 /// Falha na execução. Guarda o nó de origem da op que falhou.
@@ -195,7 +243,8 @@ pub(crate) struct Ambiente<'a> {
     /// Passo a passo: quantas ops ainda podem rodar antes de parar. `None` é execução livre. Quando chega a zero,
     /// a próxima op pausa. Vale para a instância inteira, não para uma tarefa só.
     pub passo: Option<u32>,
-    pub trace: Option<&'a mut Vec<TraceEvent>>,
+    /// The instance's trace, while it is observed (VIS-030). `None` records nothing.
+    pub trace: Option<&'a mut Trace>,
     /// Tarefas criadas por Spawn (temporizadores), para o agendador.
     pub novas: Vec<Tarefa>,
     /// Sinais emitidos por EmitSignal, para o agendador.
@@ -253,8 +302,19 @@ pub(crate) fn avancar(
     limite: u32,
 ) -> Result<Parada, VmError> {
     let mut passos = 0u32;
+    if t.pc == 0 {
+        // The event runs when its program starts, even when the event node has no operation of its own (VIS-030).
+        if let Some(tr) = amb.trace.as_mut() {
+            tr.record_node(program.node);
+        }
+    }
     loop {
         if t.pc >= program.ops.len() {
+            if let Some(tr) = amb.trace.as_mut()
+                && let Some(wires) = program.wires_at.get(t.pc)
+            {
+                tr.record_wires(wires);
+            }
             return Ok(Parada::Fim);
         }
         let origem = program.sources.get(t.pc).copied().unwrap_or(program.node);
@@ -277,10 +337,10 @@ pub(crate) fn avancar(
         t.pc += 1;
         let op = &program.ops[atual];
         if let Some(tr) = amb.trace.as_mut() {
-            tr.push(TraceEvent::Executou {
-                evento: program.event.clone(),
-                node: origem,
-            });
+            tr.record_node(origem);
+            if let Some(wires) = program.wires_at.get(atual) {
+                tr.record_wires(wires);
+            }
         }
         let parada = executa(op, origem, t, amb)?;
         t.ultimo_no = Some(origem);
@@ -288,10 +348,7 @@ pub(crate) fn avancar(
             *restam = restam.saturating_sub(1);
         }
         if let (Some(dst), Some(tr)) = (destino(op), amb.trace.as_mut()) {
-            tr.push(TraceEvent::Valor {
-                node: origem,
-                valor: t.regs[dst].clone(),
-            });
+            tr.record_value(origem, &t.regs[dst]);
         }
         if let Some(p) = parada {
             return Ok(p);
@@ -1073,6 +1130,7 @@ pub(crate) mod tests {
             estado: None,
             stacks: Vec::new(),
             stack_of_op: Vec::new(),
+            wires_at: Vec::new(),
         };
         let mut ctx = Context {
             owner: 5,

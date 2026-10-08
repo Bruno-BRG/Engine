@@ -7,7 +7,7 @@ import { log } from './log.svelte';
 import { audio } from './audio.svelte';
 import { logic } from '$lib/logic/store.svelte';
 import { logicDebug, type InstanciaDebug } from '$lib/logic/debug.svelte';
-import type { TraceEvent } from '$lib/logic/model';
+import type { Trace } from '$lib/logic/model';
 import type { AudioCommand } from '$lib/audio/types';
 import { pollGamepad, resetGamepad, syncMouse } from '$lib/runtime/devices';
 import { settingsUi } from '$lib/state/settings.svelte';
@@ -29,10 +29,16 @@ interface ConsoleMessage {
 /** Teclas com ação padrão do navegador (rolar a página): bloqueadas durante a reprodução. */
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
 
+/** Seconds between two reads of the debugger (state and trace): 10 Hz, not every frame (VIS-030). */
+const DEBUG_READ_S = 0.1;
+
 class PlayRuntime {
   /** Nós da cópia de reprodução, atualizados algumas vezes por segundo para o Depurador. */
   live = $state.raw<NodeView[]>([]);
   #sinceLive = 0;
+  #sinceDebug = 0;
+  /** Last debugger state text read from the play session, so an unchanged state is not parsed or assigned again. */
+  #debugState: string | null = null;
   /** Breakpoints as last sent to the play session, so unchanged ones are not sent again. */
   #pontosEnviados: string | null = null;
 
@@ -66,6 +72,8 @@ class PlayRuntime {
     this.#drainAudio();
     this.drainConsole();
     this.#sinceLive = 0;
+    this.#sinceDebug = 0;
+    this.#debugState = null;
     this.syncLive();
     this.#atualizarDepurador();
     window.addEventListener('keydown', this.#keyDown, true);
@@ -84,7 +92,11 @@ class PlayRuntime {
     this.#drainEvents();
     this.#drainAudio();
     this.drainConsole();
-    this.#atualizarDepurador();
+    this.#sinceDebug += dt;
+    if (this.#sinceDebug >= DEBUG_READ_S) {
+      this.#sinceDebug = 0;
+      this.#atualizarDepurador();
+    }
     this.#sinceLive += dt;
     if (this.#sinceLive > 0.1) {
       this.#sinceLive = 0;
@@ -133,21 +145,33 @@ class PlayRuntime {
     this.syncLive();
   }
 
-  /** State of the instances and the trace of the followed one, read only while the debugger is observing. */
+  /**
+   * State of the instances and the trace of the followed one, read only while the debugger is observing. `step` calls
+   * it at 10 Hz (DEBUG_READ_S), and the debugger's actions call it at once. The state is parsed only when its text
+   * changed.
+   */
   #atualizarDepurador() {
     const ed = scene.editor;
-    if (!ed || !ed.is_playing() || !logicDebug.observando) return;
-    const lista = JSON.parse(ed.debug_state()) as InstanciaDebug[];
-    logicDebug.setInstancias(lista);
+    if (!ed || !ed.is_playing()) return;
+    if (!logicDebug.observando) {
+      // Nothing observes the play session now: the lit highlight must not stay on the canvas.
+      logicDebug.apagarRealce();
+      return;
+    }
+    const estado = ed.debug_state();
+    if (estado !== this.#debugState) {
+      this.#debugState = estado;
+      logicDebug.setInstancias(JSON.parse(estado) as InstanciaDebug[]);
+    }
     // No valid choice (game start, or the instance is gone): the first paused one, or the first.
-    if (!lista.some((i) => i.uid === logicDebug.selecionada)) {
-      this.escolherInstancia((lista.find((i) => i.pausada) ?? lista[0])?.uid ?? null);
+    if (!logicDebug.instancias.some((i) => i.uid === logicDebug.selecionada)) {
+      this.escolherInstancia((logicDebug.instancias.find((i) => i.pausada) ?? logicDebug.instancias[0])?.uid ?? null);
     }
     const uid = logicDebug.selecionada;
     if (uid) {
-      const eventos = JSON.parse(ed.debug_trace()) as TraceEvent[];
-      // No events (the instance is parked), the last segment stays visible.
-      if (eventos.length) logicDebug.pushTrace(uid, eventos);
+      // Read with the state. A read with nothing new still ages the highlight (VIS-030).
+      const trace = JSON.parse(ed.debug_trace()) as Trace;
+      logicDebug.pushTrace(uid, trace, performance.now());
     }
   }
 

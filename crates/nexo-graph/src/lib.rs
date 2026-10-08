@@ -19,8 +19,8 @@ pub use csharp::generate_csharp;
 pub use graph::{
     Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Refusal, Wire,
 };
-pub use ir::{Compiled, Frame, Op, Program, Reg, compile};
+pub use ir::{Compiled, FlowWire, Frame, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};
 pub use scheduler::{Pausa, Scheduler, recarregar_contexto};
 pub use types::{LogLevel, PinType, Value, Variable};
-pub use vm::{Context, Host, TraceEvent, Vm, VmError};
+pub use vm::{Context, Host, Trace, Vm, VmError};
