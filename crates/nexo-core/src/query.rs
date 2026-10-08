@@ -1,8 +1,8 @@
 //! Consultas sobre a cena para o editor e o viewport: transformação mundial, pose de reprodução,
 //! lista de desenho, seleção por clique, limites e o contorno usado pela hierarquia.
 
-use crate::registry;
-use crate::scene::{Node, Scene, Uid, as_vec2, value_of};
+use crate::registry::{self, SignalDef};
+use crate::scene::{Connection, Node, Scene, Uid, as_vec2, value_of};
 use crate::{SPRITE_FLOATS, SpriteInstance, flags};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -346,6 +346,10 @@ pub struct OutlineNode {
     /// Transformação no mundo (na reprodução, já com os comportamentos aplicados).
     pub world: Xf,
     pub props: Map<String, Value>,
+    /// Sinais que o tipo emite, para a aba Nó (SCN-034). Vazio para os tipos que não emitem.
+    pub signals: Vec<SignalDef>,
+    /// Ligações deste nó como emissor (SCN-034).
+    pub connections: Vec<Connection>,
 }
 
 /// Estado da cena para a interface: árvore em ordem, histórico e modo de reprodução.
@@ -381,6 +385,8 @@ pub fn outline(scene: &Scene, time: Option<f64>) -> Outline {
             visible,
             world: world_xf,
             props: full_props(n),
+            signals: registry::signals_of(&n.kind).to_vec(),
+            connections: n.connections.clone(),
         });
     }
     Outline {
@@ -407,6 +413,27 @@ mod tests {
         s.set_prop(a, "position", json!([100.0, 50.0]), None).unwrap();
         s.set_prop(a, "size", json!([40.0, 20.0]), None).unwrap();
         (s, root, a)
+    }
+
+    #[test]
+    fn outline_leva_sinais_e_ligacoes_do_emissor() {
+        let mut s = Scene::new_default("Principal", 7);
+        let root = s.roots()[0];
+        let t = s.add_node(Some(root), "Timer", None).unwrap();
+        let sp = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", sp, "on_timeout").unwrap();
+        let o = serde_json::to_value(outline(&s, None)).unwrap();
+        let nodes = o["nodes"].as_array().unwrap();
+        let timer = nodes.iter().find(|n| n["uid"] == json!(t.to_string())).unwrap();
+        assert_eq!(timer["signals"][0]["name"], "timeout");
+        assert_eq!(timer["signals"][0]["label"], "Tempo esgotado");
+        assert_eq!(timer["connections"][0]["signal"], "timeout");
+        assert_eq!(timer["connections"][0]["target"], json!(sp.to_string()));
+        assert_eq!(timer["connections"][0]["method"], "on_timeout");
+        // Os sprites não emitem sinais e não têm ligações: as listas saem vazias, não ausentes.
+        let sprite = nodes.iter().find(|n| n["uid"] == json!(sp.to_string())).unwrap();
+        assert_eq!(sprite["signals"], json!([]));
+        assert_eq!(sprite["connections"], json!([]));
     }
 
     #[test]

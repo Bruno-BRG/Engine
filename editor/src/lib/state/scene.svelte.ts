@@ -35,6 +35,19 @@ export interface NodeType {
   props: PropDef[];
 }
 
+/** Sinal que um tipo de nó emite (SCN-034). `name` vai para a ligação; `label` é o texto da interface. */
+export interface SignalDef {
+  name: string;
+  label: string;
+}
+
+/** Ligação de um sinal do nó a um nó alvo (SCN-034). `method` é o evento do script do alvo que recebe o sinal. */
+export interface Connection {
+  signal: string;
+  target: string;
+  method: string;
+}
+
 /** Forma de colisão no mundo: `points` são os cantos (retângulo) ou pontos do círculo. */
 export interface ShapeOutline {
   uid: string;
@@ -52,6 +65,10 @@ export interface NodeView {
   visible: boolean;
   world: { x: number; y: number; rot: number; sx: number; sy: number };
   props: Record<string, any>;
+  /** Sinais que o tipo emite (vazio para os que não emitem). */
+  signals: SignalDef[];
+  /** Ligações deste nó como emissor. */
+  connections: Connection[];
 }
 
 export interface Outline {
@@ -313,6 +330,26 @@ class SceneState {
 
   changeKind(uid: string, kind: string) {
     this.#run((ed) => ed.change_kind(uid, kind));
+  }
+
+  /**
+   * Liga o sinal de `emitter` ao nó `target`, chamando `method` nele (SCN-034). Devolve o motivo da recusa
+   * para o diálogo mostrar, ou null se a ligação foi feita.
+   */
+  connect(emitter: string, signal: string, target: string, method: string): string | null {
+    if (!this.#ed) return 'A cena ainda não foi carregada';
+    try {
+      this.#ed.connect(emitter, signal, target, method);
+    } catch (e) {
+      return message(e);
+    }
+    this.#refresh();
+    return null;
+  }
+
+  /** Remove uma ligação do emissor (a que tem o mesmo sinal, alvo e método). */
+  disconnect(emitter: string, link: Connection) {
+    this.#run((ed) => ed.disconnect(emitter, link.signal, link.target, link.method));
   }
 
   /** Fecha o agrupamento de alterações (soltar o mouse, sair de um campo numérico). */

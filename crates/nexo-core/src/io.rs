@@ -3,13 +3,14 @@
 //! mostra só o que mudou.
 
 use crate::registry;
-use crate::scene::{Node, Scene, Uid, normalize_hex};
+use crate::scene::{Connection, Node, Scene, Uid, check_link, normalize_hex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 
-/// Versão atual do formato de arquivo de cena.
-pub const FORMAT: u32 = 2;
+/// Versão atual do formato de arquivo de cena. O formato 3 guarda as ligações de sinais (SCN-034). A versão mudou
+/// porque `NodeFile` ignora campos desconhecidos: sem o número novo, um editor antigo salvaria a cena sem as ligações.
+pub const FORMAT: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct SceneFile {
@@ -28,6 +29,9 @@ struct NodeFile {
     parent: Option<Uid>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     props: BTreeMap<String, Value>,
+    /// Ligações de sinais deste nó como emissor (formato 3). Ausente nos arquivos anteriores.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    connections: Vec<Connection>,
 }
 
 impl Scene {
@@ -44,6 +48,7 @@ impl Scene {
                     kind: n.kind.clone(),
                     parent: n.parent,
                     props: n.props.clone(),
+                    connections: n.connections.clone(),
                 })
             })
             .collect();
@@ -99,6 +104,7 @@ fn scene_from_file(file: SceneFile, seed: u64) -> Result<Scene, String> {
                 parent: nf.parent,
                 children: Vec::new(),
                 props: BTreeMap::new(),
+                connections: Vec::new(),
             },
         );
     }
@@ -114,11 +120,27 @@ fn scene_from_file(file: SceneFile, seed: u64) -> Result<Scene, String> {
     }
     check_tree(&scene)?;
     for nf in file.nodes {
+        check_links(&nf.kind, &nf.connections)?;
+        if let Some(node) = scene.nodes.get_mut(&nf.uid) {
+            node.connections = nf.connections;
+        }
         for (key, value) in nf.props {
             scene.put_raw(nf.uid, &key, value)?;
         }
     }
     Ok(scene)
+}
+
+/// Confere as ligações de um nó lido: o sinal precisa ser um que o tipo emite, o método precisa ser válido e nenhuma
+/// ligação pode se repetir. O alvo não é conferido: se ele não existe, a interface avisa e a ligação fica no arquivo.
+fn check_links(kind: &str, links: &[Connection]) -> Result<(), String> {
+    for (i, link) in links.iter().enumerate() {
+        check_link(kind, &link.signal, &link.method)?;
+        if links[..i].contains(link) {
+            return Err(format!("Ligação repetida no nó {kind}: {} → {}", link.signal, link.method));
+        }
+    }
+    Ok(())
 }
 
 /// Confere que a árvore é uma floresta válida: sem ciclos e com todos os nós alcançáveis.
@@ -192,4 +214,94 @@ fn migrate_v1(v: &Value, seed: u64) -> Result<Scene, String> {
         }
     }
     Ok(scene)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cena com um Timer ligado a um Sprite2D. Devolve o texto RON e os UIDs do emissor e do alvo.
+    fn text_with_link() -> (String, Uid, Uid) {
+        let mut s = Scene::new_default("Principal", 3);
+        let root = s.roots()[0];
+        let timer = s.add_node(Some(root), "Timer", None).unwrap();
+        let sprite = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(timer, "timeout", sprite, "on_timeout").unwrap();
+        (s.to_ron().unwrap(), timer, sprite)
+    }
+
+    #[test]
+    fn ligacoes_vao_e_voltam_no_formato_3() {
+        let (text, timer, sprite) = text_with_link();
+        assert!(text.contains("format: 3"));
+        let back = Scene::from_text(&text, 9).unwrap();
+        assert_eq!(
+            back.node(timer).unwrap().connections,
+            vec![Connection { signal: "timeout".into(), target: sprite, method: "on_timeout".into() }]
+        );
+        // Ler e gravar de novo não muda o texto: a ordem e os UIDs se mantêm.
+        assert_eq!(back.to_ron().unwrap(), text);
+    }
+
+    #[test]
+    fn no_sem_ligacoes_nao_grava_o_campo() {
+        let s = Scene::new_default("Principal", 3);
+        assert!(!s.to_ron().unwrap().contains("connections"));
+    }
+
+    #[test]
+    fn formato_2_carrega_sem_ligacoes_e_regrava_no_3() {
+        let text = r#"(
+    format: 2,
+    name: "Antiga",
+    screen: (1280, 720),
+    nodes: [
+        (uid: "0000000000000001", name: "Raiz", kind: "Node2D"),
+        (uid: "0000000000000002", name: "Timer", kind: "Timer", parent: Some("0000000000000001")),
+    ],
+)"#;
+        let s = Scene::from_text(text, 5).unwrap();
+        assert!(s.node(Uid(2)).unwrap().connections.is_empty());
+        assert!(s.to_ron().unwrap().contains("format: 3"));
+    }
+
+    #[test]
+    fn formato_4_e_recusado() {
+        let (text, _, _) = text_with_link();
+        let futuro = text.replace("format: 3", "format: 4");
+        let err = Scene::from_text(&futuro, 9).err().expect("formato 4 deve ser recusado");
+        assert!(err.contains("formato 4"), "{err}");
+    }
+
+    #[test]
+    fn sinal_que_o_tipo_nao_emite_e_recusado_no_arquivo() {
+        let (text, _, _) = text_with_link();
+        let trocado = text.replace("signal: \"timeout\"", "signal: \"body_entered\"");
+        assert!(Scene::from_text(&trocado, 9).is_err());
+    }
+
+    #[test]
+    fn metodo_invalido_e_recusado_no_arquivo() {
+        let (text, _, _) = text_with_link();
+        let trocado = text.replace("method: \"on_timeout\"", "method: \"on timeout\"");
+        assert!(Scene::from_text(&trocado, 9).is_err());
+    }
+
+    #[test]
+    fn ligacao_repetida_e_recusada_no_arquivo() {
+        let (text, _, sprite) = text_with_link();
+        let entrada = format!("(signal: \"timeout\", target: \"{sprite}\", method: \"on_timeout\")");
+        let repetido = text.replace("connections: [", &format!("connections: [{entrada}, "));
+        assert!(Scene::from_text(&repetido, 9).is_err());
+    }
+
+    #[test]
+    fn alvo_ausente_carrega_e_fica_na_ligacao() {
+        let (text, timer, sprite) = text_with_link();
+        // Só o alvo da ligação muda para um UID que não existe na cena; o UID do nó continua o mesmo.
+        let trocado = text.replace(&format!("target: \"{sprite}\""), "target: \"00000000000000ff\"");
+        let s = Scene::from_text(&trocado, 9).unwrap();
+        assert_eq!(s.node(timer).unwrap().connections[0].target, Uid(0xff));
+        assert!(s.node(Uid(0xff)).is_none());
+    }
 }

@@ -8,7 +8,7 @@
   import ShortcutsDialog from './ShortcutsDialog.svelte';
   import Splitter from './Splitter.svelte';
   import Hierarchy from './Hierarchy.svelte';
-  import Inspector from './Inspector.svelte';
+  import RightDock from './RightDock.svelte';
   import Viewport from './Viewport.svelte';
   import BottomDock from './BottomDock.svelte';
   import StatusBar from './StatusBar.svelte';
@@ -70,7 +70,7 @@
     {#if app.panels.right}
       <Splitter dir="x" value={app.sizes.right} min={240} max={480} invert onchange={(v) => (app.sizes.right = v)} onend={persist} />
       <div class="side" style="width: {app.sizes.right}px">
-        <Inspector />
+        <RightDock />
       </div>
     {/if}
   </div>
