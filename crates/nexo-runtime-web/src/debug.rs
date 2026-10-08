@@ -8,7 +8,7 @@ use crate::editor::{SceneEditor, js_err, to_json};
 use crate::host::Mundo;
 use crate::scripts::{self, Instancia, registrar};
 use nexo_core::Uid;
-use nexo_graph::{Host, Quadro, TraceEvent, VmError};
+use nexo_graph::{Frame, Host, TraceEvent, VmError};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -21,13 +21,13 @@ fn evento_json(e: &TraceEvent) -> Json {
     }
 }
 
-/// Call stack frame as JSON, as the TypeScript reads it (DBG-003): {"tipo": "evento" | "funcao", "no", "nome"} or
-/// {"tipo": "temporizador", "no"}. `no` is the node that opened the frame.
-fn quadro_json(q: &Quadro) -> Json {
-    match q {
-        Quadro::Evento { no, evento } => json!({"tipo": "evento", "no": no, "nome": evento}),
-        Quadro::Funcao { no, nome } => json!({"tipo": "funcao", "no": no, "nome": nome}),
-        Quadro::Temporizador { no } => json!({"tipo": "temporizador", "no": no}),
+/// Call stack frame as JSON, as the TypeScript panel reads it (DBG-003): {"kind": "event" | "function", "node",
+/// "name"} or {"kind": "timer", "node"}. `node` is the node that opened the frame.
+fn frame_json(frame: &Frame) -> Json {
+    match frame {
+        Frame::Event { node, event } => json!({"kind": "event", "node": node, "name": event}),
+        Frame::Function { node, name } => json!({"kind": "function", "node": node, "name": name}),
+        Frame::Timer { node } => json!({"kind": "timer", "node": node}),
     }
 }
 
@@ -80,8 +80,8 @@ impl SceneEditor {
         to_json(&eventos)
     }
 
-    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento, pilha}]. `pausada` is also
-    /// true at a frame-end pause, where `node`, `evento` and `pilha` are empty. `pilha` is the call stack of the paused
+    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento, stack}]. `pausada` is also
+    /// true at a frame-end pause, where `node`, `evento` and `stack` are empty. `stack` is the call stack of the paused
     /// operation, from the event to the innermost frame (DBG-003). An empty list without a play session.
     pub fn debug_state(&self) -> Result<String, JsError> {
         let estado: Vec<Json> = match &self.play {
@@ -90,8 +90,8 @@ impl SceneEditor {
                 .iter()
                 .map(|i| {
                     let pausa = i.pausa();
-                    let pilha: Vec<Json> = match pausa {
-                        Some(x) => x.pilha.iter().map(quadro_json).collect(),
+                    let stack: Vec<Json> = match pausa {
+                        Some(x) => x.stack.iter().map(frame_json).collect(),
                         None => Vec::new(),
                     };
                     json!({
@@ -99,7 +99,7 @@ impl SceneEditor {
                         "pausada": i.pausada(),
                         "node": pausa.map(|x| x.node),
                         "evento": pausa.map(|x| x.evento.as_str()),
-                        "pilha": pilha,
+                        "stack": stack,
                     })
                 })
                 .collect(),
@@ -167,25 +167,27 @@ impl SceneEditor {
 mod tests {
     use super::*;
 
+    /// Checks only the JSON of each frame kind. It does not cover the panel, the double-click, or the stack
+    /// contents at a pause (those are tested in the graph crate and not in the editor).
     #[test]
-    fn quadros_da_pilha_tem_o_formato_que_o_typescript_le() {
+    fn frame_json_has_the_shape_the_panel_reads() {
         assert_eq!(
-            quadro_json(&Quadro::Evento {
-                no: 3,
-                evento: "OnReady".into()
+            frame_json(&Frame::Event {
+                node: 3,
+                event: "OnReady".into()
             }),
-            json!({"tipo": "evento", "no": 3, "nome": "OnReady"})
+            json!({"kind": "event", "node": 3, "name": "OnReady"})
         );
         assert_eq!(
-            quadro_json(&Quadro::Funcao {
-                no: 7,
-                nome: "soma".into()
+            frame_json(&Frame::Function {
+                node: 7,
+                name: "sum".into()
             }),
-            json!({"tipo": "funcao", "no": 7, "nome": "soma"})
+            json!({"kind": "function", "node": 7, "name": "sum"})
         );
         assert_eq!(
-            quadro_json(&Quadro::Temporizador { no: 9 }),
-            json!({"tipo": "temporizador", "no": 9})
+            frame_json(&Frame::Timer { node: 9 }),
+            json!({"kind": "timer", "node": 9})
         );
     }
 }

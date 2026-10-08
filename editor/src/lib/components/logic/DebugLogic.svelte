@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import { logic } from '$lib/logic/store.svelte';
-  import { logicDebug, podeAcionar, type Quadro } from '$lib/logic/debug.svelte';
+  import { logicDebug, podeAcionar, type Frame } from '$lib/logic/debug.svelte';
   import { app } from '$lib/state/app.svelte';
   import { runtime } from '$lib/state/runtime.svelte';
   import { scene } from '$lib/state/scene.svelte';
@@ -17,7 +17,7 @@
   const acionavel = $derived(podeAcionar(escolhida, app.paused) ? escolhida : null);
   const rodaram = $derived(escolhida ? (logicDebug.executados[escolhida.uid] ?? []).length : 0);
   // The call stack is listed innermost first: the frame on top is the one the paused operation belongs to.
-  const pilha = $derived(escolhida ? [...escolhida.pilha].reverse() : []);
+  const stack = $derived(escolhida ? [...escolhida.stack].reverse() : []);
 
   // The runtime observes the debugger only while this panel is open (or while a breakpoint exists).
   onMount(() => runtime.definirPainelDepurador(true));
@@ -49,20 +49,22 @@
   }
 
   /** Text of a call stack frame: the event, the function, or the timer. */
-  function rotuloDoQuadro(q: Quadro): string {
-    if (q.tipo === 'evento') return `Evento: ${logic.defsByKind.get(q.nome)?.label ?? q.nome}`;
-    if (q.tipo === 'funcao') return `Função: ${q.nome}`;
+  function frameLabel(frame: Frame): string {
+    if (frame.kind === 'event') return `Evento: ${logic.defsByKind.get(frame.name)?.label ?? frame.name}`;
+    if (frame.kind === 'function') return `Função: ${frame.name}`;
     return 'Temporizador: tempo esgotado';
   }
 
   /** Double-click on a frame (Enter too): opens the instance's script in the Lógica workspace and selects the node. */
-  async function irParaQuadro(uid: string, q: Quadro) {
+  async function goToFrame(uid: string, frame: Frame) {
     const script = scriptDe(uid);
     if (!script) return;
     await logic.openIn(script);
     // The canvas measures itself when it mounts, so the frame waits for it before framing the selection.
     await tick();
-    logic.select([q.no], [], false);
+    // The open can fail or be replaced by another open: then the workspace does not show this frame's script.
+    if (logic.active !== script) return;
+    logic.select([frame.node], [], false);
     logic.frameSelection();
   }
 </script>
@@ -106,23 +108,23 @@
       <StepForward size={12} /> Próxima operação
     </button>
   </div>
-  {#if escolhida && pilha.length}
-    <h4>Pilha de chamadas</h4>
+  {#if escolhida && stack.length}
+    <h4>Pilha de chamadas (mais interno primeiro)</h4>
     <ol>
-      {#each pilha as q, i (i)}
+      {#each stack as frame, i (i)}
         <li>
           <button
             type="button"
-            class="quadro"
-            class:atual={i === 0}
+            class="frame"
+            class:current={i === 0}
             title="Clique duplo para ir ao nó"
-            ondblclick={() => void irParaQuadro(escolhida.uid, q)}
+            ondblclick={() => void goToFrame(escolhida.uid, frame)}
             onkeydown={(e) => {
-              if (e.key === 'Enter') void irParaQuadro(escolhida.uid, q);
+              if (e.key === 'Enter') void goToFrame(escolhida.uid, frame);
             }}
           >
-            <span class="quadro-nome">{rotuloDoQuadro(q)}</span>
-            <span class="quadro-no mono">{nomeDoPonto(scriptDe(escolhida.uid), q.no)}</span>
+            <span class="frame-name">{frameLabel(frame)}</span>
+            <span class="frame-node mono">{nomeDoPonto(scriptDe(escolhida.uid), frame.node)}</span>
           </button>
         </li>
       {/each}
@@ -207,7 +209,7 @@
     height: 22px;
     padding: 0 8px;
   }
-  .quadro {
+  .frame {
     width: 100%;
     display: flex;
     align-items: center;
@@ -221,20 +223,20 @@
     text-align: left;
     cursor: default;
   }
-  .quadro:hover {
+  .frame:hover {
     background: var(--bg-hover);
   }
-  .quadro.atual {
+  .frame.current {
     background: var(--accent-soft);
   }
-  .quadro-nome {
+  .frame-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .quadro-no {
+  .frame-node {
     flex: none;
     max-width: 45%;
     overflow: hidden;

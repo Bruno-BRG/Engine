@@ -3,19 +3,19 @@
 //! pontos de parada, o passo a passo e o rastro para o editor. Cada instância tem o seu agendador: a escolha de
 //! instância no depurador é só qual agendador (e qual contexto) o editor mostra.
 
-use crate::ir::{Compiled, Quadro};
+use crate::ir::{Compiled, Frame};
 use crate::vm::{
     Ambiente, Context, Host, Latente, Parada, Tarefa, TraceEvent, Vm, VmError, avancar, progride,
 };
 use std::collections::BTreeSet;
 
-/// Onde a execução parou para depuração: o nó da op que vai rodar, o evento do programa e a pilha de chamadas.
+/// Onde a execução parou para depuração: o nó da op que vai rodar e o evento do programa.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pausa {
     pub node: u64,
     pub evento: String,
     /// Call stack of the paused operation, from the event to the innermost frame (DBG-003).
-    pub pilha: Vec<Quadro>,
+    pub stack: Vec<Frame>,
 }
 
 /// Tarefas de uma instância, com a pausa de depuração, os sinais pendentes e o rastro.
@@ -293,7 +293,7 @@ impl Scheduler {
                     self.pausa = Some(Pausa {
                         node,
                         evento: programa.event.clone(),
-                        pilha: programa.pilha_em(self.tarefas[i].pc).to_vec(),
+                        stack: programa.stack_at(self.tarefas[i].pc).to_vec(),
                     });
                     self.inicio = i;
                     return Ok(());
@@ -986,82 +986,82 @@ mod tests {
         );
     }
 
-    /// Função "f" com um Print "dentro" e um "fim" depois dele. OnReady chama "f". Devolve os ids: o evento, a
-    /// chamada e o Print "dentro".
-    fn grafo_com_pausa_na_funcao() -> (Graph, u64, u64, u64) {
+    /// Function "f" with a Print "inside" followed by a Print "after". OnReady calls "f". Returns the ids of the
+    /// event, the call, and the "inside" Print.
+    fn graph_with_pause_in_function() -> (Graph, u64, u64, u64) {
         let mut g = Graph::default();
         let def = adiciona(&mut g, "Function");
         texto(&mut g, def, "name", "f");
-        let dentro = imprime(&mut g, (def, "exec"), "dentro");
-        imprime(&mut g, (dentro, "exec"), "fim");
+        let inside = imprime(&mut g, (def, "exec"), "inside");
+        imprime(&mut g, (inside, "exec"), "after");
         let ev = adiciona(&mut g, "OnReady");
-        let chamada = adiciona(&mut g, "CallFunction");
-        texto(&mut g, chamada, "name", "f");
-        g.connect((ev, "exec"), (chamada, "exec")).unwrap();
-        (g, ev, chamada, dentro)
+        let call = adiciona(&mut g, "CallFunction");
+        texto(&mut g, call, "name", "f");
+        g.connect((ev, "exec"), (call, "exec")).unwrap();
+        (g, ev, call, inside)
     }
 
     #[test]
-    fn pausa_dentro_de_funcao_leva_a_pilha_e_continuar_termina() {
-        let (g, ev, chamada, dentro) = grafo_com_pausa_na_funcao();
+    fn pause_inside_function_carries_stack_and_continue_finishes() {
+        let (g, ev, call, inside) = graph_with_pause_in_function();
         let compiled = compile(&g).unwrap();
         let mut ctx = compiled.new_context(1);
         let mut host = Mock::default();
         let mut sched = Scheduler::new();
-        sched.definir_ponto_de_parada(dentro, true);
+        sched.definir_ponto_de_parada(inside, true);
         sched.iniciar(&compiled, "OnReady");
         sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
 
         let pausa = sched
             .pausa()
-            .expect("a função devia pausar no ponto de parada");
-        assert_eq!(pausa.node, dentro);
+            .expect("the function should pause at the breakpoint");
+        assert_eq!(pausa.node, inside);
         assert_eq!(
-            pausa.pilha,
+            pausa.stack,
             [
-                Quadro::Evento {
-                    no: ev,
-                    evento: "OnReady".into()
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into()
                 },
-                Quadro::Funcao {
-                    no: chamada,
-                    nome: "f".into()
+                Frame::Function {
+                    node: call,
+                    name: "f".into()
                 },
             ]
         );
         assert!(host.impressos.is_empty());
 
-        // O ponto de parada não dispara de novo no mesmo nó: o resto da função roda e a pilha some.
+        // The breakpoint does not fire again on the same node: the rest of the function runs and the stack is gone.
         sched.continuar(&compiled, &mut ctx, &mut host).unwrap();
         assert!(sched.pausa().is_none());
         assert_eq!(
             host.impressos,
             [
-                (LogLevel::Info, "dentro".to_string()),
-                (LogLevel::Info, "fim".to_string())
+                (LogLevel::Info, "inside".to_string()),
+                (LogLevel::Info, "after".to_string())
             ]
         );
     }
 
     #[test]
-    fn pausa_no_temporizador_dentro_de_funcao_tem_a_cadeia_completa() {
-        // "f" inicia um temporizador de 0,1 s; o ramo de tempo esgotado imprime "tarde", com ponto de parada.
+    fn pause_in_timer_inside_function_has_full_chain() {
+        // "f" starts a 0.1 s timer; its timeout branch prints "late", with a breakpoint.
         let mut g = Graph::default();
         let def = adiciona(&mut g, "Function");
         texto(&mut g, def, "name", "f");
         let tm = adiciona(&mut g, "TimerStart");
         g.set_value(tm, "seconds", Value::Float(0.1)).unwrap();
         g.connect((def, "exec"), (tm, "exec")).unwrap();
-        let tarde = imprime(&mut g, (tm, "timeout"), "tarde");
+        let late = imprime(&mut g, (tm, "timeout"), "late");
         let ev = adiciona(&mut g, "OnReady");
-        let chamada = adiciona(&mut g, "CallFunction");
-        texto(&mut g, chamada, "name", "f");
-        g.connect((ev, "exec"), (chamada, "exec")).unwrap();
+        let call = adiciona(&mut g, "CallFunction");
+        texto(&mut g, call, "name", "f");
+        g.connect((ev, "exec"), (call, "exec")).unwrap();
         let compiled = compile(&g).unwrap();
         let mut ctx = compiled.new_context(1);
         let mut host = Mock::default();
         let mut sched = Scheduler::new();
-        sched.definir_ponto_de_parada(tarde, true);
+        sched.definir_ponto_de_parada(late, true);
         sched.iniciar(&compiled, "OnReady");
         for _ in 0..10 {
             sched.tick(&compiled, &mut ctx, &mut host, 0.1).unwrap();
@@ -1072,27 +1072,27 @@ mod tests {
 
         let pausa = sched
             .pausa()
-            .expect("o temporizador devia pausar no ponto de parada");
-        assert_eq!(pausa.node, tarde);
+            .expect("the timer should pause at the breakpoint");
+        assert_eq!(pausa.node, late);
         assert_eq!(
-            pausa.pilha,
+            pausa.stack,
             [
-                Quadro::Evento {
-                    no: ev,
-                    evento: "OnReady".into()
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into()
                 },
-                Quadro::Funcao {
-                    no: chamada,
-                    nome: "f".into()
+                Frame::Function {
+                    node: call,
+                    name: "f".into()
                 },
-                Quadro::Temporizador { no: tm },
+                Frame::Timer { node: tm },
             ]
         );
         assert!(host.impressos.is_empty());
     }
 
     #[test]
-    fn iniciar_em_pausa_nao_cresce_a_fila() {
+    fn start_while_paused_does_not_grow_queue() {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnProcess");
         let pa = imprime(&mut g, (ev, "exec"), "a");
@@ -1111,16 +1111,20 @@ mod tests {
             sched.iniciar_estado(&compiled, "");
         }
 
-        assert_eq!(sched.tarefas(), tarefas, "iniciar em pausa criou tarefas");
+        assert_eq!(
+            sched.tarefas(),
+            tarefas,
+            "starting while paused created tasks"
+        );
     }
 
     #[test]
-    fn recarga_limpa_a_pausa_do_agendador() {
-        let (g, _, _, dentro) = grafo_com_pausa_na_funcao();
+    fn reload_clears_scheduler_pause() {
+        let (g, _, _, inside) = graph_with_pause_in_function();
         let compiled = compile(&g).unwrap();
         let mut ctx = compiled.new_context(1);
         let mut sched = Scheduler::new();
-        sched.definir_ponto_de_parada(dentro, true);
+        sched.definir_ponto_de_parada(inside, true);
         sched.iniciar(&compiled, "OnReady");
         sched
             .tick(&compiled, &mut ctx, &mut Mock::default(), 0.0)
