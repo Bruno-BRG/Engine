@@ -7,24 +7,24 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 ## Bodies
 
 - [x] **PHY-001** (P0) Integrate Rapier 2D in `nexo-physics`, fixed timestep (60 Hz default), interpolation for rendering.
-- [ ] **PHY-002** (P0) `StaticBody2D`: immovable, with constant linear/angular velocity option (conveyor belts). *G.* *Status (Fase 2): parcial: velocidade linear constante (esteiras) e carregamento prontos; falta a velocidade angular constante.*
+- [x] **PHY-002** (P0) `StaticBody2D`: immovable, with constant linear/angular velocity option (conveyor belts). *G.* *Status (Fase 2): feito: esteira com velocidade linear e angular, com ponto de contato por contato e teste de disco que gira.*
 - [x] **PHY-003** (P0) `RigidBody2D`: mass, gravity scale, linear/angular damp, lock rotation, continuous collision detection, sleeping, freeze modes. *U: Rigidbody2D Dynamic; G: RigidBody2D.*
-- [ ] **PHY-004** (P0) `CharacterBody2D`: `velocity`, `move_and_slide`, `is_on_floor/wall/ceiling`, floor angle, snap, platform carry. Gravity is not automatic, as in Godot. *G: CharacterBody2D; U: Kinematic body.* *Status (Fase 2): parcial: velocidade, movimento com deslizamento, is_on_floor/wall/ceiling, ângulo do chão, carregamento em plataforma móvel e consulta character_state(uid) no WASM. Falta snap (grudar no chão).*
+- [x] **PHY-004** (P0) `CharacterBody2D`: `velocity`, `move_and_slide`, `is_on_floor/wall/ceiling`, floor angle, snap, platform carry. Gravity is not automatic, as in Godot. *G: CharacterBody2D; U: Kinematic body.* *Status (Fase 2): feito: colagem ao chão configurável (floor_snap_length), carga por plataforma e ângulo do chão. is_on_floor, wall e ceiling já existiam.*
 - [x] **PHY-005** (P0) `Area2D`: overlap detection, gravity/damp override, signals `body_entered`, `body_exited`, `area_entered`. *G: Area2D; U: Is Trigger.*
 
 ## Shapes
 
 - [x] **PHY-010** (P0) `CollisionShape2D` with Rectangle, Circle, Capsule, Segment shape resources; offset; disabled; one-way collision.
 - [x] **PHY-011** (P0) `CollisionPolygon2D` (convex decomposition).
-- [ ] **PHY-012** (P0) Editable shape gizmos in the viewport (drag handles). *Status (Fase 2): pendente: alças de arrasto. Os contornos dos colisores já aparecem na Cena (VPT-005).*
+- [ ] **PHY-012** (P0) Editable shape gizmos in the viewport (drag handles). *Status (Fase 2): parcial: alças para arrastar as formas no viewport, validadas no navegador. Falta validar o snap opcional.*
 - [ ] **PHY-013** (P1) Tilemap collision generated from tile data.
 
 ## Filtering and settings
 
-- [ ] **PHY-020** (P0) Collision layers and masks (32 named layers) on every body/area. *G: layers/masks.* *Status (Fase 2): parcial: a física usa os 32 nomes e a matriz de ProjectSettings. Falta o Inspector mostrar as camadas nomeadas em vez de texto e número de bits.*
+- [x] **PHY-020** (P0) Collision layers and masks (32 named layers) on every body/area. *G: layers/masks.* *Status (Fase 2): feito: a física usa os 32 nomes e a matriz de ProjectSettings; o Inspector mostra a grade com os nomes, sem número de bit.*
 - [x] **PHY-021** (P0) Project Settings > Physics 2D: gravity vector, layer names, Layer Collision Matrix. *U: Physics 2D settings.* *Status (Fase 2): gravidade, nomes das camadas e matriz são editados em Configurações do Projeto > Física 2D, gravados em settings.ron e lidos pela física a cada Jogar.*
-- [ ] **PHY-022** (P1) Per-body include/exclude layer overrides with priority. *U 6: Include/Exclude Layers, Layer Override Priority.* *Status (Fase 2): parcial: a prioridade está na física; no Inspector, include/exclude ainda são números de bits, não nomes de camadas.*
-- [ ] **PHY-023** (P1) `PhysicsMaterial` resource: friction, bounce, rough, absorbent. *Status (Fase 2): parcial: materiais são editados em Configurações do Projeto > Física 2D e a física aplica atrito e quique via physics_material. Falta o Inspector escolher o material de uma lista (hoje é texto) e renomear um material não atualiza as referências.*
+- [x] **PHY-022** (P1) Per-body include/exclude layer overrides with priority. *U 6: Include/Exclude Layers, Layer Override Priority.* *Status (Fase 2): feito: include e exclude são seletores de camadas por nome no Inspector.*
+- [ ] **PHY-023** (P1) `PhysicsMaterial` resource: friction, bounce, rough, absorbent. *Status (Fase 2): parcial: a física aplica atrito e quique do material; o Inspector escolhe o material numa lista e avisa se o nome não existe. Falta atualizar as referências ao renomear um material.*
 
 ## Queries and joints
 

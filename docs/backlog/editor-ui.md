@@ -8,7 +8,7 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 
 - [ ] **EDT-001** (P0) Unity-like dark theme tokens: window #191919, panel #383838, toolbar #282828, field #2A2A2A, hover #454545, selection #2C5D87, unfocused selection #4D4D4D, border #232323, text #D2D2D2. Keep the Phase 0 purple theme as an alternative. *U: Editor dark skin.*
 - [ ] **EDT-002** (P0) Radius 2–3 px on controls, 0 on panels/tabs; 20 px rows; 12 px UI font, 11 px labels; 16 px icons.
-- [ ] **EDT-003** (P0) Node-family icon set (2D blue, physics orange, UI green, audio yellow, script purple). *G: class icons.*
+- [x] **EDT-003** (P0) Node-family icon set (2D blue, physics orange, UI green, audio yellow, script purple). *G: class icons.* *Status (Fase 2): feito: famílias de cor e ícones para os tipos novos (2D azul, física laranja, áudio amarelo, script roxo) em NodeIcon.svelte. A família UI (verde) está reservada, sem tipos ainda.*
 - [ ] **EDT-004** (P1) Light theme with the same structure.
 - [ ] **EDT-005** (P1) Editor tint while playing (configurable color). *U: Preferences > Colors > Playmode tint.*
 
