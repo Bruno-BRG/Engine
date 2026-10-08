@@ -3,7 +3,7 @@
 //! este arquivo só traduz para o JavaScript. Os ids de nós e de caixas são números (`f64`): cabem sem perda, e um
 //! `u64` viraria BigInt no wasm-bindgen.
 
-use nexo_graph::{Fragment, Graph, PinType, Value, Variable, library};
+use nexo_graph::{Fragment, Graph, PinType, Value, Variable, generate_csharp, library};
 use serde::Serialize;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -42,6 +42,22 @@ fn variables_json(variables: &[Variable]) -> Result<serde_json::Value, serde_jso
         items.push(item);
     }
     Ok(serde_json::Value::Array(items))
+}
+
+/// C# of a graph: the class `csharp_class_name(script)` with one method per event. A compile error comes back as
+/// the messages of the validation, one per line, and no code is generated (VIS-024).
+fn csharp_text(graph: &Graph, script: &str) -> Result<String, String> {
+    let compiled = nexo_graph::compile(graph).map_err(|erros| {
+        erros
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    Ok(generate_csharp(
+        &compiled,
+        &nexo_graph::csharp_class_name(script),
+    ))
 }
 
 impl GraphEditor {
@@ -133,6 +149,17 @@ impl GraphEditor {
             .map(|e| json!({ "node": e.node, "message": e.message, "suggestion": e.suggestion }))
             .collect();
         to_json(&erros)
+    }
+
+    /// Código C# do script, gerado da IR (VIS-024). Com erro no grafo, a exceção traz as mensagens de validação, uma
+    /// por linha. A classe sai com `csharp_class_name(script)`.
+    pub fn to_csharp(&self, script: &str) -> Result<String, JsError> {
+        csharp_text(&self.graph, script).map_err(|msg| JsError::new(&msg))
+    }
+
+    /// Nome da classe C# de um script, como `to_csharp` a escreve. O arquivo gerado é esse nome com `.cs`.
+    pub fn csharp_class_name(script: &str) -> String {
+        nexo_graph::csharp_class_name(script)
     }
 
     // ---------- Nós, reroutes e fios ----------
@@ -309,5 +336,27 @@ mod tests {
         // The text reads back to the same id. A JSON number above 2^53 would not survive JavaScript.
         let text = items[0]["default_node"].as_str().unwrap();
         assert_eq!(text.parse::<Uid>().unwrap(), Uid((1 << 53) + 1));
+    }
+
+    #[test]
+    fn csharp_of_script_uses_its_class_name_and_reports_compile_errors() {
+        let mut g = Graph::default();
+        g.add_node("OnReady", [0.0, 0.0]).unwrap();
+        let texto = csharp_text(&g, "Script 1").unwrap();
+        assert!(
+            texto.contains("public partial class Script_1 : NexoScript"),
+            "{texto}"
+        );
+        assert!(texto.contains("public void OnReady_"), "{texto}");
+
+        // Variável sem nome: a validação recusa o grafo, e a mensagem chega ao painel sem gerar código.
+        g.variables.push(Variable {
+            name: " ".into(),
+            ty: PinType::Float,
+            default: Value::Float(0.0),
+            exported: false,
+        });
+        let erro = csharp_text(&g, "Script 1").unwrap_err();
+        assert!(erro.contains("nome de variável vazio"), "{erro}");
     }
 }

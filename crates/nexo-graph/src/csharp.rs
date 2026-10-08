@@ -92,7 +92,8 @@ const RESERVADAS: &[&str] = &[
     "while",
 ];
 
-/// Gera a classe C# do script. `class_name` precisa ser um identificador C# válido (quem chama garante).
+/// Gera a classe C# do script. `class_name` precisa ser um identificador C# válido: `csharp_class_name` faz isso
+/// a partir do nome do script.
 pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     let mut out = String::new();
     out.push_str("// Gerado pelo Nexo a partir da IR do script. Não edite à mão: a próxima geração sobrescreve.\n");
@@ -100,8 +101,9 @@ pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     out.push_str("using Nexo;\n\n");
     let _ = writeln!(out, "public partial class {class_name} : NexoScript");
     out.push_str("{\n");
-    for var in &compiled.variables {
-        campo(&mut out, var);
+    let nomes = nomes_dos_campos(compiled);
+    for (var, nome) in compiled.variables.iter().zip(&nomes) {
+        campo(&mut out, var, nome);
     }
     for programa in &compiled.programs {
         out.push('\n');
@@ -111,8 +113,32 @@ pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     out
 }
 
+/// Nome da classe C# de um script (VIS-024). Usa a mesma regra dos identificadores: "Script 1" vira `Script_1`, e
+/// o arquivo gerado é esse nome com `.cs`.
+pub fn csharp_class_name(script: &str) -> String {
+    ident(script)
+}
+
+/// Nome C# de cada variável, na ordem de `compiled.variables`. Dois nomes que viram o mesmo identificador ("vida
+/// total" e "vida_total") ganham sufixo numérico, para o código gerado não repetir um campo.
+fn nomes_dos_campos(compiled: &Compiled) -> Vec<String> {
+    let mut usados = BTreeSet::new();
+    let mut nomes = Vec::with_capacity(compiled.variables.len());
+    for var in &compiled.variables {
+        let base = ident(&var.name);
+        let mut nome = base.clone();
+        let mut numero = 2;
+        while !usados.insert(nome.clone()) {
+            nome = format!("{base}_{numero}");
+            numero += 1;
+        }
+        nomes.push(nome);
+    }
+    nomes
+}
+
 /// Variável do script como campo. As exportadas aparecem no Inspector (`[Export]`), as outras são privadas.
-fn campo(out: &mut String, var: &Variable) {
+fn campo(out: &mut String, var: &Variable, nome: &str) {
     let acesso = if var.exported {
         "    [Export] public "
     } else {
@@ -120,9 +146,8 @@ fn campo(out: &mut String, var: &Variable) {
     };
     let _ = writeln!(
         out,
-        "{acesso}{} {} = {};",
+        "{acesso}{} {nome} = {};",
         tipo(var.ty),
-        ident(&var.name),
         literal(&var.default)
     );
 }
@@ -353,9 +378,10 @@ fn nivel(level: LogLevel) -> &'static str {
 }
 
 fn nome_variavel(c: &Compiled, var: usize) -> String {
-    c.variables
+    nomes_dos_campos(c)
         .get(var)
-        .map_or_else(|| format!("v{var}"), |v| ident(&v.name))
+        .cloned()
+        .unwrap_or_else(|| format!("v{var}"))
 }
 
 fn tipo(ty: PinType) -> &'static str {
@@ -413,26 +439,50 @@ fn escapa(s: &str) -> String {
     out
 }
 
+/// Nomes que o código gerado usa em posição de expressão: o parâmetro do quadro (`delta`), o dono (`self`), o
+/// motor (`Nexo`, `NodeRef`, `LogLevel`) e os tipos da classe. Um campo com um desses nomes esconderia o que o
+/// código quer dizer, então sai com `_` no fim.
+const NOMES_DO_CODIGO: &[&str] = &[
+    "self",
+    "delta",
+    "Nexo",
+    "NexoScript",
+    "NodeRef",
+    "LogLevel",
+    "Vector2",
+    "Task",
+    "Export",
+];
+
 /// Identificador C# a partir do nome do Nexo: troca o que não é letra, dígito ou `_`, e protege palavras
-/// reservadas com `@`.
+/// reservadas com `@`. Nomes que o próprio código gerado usa (`NOMES_DO_CODIGO` e os registradores `r<n>`) ganham
+/// `_` no fim.
 fn ident(nome: &str) -> String {
     let mut s: String = nome
         .chars()
         .map(|ch| {
-            if ch.is_alphanumeric() || ch == '_' {
+            if ch.is_alphabetic() || ch.is_ascii_digit() || ch == '_' {
                 ch
             } else {
                 '_'
             }
         })
         .collect();
-    if s.is_empty() || s.starts_with(|c: char| c.is_ascii_digit()) {
+    if !s.starts_with(|c: char| c.is_alphabetic() || c == '_') {
         s.insert(0, '_');
     }
     if RESERVADAS.contains(&s.as_str()) {
         s.insert(0, '@');
+    } else if NOMES_DO_CODIGO.contains(&s.as_str()) || eh_registrador(&s) {
+        s.push('_');
     }
     s
+}
+
+/// `r<n>`: o nome dos registradores no código gerado.
+fn eh_registrador(s: &str) -> bool {
+    s.strip_prefix('r')
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -444,6 +494,29 @@ mod tests {
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
         g.add_node(kind, [0.0, 0.0]).unwrap()
+    }
+
+    /// Script com duas variáveis que viram o mesmo identificador ("vida total" e "vida_total"), e uma chamada
+    /// `delta`, que é o nome do parâmetro do quadro no código gerado.
+    fn colisoes() -> Compiled {
+        let mut g = Graph::default();
+        g.add_variable("vida total", PinType::Float, Value::Float(1.0), true)
+            .unwrap();
+        g.add_variable("vida_total", PinType::Float, Value::Float(2.0), true)
+            .unwrap();
+        g.add_variable("delta", PinType::Float, Value::Float(0.5), false)
+            .unwrap();
+        let ep = adiciona(&mut g, "OnProcess");
+        let gv = adiciona(&mut g, "GetVariable");
+        g.set_value(gv, "name", Value::String("delta".into()))
+            .unwrap();
+        let sp = adiciona(&mut g, "SetProperty");
+        g.set_value(sp, "name", Value::String("position_x".into()))
+            .unwrap();
+        g.connect((ep, "exec"), (sp, "exec")).unwrap();
+        g.connect((ep, "self"), (sp, "node")).unwrap();
+        g.connect((gv, "value"), (sp, "value")).unwrap();
+        compile(&g).unwrap()
     }
 
     /// Script com uma variável exportada, um OnReady que espera e um OnProcess que move o nó.
@@ -531,5 +604,49 @@ mod tests {
         assert_eq!(ident("vida total"), "vida_total");
         assert_eq!(ident("2x"), "_2x");
         assert_eq!(ident("int"), "@int");
+    }
+
+    #[test]
+    fn nome_que_o_codigo_gerado_usa_ganha_sufixo() {
+        // `self`, `delta`, o motor e os registradores `r<n>` são usados no código gerado: um campo com esse nome
+        // esconderia o que a expressão quer dizer.
+        assert_eq!(ident("delta"), "delta_");
+        assert_eq!(ident("self"), "self_");
+        assert_eq!(ident("Nexo"), "Nexo_");
+        assert_eq!(ident("r1"), "r1_");
+        assert_eq!(ident("r"), "r");
+        assert_eq!(ident("rato"), "rato");
+    }
+
+    #[test]
+    fn nome_de_classe_vira_identificador_valido() {
+        assert_eq!(csharp_class_name("Script 1"), "Script_1");
+        assert_eq!(csharp_class_name("Ação de salto"), "Ação_de_salto");
+        assert_eq!(csharp_class_name("Task"), "Task_");
+        assert_eq!(csharp_class_name("3 vidas"), "_3_vidas");
+        assert_eq!(csharp_class_name(""), "_");
+    }
+
+    #[test]
+    fn campos_com_o_mesmo_identificador_ganham_numero() {
+        let texto = generate_csharp(&colisoes(), "Teste");
+        assert!(
+            texto.contains("[Export] public double vida_total = 1.0;"),
+            "{texto}"
+        );
+        assert!(
+            texto.contains("[Export] public double vida_total_2 = 2.0;"),
+            "{texto}"
+        );
+        // Sem campo repetido: cada identificador aparece uma vez na declaração.
+        assert_eq!(texto.matches("double vida_total ").count(), 1, "{texto}");
+    }
+
+    #[test]
+    fn variavel_chamada_delta_nao_vira_o_parametro_do_quadro() {
+        let texto = generate_csharp(&colisoes(), "Teste");
+        assert!(texto.contains("private double delta_ = 0.5;"), "{texto}");
+        assert!(texto.contains("= delta_;"), "{texto}");
+        assert!(!texto.contains("= delta;"), "{texto}");
     }
 }

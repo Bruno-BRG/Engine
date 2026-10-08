@@ -5,7 +5,7 @@
 import { app } from '$lib/state/app.svelte';
 import { scene, type NodeView } from '$lib/state/scene.svelte';
 import { log } from '$lib/state/log.svelte';
-import { createGraphEditor, readNodeLibrary, type GraphEditor } from '$lib/runtime/engine';
+import { createGraphEditor, csharpClassName, readNodeLibrary, type GraphEditor } from '$lib/runtime/engine';
 import { isTauri } from '$lib/platform';
 import { logicDebug } from './debug.svelte';
 import {
@@ -41,6 +41,11 @@ const ATRASO_SALVAR = 600;
 
 const VAZIO: GraphSnapshot = { nodes: [], wires: [], comments: [], variables: [], pins: [] };
 
+/** C# do script aberto (VIS-024): o texto gerado, ou a mensagem do grafo que impede a geração. */
+export type CSharpSaida =
+  | { ok: true; classe: string; codigo: string }
+  | { ok: false; classe: string; erro: string };
+
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Chama um comando do Tauri. Sem o app desktop, scripts não existem. */
@@ -68,6 +73,22 @@ class LogicState {
   snap = $state.raw<GraphSnapshot>(VAZIO);
   /** Erros de validação do grafo aberto. */
   errors = $state.raw<GraphError[]>([]);
+  /**
+   * C# gerado da IR do script aberto (VIS-024). É uma derivada: só é calculada quando o painel a lê, e é refeita a
+   * cada operação do grafo, que troca `snap`.
+   */
+  csharp = $derived.by<CSharpSaida | null>(() => {
+    void this.snap;
+    const nome = this.active;
+    const ed = this.#ed();
+    if (!nome || !ed) return null;
+    const classe = csharpClassName(nome);
+    try {
+      return { ok: true, classe, codigo: ed.to_csharp(nome) };
+    } catch (e) {
+      return { ok: false, classe, erro: msg(e) };
+    }
+  });
   /** Seleção do grafo aberto (ids de nós, de caixas e um fio). */
   selNodes = $state<number[]>([]);
   selComments = $state<number[]>([]);
