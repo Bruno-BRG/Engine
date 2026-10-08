@@ -5,6 +5,7 @@
 
 use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
+use nexo_core::scene::value_of;
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Compiled, Context, Graph, Scheduler, compile};
 use nexo_physics::STEP;
@@ -66,7 +67,7 @@ pub(crate) fn iniciar(cena: &Scene, textos: &BTreeMap<Uid, String>) -> Result<Ve
         let Some(texto) = textos.get(&uid) else {
             continue;
         };
-        match Instancia::novo(uid, texto) {
+        match Instancia::novo(cena, uid, texto) {
             Ok(inst) => instancias.push(inst),
             Err(erro) => erros.push(format!("Script de '{}': {erro}", nome_de(cena, uid))),
         }
@@ -97,7 +98,7 @@ pub(crate) fn sincronizar(
                     console.push(erro_no_console(cena, uid, format!("recarga falhou, segue a versão anterior: {erro}")));
                 }
             },
-            None => match Instancia::novo(uid, texto) {
+            None => match Instancia::novo(cena, uid, texto) {
                 Ok(inst) => instancias.push(inst),
                 Err(erro) => console.push(erro_no_console(cena, uid, erro)),
             },
@@ -151,12 +152,13 @@ pub(crate) fn tick(
 }
 
 impl Instancia {
-    /// Instância nova: compila o grafo e agenda o evento "Ao ficar pronto", que roda no primeiro quadro.
-    fn novo(dono: Uid, texto: &str) -> Result<Instancia, String> {
+    /// Instância nova: compila o grafo, aplica os valores exportados do nó (VIS-022) e agenda o evento "Ao ficar
+    /// pronto", que roda no primeiro quadro.
+    fn novo(cena: &Scene, dono: Uid, texto: &str) -> Result<Instancia, String> {
         let grafo = compilar(texto)?;
         let mut agenda = Scheduler::new();
         agenda.iniciar(&grafo, "OnReady");
-        let contexto = grafo.new_context(dono.0);
+        let contexto = contexto_do_no(cena, dono, &grafo)?;
         Ok(Instancia { dono, texto: texto.to_string(), grafo, agenda, contexto, erros: BTreeSet::new() })
     }
 
@@ -174,6 +176,14 @@ impl Instancia {
     }
 }
 
+/// Contexto de um nó: as variáveis começam com os valores exportados guardados em `script_vars` (VIS-022). Sem o
+/// mapa, ou com o mapa vazio, valem os padrões do script.
+fn contexto_do_no(cena: &Scene, dono: Uid, grafo: &Compiled) -> Result<Context, String> {
+    let valores = cena.node(dono).map(|n| value_of(n, "script_vars")).unwrap_or(serde_json::Value::Null);
+    let vazio = serde_json::Map::new();
+    grafo.new_context_with(dono.0, valores.as_object().unwrap_or(&vazio))
+}
+
 /// Lê e compila um grafo. O erro junta as mensagens de leitura ou de validação, cada uma com o nó onde está.
 fn compilar(texto: &str) -> Result<Compiled, String> {
     let grafo = Graph::from_ron(texto)?;
@@ -186,4 +196,48 @@ fn nome_de(cena: &Scene, uid: Uid) -> String {
 
 fn erro_no_console(cena: &Scene, dono: Uid, texto: String) -> Mensagem {
     Mensagem { level: "error", node: dono, message: format!("Script de '{}': {texto}", nome_de(cena, dono)) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexo_graph::{PinType, Value};
+    use serde_json::json;
+
+    /// Script com uma variável exportada ("vida", decimal) e uma local ("local", inteiro), e uma cena com um nó.
+    fn cena_com_no(valores: serde_json::Value) -> (Scene, Uid, String) {
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Float, Value::Float(1.0), true).unwrap();
+        g.add_variable("local", PinType::Int, Value::Int(7), false).unwrap();
+        let texto = g.to_ron().unwrap();
+        let mut cena = Scene::new_default("Teste", 1);
+        let raiz = cena.roots()[0];
+        let no = cena.add_node(Some(raiz), "Node2D", None).unwrap();
+        cena.set_prop(no, "script_vars", valores, None).unwrap();
+        (cena, no, texto)
+    }
+
+    #[test]
+    fn valor_exportado_do_no_vale_no_inicio_da_instancia() {
+        let (cena, no, texto) = cena_com_no(json!({"vida": {"Float": 4.0}}));
+        let inst = Instancia::novo(&cena, no, &texto).unwrap();
+        // A exportada recebe o valor do nó; a local continua no padrão do script.
+        assert_eq!(inst.contexto.vars, vec![Value::Float(4.0), Value::Int(7)]);
+    }
+
+    #[test]
+    fn no_sem_valores_exportados_comeca_no_padrao() {
+        let (cena, no, texto) = cena_com_no(json!({}));
+        let inst = Instancia::novo(&cena, no, &texto).unwrap();
+        assert_eq!(inst.contexto.vars, vec![Value::Float(1.0), Value::Int(7)]);
+    }
+
+    #[test]
+    fn valor_exportado_malformado_recusa_o_inicio_da_reproducao() {
+        let (cena, no, texto) = cena_com_no(json!({"vida": {"Float": "quatro"}}));
+        let textos = BTreeMap::from([(no, texto)]);
+        let erro = iniciar(&cena, &textos).err().expect("valor malformado deve recusar a reprodução");
+        assert!(erro.contains("Script de 'Node2D'"), "{erro}");
+        assert!(erro.contains("vida"), "{erro}");
+    }
 }

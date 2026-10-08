@@ -5,7 +5,7 @@
 
 use crate::graph::{Graph, GraphNode, REROUTE, def_of, error_from_refusal};
 use crate::library;
-use crate::types::{LogLevel, Value, Variable};
+use crate::types::{LogLevel, PinType, Value, Variable};
 use crate::vm::Context;
 use std::collections::BTreeMap;
 
@@ -301,6 +301,72 @@ impl Compiled {
     pub fn programs_for<'a>(&'a self, event: &'a str) -> impl Iterator<Item = &'a Program> + 'a {
         self.programs.iter().filter(move |p| p.event == event)
     }
+
+    /// Context of one instance with its exported values (VIS-022). `exported` is the node's `script_vars` map: variable
+    /// name to value in the editor's format (ADR 0012). Only an exported variable with the same name and type takes
+    /// the value. An entry that does not match (variable removed, no longer exported, or another type after the
+    /// script changed) is ignored and the default stays. A malformed value is an error, with the variable's name.
+    pub fn new_context_with(
+        &self,
+        owner: u64,
+        exported: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Context, String> {
+        let mut context = self.new_context(owner);
+        for (name, data) in exported {
+            let Some((index, variable)) =
+                self.variables.iter().enumerate().find(|(_, v)| v.exported && v.name == *name)
+            else {
+                continue;
+            };
+            let ty = exported_type(data).map_err(|e| format!("valor exportado '{name}': {e}"))?;
+            if ty != variable.ty {
+                continue;
+            }
+            let value = exported_value(data).map_err(|e| format!("valor exportado '{name}': {e}"))?;
+            if let Some(slot) = context.vars.get_mut(index) {
+                *slot = value;
+            }
+        }
+        Ok(context)
+    }
+}
+
+/// Type named by the tag of an exported value: `{"Float": 2.5}` is a decimal. Any other shape is an error.
+fn exported_type(data: &serde_json::Value) -> Result<PinType, String> {
+    let tag = match data.as_object() {
+        Some(object) if object.len() == 1 => object.keys().next().map(String::as_str),
+        _ => None,
+    };
+    match tag {
+        Some("Bool") => Ok(PinType::Bool),
+        Some("Int") => Ok(PinType::Int),
+        Some("Float") => Ok(PinType::Float),
+        Some("String") => Ok(PinType::String),
+        Some("Vec2") => Ok(PinType::Vec2),
+        Some("Node") => Ok(PinType::Node),
+        _ => Err("esperado um objeto com um tipo, como {\"Float\": 2.5}".into()),
+    }
+}
+
+/// Value of an exported entry, in the graph's format. A node is written as hexadecimal text, because a 64-bit number
+/// loses precision in JavaScript.
+fn exported_value(data: &serde_json::Value) -> Result<Value, String> {
+    if let Some(node) = data.get("Node") {
+        let hex = node.as_str().ok_or("o UID do nó deve ser texto hexadecimal")?;
+        return Ok(Value::Node(node_id_from_hex(hex)?));
+    }
+    serde_json::from_value(data.clone()).map_err(|e| e.to_string())
+}
+
+/// Node id from up to 16 hexadecimal digits. The empty text is no node, the same as `Node(0)`.
+fn node_id_from_hex(text: &str) -> Result<u64, String> {
+    if text.is_empty() {
+        return Ok(0);
+    }
+    if text.len() > 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("UID de nó inválido: '{text}'"));
+    }
+    u64::from_str_radix(text, 16).map_err(|_| format!("UID de nó inválido: '{text}'"))
 }
 
 fn err(node: u64, message: impl Into<String>) -> CompileError {
@@ -1115,5 +1181,64 @@ mod tests {
                 .any(|e| e.node == Some(inst) && e.message.contains("antes do nó rodar")),
             "{erros:?}"
         );
+    }
+
+    /// Script com três variáveis: duas exportadas (decimal e nó) e uma local (inteiro).
+    fn script_com_variaveis() -> Compiled {
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Float, Value::Float(1.0), true).unwrap();
+        g.add_variable("local", PinType::Int, Value::Int(7), false).unwrap();
+        g.add_variable("alvo", PinType::Node, Value::Node(0), true).unwrap();
+        compile(&g).unwrap()
+    }
+
+    fn mapa(valor: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        valor.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn valor_exportado_substitui_o_padrao_da_instancia() {
+        let c = script_com_variaveis();
+        let dados = mapa(serde_json::json!({"vida": {"Float": 4.0}, "alvo": {"Node": "00000000000000ff"}}));
+        let ctx = c.new_context_with(1, &dados).unwrap();
+        assert_eq!(ctx.vars, vec![Value::Float(4.0), Value::Int(7), Value::Node(255)]);
+        // Sem valores, a instância começa no padrão do script, como antes de VIS-022.
+        let vazio = mapa(serde_json::json!({}));
+        assert_eq!(c.new_context_with(1, &vazio).unwrap().vars, c.new_context(1).vars);
+    }
+
+    #[test]
+    fn variavel_local_nao_recebe_valor_exportado() {
+        let c = script_com_variaveis();
+        let ctx = c.new_context_with(1, &mapa(serde_json::json!({"local": {"Int": 9}}))).unwrap();
+        assert_eq!(ctx.vars[1], Value::Int(7));
+    }
+
+    #[test]
+    fn valor_de_outro_tipo_ou_variavel_apagada_e_ignorado() {
+        let c = script_com_variaveis();
+        // O script trocou o tipo de "vida" depois de o valor ser salvo, e "antiga" não existe mais.
+        let dados = mapa(serde_json::json!({"vida": {"Int": 4}, "antiga": {"Float": 2.0}}));
+        let ctx = c.new_context_with(1, &dados).unwrap();
+        assert_eq!(ctx.vars[0], Value::Float(1.0));
+    }
+
+    #[test]
+    fn uid_de_no_em_hexadecimal_e_conferido() {
+        let c = script_com_variaveis();
+        let nenhum = c.new_context_with(1, &mapa(serde_json::json!({"alvo": {"Node": ""}}))).unwrap();
+        assert_eq!(nenhum.vars[2], Value::Node(0));
+        // Número em vez de texto perde precisão acima de 2^53 no editor, por isso não é aceito.
+        assert!(c.new_context_with(1, &mapa(serde_json::json!({"alvo": {"Node": 255}}))).is_err());
+        assert!(c.new_context_with(1, &mapa(serde_json::json!({"alvo": {"Node": "xyz"}}))).is_err());
+        assert!(c.new_context_with(1, &mapa(serde_json::json!({"alvo": {"Node": "1234567890abcdef0"}}))).is_err());
+    }
+
+    #[test]
+    fn valor_malformado_da_erro_com_o_nome_da_variavel() {
+        let c = script_com_variaveis();
+        let erro = c.new_context_with(1, &mapa(serde_json::json!({"vida": {"Float": "quatro"}}))).unwrap_err();
+        assert!(erro.contains("vida"), "{erro}");
+        assert!(c.new_context_with(1, &mapa(serde_json::json!({"vida": 4.0}))).is_err());
     }
 }

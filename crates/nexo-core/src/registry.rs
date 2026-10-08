@@ -27,6 +27,9 @@ pub enum PropKind {
     Mask,
     /// Lista de pontos [[x, y], ...] (polígonos de colisão, PHY-011).
     Points,
+    /// JSON object. The registry only checks that it is an object; the meaning of each key belongs to the reader
+    /// (script exported values, VIS-022).
+    Map,
 }
 
 /// Lista das Configurações do Projeto de onde vêm os nomes válidos de um texto (SCN-033, AUD-001, PHY-023).
@@ -192,6 +195,9 @@ fn build() -> Vec<NodeType> {
                 // Script anexado ao nó (VIS-003, INS-005): o nome do arquivo `scripts/<nome>.logic.ron`, sem pasta
                 // e sem extensão. Vazio = nenhum. O Inspector mostra um slot próprio, não um campo de texto.
                 PropDef::new("script", "Script", "Lógica", PropKind::Str, json!("")),
+                // Valores das variáveis exportadas do script (VIS-022), só os que diferem do padrão. Chave: nome da
+                // variável. Valor: formato do grafo, com UID de nó em hexadecimal (ADR 0012). Vazio = padrão do script.
+                PropDef::new("script_vars", "Valores exportados", "Lógica", PropKind::Map, json!({})),
             ],
         },
         NodeType {
@@ -626,6 +632,17 @@ mod tests {
         assert_eq!(def.default, json!(""));
         assert_eq!(def.group, "Lógica");
         assert!(prop_def("Timer", "script").is_some());
+    }
+
+    #[test]
+    fn valores_exportados_sao_um_mapa_com_padrao_vazio() {
+        // VIS-022: todo nó tem o mapa; o padrão é objeto vazio, e a interface o vê como "map".
+        let def = prop_def("Sprite2D", "script_vars").expect("Node.script_vars");
+        assert_eq!(def.kind, PropKind::Map);
+        assert_eq!(def.default, json!({}));
+        assert_eq!(def.group, "Lógica");
+        assert_eq!(serde_json::to_value(def).unwrap()["kind"], json!("map"));
+        assert!(prop_def("Timer", "script_vars").is_some());
     }
 
     #[test]

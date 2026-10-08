@@ -244,6 +244,21 @@ mod tests {
     }
 
     #[test]
+    fn exported_values_round_trip_in_ron() {
+        // VIS-022: o mapa vai no arquivo como propriedade comum; o UID de nó segue como texto hexadecimal.
+        let mut s = Scene::new_default("Principal", 3);
+        let root = s.roots()[0];
+        let no = s.add_node(Some(root), "Node2D", None).unwrap();
+        let valores = json!({"vida": {"Float": 3.5}, "alvo": {"Node": "00000000000000ff"}});
+        s.set_prop(no, "script_vars", valores.clone(), None).unwrap();
+        let text = s.to_ron().unwrap();
+        assert!(text.contains("script_vars"));
+        let back = Scene::from_text(&text, 9).unwrap();
+        assert_eq!(crate::scene::value_of(back.node(no).unwrap(), "script_vars"), valores);
+        assert_eq!(back.to_ron().unwrap(), text);
+    }
+
+    #[test]
     fn node_without_connections_writes_no_field() {
         let s = Scene::new_default("Principal", 3);
         assert!(!s.to_ron().unwrap().contains("connections"));

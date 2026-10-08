@@ -2,13 +2,30 @@
   import { logic } from '$lib/logic/store.svelte';
   import { scene, type NodeView } from '$lib/state/scene.svelte';
   import { TIPO_NOME, textOf, type Variable } from '$lib/logic/model';
-  import { Workflow, ExternalLink, Plus } from '@lucide/svelte';
+  import {
+    asBool,
+    asNode,
+    asNumber,
+    asText,
+    asVec2,
+    defaultOf,
+    isOverridden,
+    scriptVarsOf,
+    valueOf,
+    withValue,
+    type StoredValue,
+  } from '$lib/logic/exported';
+  import NumberField from '../NumberField.svelte';
+  import NodeRefField from '../inspector/NodeRefField.svelte';
+  import { Workflow, ExternalLink, Plus, RotateCcw } from '@lucide/svelte';
 
   // Slot de script do Inspector (INS-005): anexa um script existente ou novo, abre no workspace de Lógica e
-  // lista as variáveis exportadas dele. Só este bloco mexe com a propriedade `script`.
+  // lista as variáveis exportadas dele. Cada variável pode ter um valor neste nó (VIS-022). Só este bloco mexe
+  // com as propriedades `script` e `script_vars`.
   let { node }: { node: NodeView } = $props();
 
   const atual = $derived(String(node.props.script ?? ''));
+  const valores = $derived(scriptVarsOf(node.props));
   let exportadas = $state<Variable[]>([]);
 
   $effect(() => {
@@ -33,8 +50,30 @@
     };
   });
 
+  /**
+   * Troca o script do nó. Os valores eram das variáveis do script antigo, então saem junto: um só passo de
+   * desfazer.
+   */
   function anexa(nome: string) {
-    scene.setProp(node.uid, 'script', nome);
+    if (nome === atual) return;
+    scene.setProps(node.uid, { script: nome, script_vars: {} }, 'attach:' + node.uid);
+    scene.endGroup();
+  }
+
+  /**
+   * Grava o valor de uma variável neste nó. Com `coalesce`, alterações seguidas (arrastar um número) viram um passo.
+   */
+  function setVar(variable: Variable, value: StoredValue, coalesce = false) {
+    scene.setProp(
+      node.uid,
+      'script_vars',
+      withValue(valores, variable, value),
+      coalesce ? 'vars:' + node.uid + ':' + variable.name : undefined,
+    );
+  }
+
+  function endEdit() {
+    scene.endGroup();
   }
 
   async function novo() {
@@ -72,10 +111,78 @@
       {#if exportadas.length}
         <ul>
           {#each exportadas as v (v.name)}
-            <li>
-              <span class="mono nome">{v.name}</span>
-              <span class="tipo">{TIPO_NOME[v.ty]}</span>
-              <span class="mono valor">{textOf(v.default)}</span>
+            {@const valor = valueOf(v, valores)}
+            {@const mudou = isOverridden(v, valores)}
+            <li class="var" class:mudou title="{TIPO_NOME[v.ty]}, padrão do script: {textOf(v.default)}">
+              <div class="corpo">
+                {#if v.ty === 'Float' || v.ty === 'Int'}
+                  <NumberField
+                    label={v.name}
+                    value={asNumber(valor)}
+                    step={v.ty === 'Int' ? 1 : 0.1}
+                    precision={v.ty === 'Int' ? 0 : 2}
+                    onchange={(x) => setVar(v, v.ty === 'Int' ? { Int: Math.round(x) } : { Float: x }, true)}
+                    onend={endEdit}
+                  />
+                {:else if v.ty === 'Bool'}
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      checked={asBool(valor)}
+                      onchange={(e) => setVar(v, { Bool: e.currentTarget.checked })}
+                    />
+                    <span>{v.name}</span>
+                  </label>
+                {:else if v.ty === 'String'}
+                  <label class="linha">
+                    <span class="flabel">{v.name}</span>
+                    <input
+                      class="txt"
+                      value={asText(valor)}
+                      onchange={(e) => setVar(v, { String: e.currentTarget.value })}
+                    />
+                  </label>
+                {:else if v.ty === 'Vec2'}
+                  {@const par = asVec2(valor)}
+                  <div class="vec">
+                    <span class="flabel">{v.name}</span>
+                    <NumberField
+                      label="X"
+                      value={par[0]}
+                      step={1}
+                      precision={0}
+                      onchange={(x) => setVar(v, { Vec2: [x, par[1]] }, true)}
+                      onend={endEdit}
+                    />
+                    <NumberField
+                      label="Y"
+                      value={par[1]}
+                      step={1}
+                      precision={0}
+                      onchange={(y) => setVar(v, { Vec2: [par[0], y] }, true)}
+                      onend={endEdit}
+                    />
+                  </div>
+                {:else if v.ty === 'Node'}
+                  <NodeRefField
+                    label={v.name}
+                    value={asNode(valor)}
+                    anyNode
+                    emptyLabel="Nenhum"
+                    onchange={(uid) => setVar(v, { Node: uid })}
+                  />
+                {/if}
+              </div>
+              {#if mudou}
+                <button
+                  class="reset"
+                  title="Voltar ao padrão do script ({textOf(v.default)})"
+                  aria-label="Voltar {v.name} ao padrão do script"
+                  onclick={() => setVar(v, defaultOf(v))}
+                >
+                  <RotateCcw size={11} />
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -143,25 +250,80 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
   }
-  li {
+  .var {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: var(--fs-12);
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 0;
   }
-  .nome {
+  .corpo {
+    flex: 1;
+    min-width: 0;
+  }
+  .var.mudou :global(.lbl),
+  .var.mudou .flabel {
+    font-weight: 600;
     color: var(--text);
   }
-  .tipo {
-    font-size: var(--fs-11);
-    color: var(--text-faint);
+  /* Campos de texto e vetor usam a mesma coluna de rótulo que os campos numéricos do Inspector. */
+  .linha {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
   }
-  .valor {
-    margin-left: auto;
+  .vec {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) minmax(0, 1fr);
+    gap: 4px;
+    align-items: center;
+  }
+  .flabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--fs-11);
     color: var(--text-dim);
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-11);
+    color: var(--text-dim);
+    padding-left: 90px;
+  }
+  .txt {
+    min-width: 0;
+    height: 20px;
+    padding: 0 4px;
+    border-radius: var(--r-ctl);
+    background: var(--bg-2);
+    color: var(--text);
+    font-size: var(--fs-12);
+    box-shadow: inset 0 0 0 1px var(--line);
+    outline: none;
+  }
+  .txt:focus {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .reset {
+    flex: none;
+    margin-top: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--r-ctl);
+    color: var(--text-faint);
+  }
+  .reset:hover {
+    color: var(--text);
+    background: var(--bg-hover);
   }
   p {
     margin: 0;
