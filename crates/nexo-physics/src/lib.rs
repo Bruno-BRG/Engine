@@ -26,6 +26,9 @@ use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
+mod joints;
+mod queries;
+
 /// Passo fixo da simulação, em segundos.
 pub const STEP: f64 = 1.0 / 60.0;
 /// Passos no máximo por quadro. Evita a espiral da morte quando o quadro demora demais.
@@ -202,6 +205,8 @@ pub struct Physics {
     up: Vector,
     driven: Vec<Driven>,
     index: HashMap<Uid, usize>,
+    /// Corpo rígido de cada nó com corpo (estático, dinâmico, personagem ou área), para juntas e consultas.
+    bodies: HashMap<Uid, RigidBodyHandle>,
     /// Nó dono de cada colisor (o corpo ou a área).
     owner: HashMap<ColliderHandle, Uid>,
     /// Áreas e o que elas fazem.
@@ -234,6 +239,7 @@ impl Physics {
             up: up_of(settings.gravity),
             driven: Vec::new(),
             index: HashMap::new(),
+            bodies: HashMap::new(),
             owner: HashMap::new(),
             areas: HashMap::new(),
             overlaps: HashMap::new(),
@@ -247,6 +253,7 @@ impl Physics {
                 p.add_body(scene, uid, node, &xfs, settings);
             }
         }
+        joints::add(&mut p, scene);
         p
     }
 
@@ -347,6 +354,7 @@ impl Physics {
         }
 
         let handle = self.world.bodies.insert(builder.build());
+        self.bodies.insert(uid, handle);
         let mut first_collider = None;
         for c in colliders {
             let ch = self.world.colliders.insert_with_parent(c, handle, &mut self.world.bodies);

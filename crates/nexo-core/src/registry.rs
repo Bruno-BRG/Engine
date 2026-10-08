@@ -301,6 +301,82 @@ fn build() -> Vec<NodeType> {
                 PropDef::new("one_way", "Colisão de uma face", "Forma", PropKind::Bool, json!(false)),
             ],
         },
+        // Consultas e juntas (PHY-030, PHY-031). Bloco próprio no fim da física: as camadas de
+        // `collision_mask` são os mesmos bits das camadas dos corpos (ver `LAYERS`).
+        NodeType {
+            name: "RayCast2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Raio de consulta: diz qual corpo o raio atinge primeiro, do nó até o alvo.",
+            props: vec![
+                PropDef::new("enabled", "Ativo", "Consulta", PropKind::Bool, json!(true)),
+                PropDef::new("target", "Alvo (relativo ao nó)", "Consulta", PropKind::Vec2, json!([0.0, 100.0]))
+                    .step(1.0),
+                collision_mask(),
+                PropDef::new("collide_with_areas", "Atingir áreas", "Consulta", PropKind::Bool, json!(false)),
+            ],
+        },
+        NodeType {
+            name: "ShapeCast2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Forma que varre o caminho do nó até o alvo e diz o primeiro corpo que ela toca.",
+            props: vec![
+                PropDef::new("enabled", "Ativo", "Consulta", PropKind::Bool, json!(true)),
+                PropDef::new("shape", "Forma", "Consulta", PropKind::Enum, json!("rect")).options(COLLIDER_SHAPES),
+                PropDef::new("size", "Tamanho", "Consulta", PropKind::Vec2, json!([32.0, 32.0])).step(1.0),
+                PropDef::new("target", "Alvo (relativo ao nó)", "Consulta", PropKind::Vec2, json!([0.0, 100.0]))
+                    .step(1.0),
+                collision_mask(),
+                PropDef::new("collide_with_areas", "Atingir áreas", "Consulta", PropKind::Bool, json!(false)),
+            ],
+        },
+        NodeType {
+            name: "PinJoint2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Prende o corpo pai ao corpo B por um ponto. A posição do próprio nó não é usada.",
+            props: vec![
+                PropDef::new("node_b", "Corpo B", "Junta", PropKind::Uid, json!("")),
+                PropDef::new("anchor", "Âncora (no corpo pai)", "Junta", PropKind::Vec2, json!([0.0, 0.0]))
+                    .step(1.0),
+            ],
+        },
+        NodeType {
+            name: "GrooveJoint2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Faz o corpo B deslizar num trilho de dois pontos do corpo pai.",
+            props: vec![
+                PropDef::new("node_b", "Corpo B", "Junta", PropKind::Uid, json!("")),
+                PropDef::new("groove_start", "Início do trilho", "Junta", PropKind::Vec2, json!([0.0, 0.0]))
+                    .step(1.0),
+                PropDef::new("groove_end", "Fim do trilho", "Junta", PropKind::Vec2, json!([0.0, 100.0]))
+                    .step(1.0),
+                PropDef::new("anchor_b", "Âncora em B", "Junta", PropKind::Vec2, json!([0.0, 0.0])).step(1.0),
+            ],
+        },
+        NodeType {
+            name: "DampedSpringJoint2D",
+            base: Some("Node2D"),
+            category: "Física",
+            description: "Mola entre o corpo pai e o corpo B: puxa até o comprimento de repouso e amortece.",
+            props: vec![
+                PropDef::new("node_b", "Corpo B", "Junta", PropKind::Uid, json!("")),
+                PropDef::new("anchor", "Âncora (no corpo pai)", "Junta", PropKind::Vec2, json!([0.0, 0.0]))
+                    .step(1.0),
+                PropDef::new("anchor_b", "Âncora em B", "Junta", PropKind::Vec2, json!([0.0, 0.0])).step(1.0),
+                PropDef::new("rest_length", "Comprimento de repouso", "Mola", PropKind::Float, json!(100.0))
+                    .range(0.0, 10000.0)
+                    .step(1.0),
+                PropDef::new("stiffness", "Rigidez", "Mola", PropKind::Float, json!(20.0))
+                    .range(0.0, 10000.0)
+                    .step(0.5),
+                PropDef::new("damping", "Amortecimento", "Mola", PropKind::Float, json!(1.0))
+                    .range(0.0, 1000.0)
+                    .step(0.1),
+            ],
+        },
         NodeType {
             name: "Behavior",
             base: Some("Node"),
@@ -417,6 +493,16 @@ mod tests {
         assert!(prop_def("Sprite2D", "nao_existe").is_none());
         assert!(is_2d("Camera2D"));
         assert!(!is_2d("Behavior"));
+    }
+
+    #[test]
+    fn tipos_de_consulta_e_junta_tem_propriedades() {
+        assert_eq!(prop_def("RayCast2D", "collide_with_areas").unwrap().default, json!(false));
+        assert_eq!(prop_def("ShapeCast2D", "collision_mask").unwrap().default, json!(-1));
+        assert_eq!(prop_def("PinJoint2D", "node_b").unwrap().kind, PropKind::Uid);
+        assert_eq!(prop_def("GrooveJoint2D", "groove_end").unwrap().default, json!([0.0, 100.0]));
+        assert!(prop_def("DampedSpringJoint2D", "rest_length").is_some());
+        assert!(is_2d("GrooveJoint2D"));
     }
 
     #[test]
