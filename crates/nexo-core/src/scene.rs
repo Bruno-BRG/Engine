@@ -630,6 +630,17 @@ pub(crate) fn coerce(def: &PropDef, v: &Value) -> Result<Value, String> {
             }
             json!(s)
         }
+        PropKind::Points => {
+            // Cada ponto é um par [x, y] de números finitos.
+            let mut pts = Vec::new();
+            for p in v.as_array().ok_or_else(bad)? {
+                let xy = p.as_array().filter(|a| a.len() == 2).ok_or_else(bad)?;
+                let x = xy[0].as_f64().filter(|x| x.is_finite()).ok_or_else(bad)?;
+                let y = xy[1].as_f64().filter(|y| y.is_finite()).ok_or_else(bad)?;
+                pts.push(json!([x, y]));
+            }
+            json!(pts)
+        }
     };
     Ok(out)
 }
@@ -811,6 +822,29 @@ mod tests {
         assert!(s.set_prop(a, "modulate", json!("azul"), None).is_err());
         let sp = s.add_node(Some(root), "Sprite2D", None).unwrap();
         assert!(s.set_prop(sp, "shape", json!("triangulo"), None).is_err());
+    }
+
+    #[test]
+    fn pontos_de_poligono_sao_validados() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let p = s.add_node(Some(root), "CollisionPolygon2D", None).unwrap();
+        s.set_prop(p, "points", json!([[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]), None).unwrap();
+        assert_eq!(value_of(s.node(p).unwrap(), "points"), json!([[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]));
+        assert!(s.set_prop(p, "points", json!([[0.0]]), None).is_err());
+        assert!(s.set_prop(p, "points", json!([[0.0, "x"]]), None).is_err());
+        assert!(s.set_prop(p, "points", json!("não é lista"), None).is_err());
+    }
+
+    #[test]
+    fn camada_aceita_nome_livre() {
+        // A validação do nome contra as configurações do projeto fica no editor; aqui o valor é texto.
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "RigidBody2D", None).unwrap();
+        s.set_prop(a, "layer", json!("moeda"), None).unwrap();
+        assert_eq!(value_of(s.node(a).unwrap(), "layer"), json!("moeda"));
+        assert!(s.set_prop(a, "layer", json!(3), None).is_err());
     }
 
     #[test]

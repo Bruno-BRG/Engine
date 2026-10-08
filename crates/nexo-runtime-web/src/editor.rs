@@ -4,7 +4,7 @@
 
 use nexo_core::query::{self, Draw};
 use nexo_core::{Input, InputMap, ProjectSettings, Scene, Uid, registry};
-use nexo_physics::Physics;
+use nexo_physics::{Physics, check_reference};
 use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
@@ -105,6 +105,8 @@ impl SceneEditor {
     /// mesma chave viram um passo de desfazer só até `end_group`.
     pub fn set_prop(&mut self, uid: &str, key: &str, value_json: &str, coalesce: Option<String>) -> Result<(), JsError> {
         let value: Value = serde_json::from_str(value_json).map_err(js_err)?;
+        // Camada e material são nomes das configurações do projeto (PHY-020, PHY-023).
+        check_reference(&self.settings, key, &value).map_err(js_err)?;
         self.scene
             .set_prop(parse_uid(uid)?, key, value, coalesce.as_deref())
             .map_err(js_err)
@@ -156,7 +158,7 @@ impl SceneEditor {
     /// A física é montada com as posições atuais dos nós.
     pub fn play_start(&mut self) {
         let scene = self.scene.play_copy();
-        let physics = Physics::build(&scene);
+        let physics = Physics::build(&scene, &self.settings);
         self.play = Some(Play { scene, time: 0.0, physics });
     }
 
@@ -205,6 +207,14 @@ impl SceneEditor {
     pub fn is_grounded(&self, uid: &str) -> Result<bool, JsError> {
         let uid = parse_uid(uid)?;
         Ok(self.play.as_ref().is_some_and(|p| p.physics.grounded(uid)))
+    }
+
+    /// Estado de contato de um CharacterBody2D (chão, parede, teto, ângulo do chão, velocidades) em JSON,
+    /// ou "null" se o nó não é um personagem da reprodução (PHY-004).
+    pub fn character_state(&self, uid: &str) -> Result<String, JsError> {
+        let uid = parse_uid(uid)?;
+        let state = self.play.as_ref().and_then(|p| p.physics.character_state(uid));
+        to_json(&state)
     }
 
     // ---------- Entrada (INP-001, INP-002) ----------

@@ -253,33 +253,59 @@ fn apply(xf: Xf, px: f64, py: f64) -> [f64; 2] {
     [xf.x + c * lx - s * ly, xf.y + s * lx + c * ly]
 }
 
-/// Contornos das formas de colisão ativas (`CollisionShape2D` com `disabled` falso) filhas de um
-/// corpo ou área. Formas fora de um corpo não aparecem: o Rapier também as ignora.
+/// Pontos do contorno de uma forma no espaço local do nó, antes da transformação do mundo.
+fn local_outline(n: &Node) -> Vec<[f64; 2]> {
+    if n.kind == "CollisionPolygon2D" {
+        return value_of(n, "points")
+            .as_array()
+            .map(|a| a.iter().map(as_vec2).collect())
+            .unwrap_or_default();
+    }
+    let [w, h] = as_vec2(&value_of(n, "size"));
+    let (hw, hh) = (w / 2.0, h / 2.0);
+    match text(n, "shape").as_str() {
+        "circle" => (0..24)
+            .map(|i| {
+                let a = i as f64 / 24.0 * std::f64::consts::TAU;
+                [hw * a.cos(), hw * a.sin()]
+            })
+            .collect(),
+        // Cápsula vertical: duas semicircunferências de raio w/2, ligadas pelos lados retos.
+        "capsule_y" => {
+            use std::f64::consts::PI;
+            let (r, half) = (hw, ((h - w) / 2.0).max(0.0));
+            let mut pts = Vec::new();
+            for i in 0..=12 {
+                let a = i as f64 / 12.0 * PI;
+                pts.push([r * a.cos(), half + r * a.sin()]);
+            }
+            for i in 0..=12 {
+                let a = PI + i as f64 / 12.0 * PI;
+                pts.push([r * a.cos(), -half + r * a.sin()]);
+            }
+            pts
+        }
+        "segment" => vec![[-hw, 0.0], [hw, 0.0]],
+        _ => vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]],
+    }
+}
+
+/// Contornos das formas de colisão ativas (`CollisionShape2D` e `CollisionPolygon2D` com `disabled`
+/// falso) filhas de um corpo ou área. Formas fora de um corpo não aparecem: o Rapier também as ignora.
 pub fn shape_outlines(scene: &Scene, time: Option<f64>) -> Vec<ShapeOutline> {
     const BODIES: &[&str] = &["StaticBody2D", "RigidBody2D", "CharacterBody2D", "Area2D"];
     let mut out = Vec::new();
     for (uid, xf, _) in world_map(scene, time) {
         let Some(n) = scene.node(uid) else { continue };
-        if n.kind != "CollisionShape2D" || value_of(n, "disabled").as_bool().unwrap_or(false) {
+        let is_shape = n.kind == "CollisionShape2D" || n.kind == "CollisionPolygon2D";
+        if !is_shape || value_of(n, "disabled").as_bool().unwrap_or(false) {
             continue;
         }
         let Some(owner) = n.parent.filter(|p| scene.node(*p).is_some_and(|b| BODIES.contains(&b.kind.as_str())))
         else {
             continue;
         };
-        let [w, h] = as_vec2(&value_of(n, "size"));
-        let (hw, hh) = (w / 2.0, h / 2.0);
-        let local: Vec<[f64; 2]> = if text(n, "shape") == "circle" {
-            (0..24)
-                .map(|i| {
-                    let a = i as f64 / 24.0 * std::f64::consts::TAU;
-                    [hw * a.cos(), hw * a.sin()]
-                })
-                .collect()
-        } else {
-            vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
-        };
-        let points = local.into_iter().map(|[px, py]| apply(xf, px, py)).collect();
+        let points = local_outline(n).into_iter().map(|[px, py]| apply(xf, px, py)).collect();
         out.push(ShapeOutline { uid, owner, points });
     }
     out
@@ -508,6 +534,23 @@ mod tests {
         for q in p {
             assert!((q[0].hypot(q[1]) - 10.0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn contorno_de_poligono_e_de_segmento() {
+        let mut s = Scene::new("t", 5);
+        let corpo = s.add_node(None, "StaticBody2D", None).unwrap();
+        let poligono = s.add_node(Some(corpo), "CollisionPolygon2D", None).unwrap();
+        s.set_prop(poligono, "points", json!([[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]), None).unwrap();
+        let segmento = s.add_node(Some(corpo), "CollisionShape2D", None).unwrap();
+        s.set_prop(segmento, "shape", json!("segment"), None).unwrap();
+        s.set_prop(segmento, "size", json!([40.0, 0.0]), None).unwrap();
+
+        let outlines = shape_outlines(&s, None);
+        let p = outlines.iter().find(|o| o.uid == poligono).unwrap();
+        assert_eq!(p.points, vec![[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]);
+        let g = outlines.iter().find(|o| o.uid == segmento).unwrap();
+        assert_eq!(g.points, vec![[-20.0, 0.0], [20.0, 0.0]]);
     }
 
     #[test]
