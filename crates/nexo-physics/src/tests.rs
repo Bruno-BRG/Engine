@@ -1008,6 +1008,30 @@ fn material_resolve_regras_de_combinacao() {
     assert!((colisor_de(&p, borracha).friction() - 0.9).abs() < 1e-6);
 }
 
+#[test]
+fn material_renomeado_vale_no_corpo() {
+    // PHY-023: renaming the material switches the body's reference; the physics finds the material by the new name.
+    let mut c = cfg();
+    c.physics_materials.push(PhysicsMaterial {
+        name: "Gelo2".into(),
+        friction: 0.2,
+        bounce: 0.0,
+        rough: false,
+        absorbent: false,
+    });
+    let mut s = Scene::new("teste", 47);
+    let root = raiz(&mut s);
+    let chao = node(&mut s, Some(root), "StaticBody2D", json!({"physics_material": "Gelo"}));
+    node(&mut s, Some(chao), "CollisionShape2D", json!({"size": [400.0, 32.0]}));
+    // With the old name, the body finds no material.
+    assert!(check_reference(&c, "physics_material", &json!("Gelo")).is_err());
+
+    assert_eq!(s.rename_prop_value("physics_material", "Gelo", "Gelo2").unwrap(), 1);
+    assert!(check_reference(&c, "physics_material", &json!("Gelo2")).is_ok());
+    let p = Physics::build(&s, &c);
+    assert!((colisor_de(&p, chao).friction() - 0.2).abs() < 1e-6, "atrito = {}", colisor_de(&p, chao).friction());
+}
+
 /// Colisor do corpo `uid` (o primeiro, para corpos com uma forma).
 fn colisor_de(p: &Physics, uid: Uid) -> &Collider {
     let h = p.owner.iter().find(|(_, u)| **u == uid).map(|(h, _)| *h).unwrap();
