@@ -3,11 +3,13 @@
     projectSettings,
     settingsUi,
     addAction,
+    addKey,
     cancelCapture,
     removeAction,
     startCapture,
     unbindKey,
   } from '$lib/state/settings.svelte';
+  import { DEVICE_GROUPS, labelOf } from '$lib/runtime/devices';
   import { X, Keyboard } from '@lucide/svelte';
 
   let newName = $state('');
@@ -21,14 +23,22 @@
     error = err;
     if (!err) newName = '';
   }
+
+  /** Liga o botão ou eixo escolhido na lista e volta a lista ao aviso. */
+  function addDevice(action: string, e: Event) {
+    const list = e.currentTarget as HTMLSelectElement;
+    if (list.value) addKey(action, list.value);
+    list.value = '';
+  }
 </script>
 
 <h3>Mapa de entrada</h3>
 <p class="hint">
   Ações são os nomes que o jogo consulta (ex.: <span class="mono">ui_left</span>). Teclas são os códigos
   físicos do teclado (<span class="mono">KeyA</span>, <span class="mono">Space</span>,
-  <span class="mono">ArrowLeft</span>), então não mudam com o layout. Uma tecla pode servir a mais de uma ação.
-  Esc cancela a captura.
+  <span class="mono">ArrowLeft</span>), então não mudam com o layout. Uma ação também pode usar botões do mouse,
+  botões do controle e analógicos (escolha em <span class="mono">+ Mouse/controle</span>). Uma tecla pode servir
+  a mais de uma ação. Esc cancela a captura.
 </p>
 
 <table class="inputs">
@@ -49,8 +59,8 @@
           <div class="keys">
             {#each keys as key (key)}
               <span class="chip">
-                <kbd>{key}</kbd>
-                <button class="x" title="Desligar {key}" aria-label="Desligar {key} de {name}" onclick={() => unbindKey(name, key)}>
+                <kbd title={key}>{labelOf(key)}</kbd>
+                <button class="x" title="Desligar {labelOf(key)}" aria-label="Desligar {labelOf(key)} de {name}" onclick={() => unbindKey(name, key)}>
                   <X size={10} />
                 </button>
               </span>
@@ -63,6 +73,22 @@
           </div>
         </td>
         <td class="acts">
+          <select
+            class="sel"
+            disabled={capturing}
+            title="Ligar um botão do mouse ou do controle a esta ação"
+            aria-label="Ligar mouse ou controle a {name}"
+            onchange={(e) => addDevice(name, e)}
+          >
+            <option value="">+ Mouse/controle</option>
+            {#each DEVICE_GROUPS as grupo (grupo.label)}
+              <optgroup label={grupo.label}>
+                {#each grupo.codes as code (code)}
+                  <option value={code} disabled={keys.includes(code)}>{labelOf(code)}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
           <button class="btn" disabled={capturing} title="Ligar mais uma tecla a esta ação" onclick={() => startCapture(name, 'add')}>
             + Tecla
           </button>
@@ -168,8 +194,23 @@
     white-space: nowrap;
     text-align: right;
   }
-  .acts .btn {
+  .acts .btn,
+  .acts .sel {
     margin-left: 4px;
+  }
+  .sel {
+    height: 22px;
+    max-width: 150px;
+    padding: 0 4px;
+    border-radius: var(--r-ctl);
+    background: var(--bg-3);
+    color: var(--text);
+    font-size: var(--fs-11);
+    box-shadow: inset 0 0 0 1px var(--line);
+    vertical-align: middle;
+  }
+  .sel:disabled {
+    opacity: 0.5;
   }
   .capture {
     display: flex;

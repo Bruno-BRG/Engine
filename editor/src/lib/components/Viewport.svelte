@@ -12,6 +12,7 @@
   import { showContextMenu, type MenuItem } from '$lib/state/contextmenu.svelte';
   import { focusPanel, focus } from '$lib/state/focus.svelte';
   import ViewportOverlay, { type Gizmo, type Box } from './ViewportOverlay.svelte';
+  import VirtualJoysticks from './VirtualJoysticks.svelte';
   import { Hand, Move, RotateCw, Maximize, Square, Scan, Monitor, TriangleAlert, LoaderCircle } from '@lucide/svelte';
 
   /** `cena` edita a cena; `jogo` mostra a câmera atual com a proporção escolhida (EDT-012). */
@@ -395,6 +396,11 @@
     focus.panel = isScene ? 'viewport' : 'game';
     host.focus();
     const p = local(e);
+    // Reprodução: botões do mouse e toques viram códigos de entrada (INP-001). A captura garante o soltar fora do canvas.
+    if (app.playing && isScene) {
+      canvas.setPointerCapture(e.pointerId);
+      runtime.pointerButtons(e.buttons);
+    }
     if (mode === 'jogo') {
       if (e.button === 1 || e.button === 2 || spaceDown || app.tool === 'hand') {
         canvas.setPointerCapture(e.pointerId);
@@ -562,6 +568,7 @@
   }
 
   function up(e: PointerEvent) {
+    if (app.playing && isScene) runtime.pointerButtons(e.buttons);
     if (drag?.kind === 'box' && box) {
       const a = toWorld(Math.min(box.x0, box.x1), Math.min(box.y0, box.y1));
       const b = toWorld(Math.max(box.x0, box.x1), Math.max(box.y0, box.y1));
@@ -761,6 +768,7 @@
   {/if}
 
   {#if app.playing && isScene}
+    <VirtualJoysticks />
     <div class="playing-badge" transition:fade={{ duration: 160 }}>
       <span class="dot" class:paused={app.paused}></span> {app.paused ? 'Pausado' : 'Jogando'} <kbd>Esc</kbd> para parar
     </div>

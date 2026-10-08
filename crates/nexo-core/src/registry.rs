@@ -102,6 +102,7 @@ const COLLIDER_SHAPES: &[&str] = &["rect", "circle", "capsule_y", "segment"];
 const FREEZE_MODES: &[&str] = &["none", "static", "kinematic"];
 const OVERRIDE_MODES: &[&str] = &["disabled", "combine", "replace"];
 const BEHAVIOR_KINDS: &[&str] = &["spin", "float", "pulse"];
+const JOY_SIDES: &[&str] = &["left", "right"];
 
 /// Máscara de colisão: bits das camadas que o corpo detecta. -1 significa todas.
 fn collision_mask() -> PropDef {
@@ -435,6 +436,25 @@ fn build() -> Vec<NodeType> {
                 PropDef::new("autostart", "Iniciar ao jogar", "Temporizador", PropKind::Bool, json!(false)),
             ],
         },
+        // Joystick de toque (INP-004). Base Node, sem transformação: fica preso à tela, não ao mundo.
+        NodeType {
+            name: "VirtualJoystick",
+            base: Some("Node"),
+            category: "Entrada",
+            description: "Joystick de toque sobre a tela do jogo. Na reprodução, empurrá-lo aciona as ações de direção. No desktop fica oculto, a não ser que \"Mostrar no desktop\" esteja ligado.",
+            props: vec![
+                PropDef::new("side", "Lado", "Joystick", PropKind::Enum, json!("left")).options(JOY_SIDES),
+                PropDef::new("radius", "Raio", "Joystick", PropKind::Float, json!(64.0))
+                    .range(24.0, 200.0)
+                    .step(1.0)
+                    .unit("px"),
+                PropDef::new("show_on_desktop", "Mostrar no desktop", "Joystick", PropKind::Bool, json!(false)),
+                PropDef::new("action_left", "Ação esquerda", "Ações", PropKind::Str, json!("ui_left")),
+                PropDef::new("action_right", "Ação direita", "Ações", PropKind::Str, json!("ui_right")),
+                PropDef::new("action_up", "Ação cima", "Ações", PropKind::Str, json!("ui_up")),
+                PropDef::new("action_down", "Ação baixo", "Ações", PropKind::Str, json!("ui_down")),
+            ],
+        },
     ]
 }
 
@@ -526,5 +546,16 @@ mod tests {
         assert_eq!(default_value("Timer", "wait_time"), Some(json!(1.0)));
         assert_eq!(default_value("Timer", "one_shot"), Some(json!(false)));
         assert_eq!(prop_def("AudioStreamPlayer", "stream").and_then(|p| p.asset), Some("audio"));
+    }
+
+    #[test]
+    fn joystick_virtual_fica_na_tela_e_aciona_as_acoes_padrao() {
+        // INP-004: sem transformação de mundo, e as ações de direção vêm do padrão de INP-002.
+        assert!(!is_2d("VirtualJoystick"));
+        assert!(prop_def("VirtualJoystick", "position").is_none());
+        assert_eq!(default_value("VirtualJoystick", "action_left"), Some(json!("ui_left")));
+        assert_eq!(default_value("VirtualJoystick", "action_down"), Some(json!("ui_down")));
+        assert_eq!(default_value("VirtualJoystick", "show_on_desktop"), Some(json!(false)));
+        assert_eq!(default_value("VirtualJoystick", "radius"), Some(json!(64.0)));
     }
 }

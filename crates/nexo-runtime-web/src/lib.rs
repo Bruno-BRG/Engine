@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 mod editor;
+mod input_devices;
 pub use editor::SceneEditor;
 
 #[wasm_bindgen]

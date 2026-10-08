@@ -171,6 +171,14 @@ export function unbindKey(action: string, key: string): void {
   });
 }
 
+/** Liga um código (tecla, botão do mouse ou do controle, ou eixo com sinal) à ação, sem repetir. */
+export function addKey(action: string, code: string): void {
+  editSettings((s) => {
+    const keys = s.input.actions[action] ?? [];
+    if (!keys.includes(code)) s.input.actions[action] = [...keys, code];
+  });
+}
+
 /** Espera a próxima tecla para a ação. O diálogo recebe a tecla e chama `finishCapture`. */
 export function startCapture(action: string, mode: KeyCapture['mode']): void {
   settingsUi.capture = { action, mode };
