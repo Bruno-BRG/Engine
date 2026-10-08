@@ -477,7 +477,8 @@ impl<'g> Emitter<'g> {
 
     /// Index where a forward jump lands, for the code that comes next. The code after a join is also reached by
     /// the paths that jump over the wires still pending, so those wires are dropped here: they were not taken
-    /// on every path to the join (VIS-030).
+    /// on every path to the join (VIS-030). The cost: a wire taken into a node with no op, right before a join,
+    /// is never highlighted, because no op of its own can carry it.
     fn join(&mut self) -> usize {
         self.pending_wires.clear();
         self.ops.len()
