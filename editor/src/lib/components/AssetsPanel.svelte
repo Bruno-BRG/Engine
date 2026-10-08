@@ -14,7 +14,8 @@
   import ShapeGrid from './project/ShapeGrid.svelte';
   import ProjectBar from './project/ProjectBar.svelte';
   import ProjectFooter from './project/ProjectFooter.svelte';
-  import { dragState, startDrag } from './project/drag.svelte';
+  import { dragState, startDrag, type AssetSlot } from './project/drag.svelte';
+  import { checkSlotDrop } from '$lib/assetslot';
   import { createMenu, itemMenu } from './project/menus';
   import { importFilesTo, pickImportFiles } from './project/imports';
   import { baseName, editableStem, invalidName, normalize, scriptNameOf, uniqueName, type NewItem } from './project/names';
@@ -117,6 +118,25 @@
     }
   }
 
+  /**
+   * Dropping an asset on a resource slot only records its UID, the same as choosing it in the list (INS-003).
+   * It does not move, copy or rename any file, so it never goes through `moveTo`.
+   */
+  function dropOnSlot(rel: string, slot: AssetSlot) {
+    // The folder tree lists only folders, so a path that is not in the open listing is a folder.
+    const entry = entryOf(rel);
+    const result = checkSlotDrop(slot.kind, {
+      name: baseName(rel),
+      kind: entry?.kind ?? 'folder',
+      uid: entry?.uid ?? null,
+    });
+    if (!result.ok) {
+      log.toast('warn', 'Tipo não aceito neste campo', result.message);
+      return;
+    }
+    slot.drop(result.uid);
+  }
+
   function press(e: PointerEvent, rel: string) {
     // A raiz é só destino de soltura: não se arrasta.
     if (rel === '') return;
@@ -124,8 +144,11 @@
     startDrag(
       e,
       rel,
-      (to) => writable && canDrop(rel, to),
-      (to) => void moveTo(rel, to),
+      (to) => to.kind === 'slot' || (writable && canDrop(rel, to.rel)),
+      (to) => {
+        if (to.kind === 'slot') dropOnSlot(rel, to.slot);
+        else void moveTo(rel, to.rel);
+      },
     );
   }
 

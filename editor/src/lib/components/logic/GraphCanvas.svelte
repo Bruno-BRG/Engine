@@ -7,6 +7,7 @@
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { log } from '$lib/state/log.svelte';
   import { familyOf, type PinFilter } from '$lib/logic/library';
+  import { isPropertyNode, propertyOfType, propertiesOfType, defaultValue } from '$lib/logic/properties';
   import {
     COMMENT_MIN,
     ROW_H,
@@ -30,6 +31,7 @@
     refusalText,
     textOf,
     type GraphNode,
+    type PinDef,
     type PinRef,
     type PinType,
     type Refusal,
@@ -40,6 +42,7 @@
   import PinShape from './PinShape.svelte';
   import PinValue from './PinValue.svelte';
   import Minimap from './Minimap.svelte';
+  import PropSelect from './PropSelect.svelte';
 
   /** Arrasto em andamento: pan, mover seleção, fio a partir de um pino, caixa de seleção ou redimensionar. */
   type Drag =
@@ -534,6 +537,42 @@
     return logic.defsByKind.get(n.kind)?.label ?? n.kind;
   }
 
+  /** Text of an embedded value ('' when the pin has no text value). */
+  function embeddedText(n: GraphNode, pin: string): string {
+    const v = n.values?.[pin];
+    return v && 'String' in v ? v.String : '';
+  }
+
+  /** Registry property chosen on a property node (by its embedded type and name), or undefined. */
+  function propOfNode(n: GraphNode) {
+    const nodeType = embeddedText(n, 'type');
+    return nodeType ? propertyOfType(logic.nodeTypes, nodeType, embeddedText(n, 'name')) : undefined;
+  }
+
+  /** Type of an input pin's field. On property nodes, the value pin has the type the graph resolved. */
+  function fieldType(n: GraphNode, pi: PinDef): PinType | null {
+    return isPropertyNode(n.kind) ? (tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? null) : pi.ty;
+  }
+
+  /** Value shown in the pin's field: the embedded one, or the default of the chosen property. */
+  function fieldValue(n: GraphNode, pi: PinDef): Value | undefined {
+    const embedded = n.values?.[pi.name];
+    if (embedded) return embedded;
+    if (isPropertyNode(n.kind) && pi.name === 'value') {
+      const def = propOfNode(n);
+      return (def && defaultValue(def)) ?? undefined;
+    }
+    return pi.default ?? undefined;
+  }
+
+  /** Options of the type picker: every type in the registry. */
+  const typeOptions = $derived(logic.nodeTypes.map((t) => ({ value: t.name, label: t.name })));
+
+  /** Suggestions under the name field: the properties of the type chosen on the node (inherited ones included). */
+  function nameOptions(n: GraphNode) {
+    return propertiesOfType(logic.nodeTypes, embeddedText(n, 'type')).map((p) => ({ value: p.name, label: p.label }));
+  }
+
   function temPontoDeParada(id: number) {
     return pontosDeParada.has(id);
   }
@@ -671,6 +710,7 @@
             {@const po = def.outputs[i]}
             <div class="linha" style="height: {ROW_H}px">
               {#if pi}
+                {@const fieldPinType = fieldType(n, pi)}
                 <span
                   class="pino entrada"
                   class:aceita={alvoDoArrasto(n.id, pi.name, false) === 'aceita'}
@@ -684,12 +724,29 @@
                 </span>
                 {#if detailed}
                   <span class="rotulo">{pi.label}</span>
-                  {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name)) && pi.ty && pi.ty !== 'Flow' && pi.ty !== 'Node'}
-                    <PinValue
-                      ty={pi.ty}
-                      valor={n.values?.[pi.name] ?? pi.default ?? undefined}
-                      onchange={(v) => logic.setValue(n.id, pi.name, v)}
-                    />
+                  {#if !ligadas.has(pinKey(n.id, 'i:' + pi.name))}
+                    {#if isPropertyNode(n.kind) && pi.name === 'type'}
+                      <PropSelect
+                        selected={embeddedText(n, 'type')}
+                        options={typeOptions}
+                        emptyLabel="Sem tipo (decimal)"
+                        onchange={(v) => logic.setValue(n.id, 'type', { String: v })}
+                      />
+                    {:else if isPropertyNode(n.kind) && pi.name === 'name'}
+                      <PinValue
+                        ty="String"
+                        valor={fieldValue(n, pi)}
+                        suggestions={nameOptions(n)}
+                        onchange={(v) => logic.setValue(n.id, 'name', v)}
+                      />
+                    {:else if fieldPinType && fieldPinType !== 'Flow' && fieldPinType !== 'Node'}
+                      <PinValue
+                        ty={fieldPinType}
+                        valor={fieldValue(n, pi)}
+                        prop={isPropertyNode(n.kind) ? propOfNode(n) : undefined}
+                        onchange={(v) => logic.setValue(n.id, pi.name, v)}
+                      />
+                    {/if}
                   {/if}
                 {/if}
               {/if}
