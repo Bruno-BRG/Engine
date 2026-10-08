@@ -4,7 +4,7 @@
 import { createSceneEditor, randomSeed, readNodeRegistry, type SceneEditor } from '$lib/runtime/engine';
 import { log } from './log.svelte';
 
-export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask' | 'points';
+export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask' | 'points' | 'map';
 
 /** Lista das Configurações do Projeto de onde vêm os nomes de um campo de texto (`NameList` do registro). */
 export type NameList = 'tags' | 'layers' | 'buses' | 'physics_materials';

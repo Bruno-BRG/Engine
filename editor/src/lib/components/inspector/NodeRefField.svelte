@@ -7,38 +7,49 @@
   let {
     label,
     value,
-    self,
+    self = '',
+    anyNode = false,
+    emptyLabel = 'Ponto fixo no mundo',
     onchange,
   }: {
     label: string;
     value: string;
-    /** UID do nó que está sendo editado: não entra na lista. */
-    self: string;
+    /** UID of the node being edited: it is left out of the list. Empty: the list has every node. */
+    self?: string;
+    /** List any node in the scene, not only bodies. Script exported values use this (VIS-022). */
+    anyNode?: boolean;
+    /** Text of the empty option. */
+    emptyLabel?: string;
     onchange: (uid: string) => void;
   } = $props();
 
   // Os tipos que a física monta como corpo rígido (nexo-physics). Junta só aceita estes como corpo B.
   const BODIES = ['StaticBody2D', 'RigidBody2D', 'CharacterBody2D'];
 
-  const bodies = $derived(scene.data.nodes.filter((n) => n.uid !== self && BODIES.includes(n.kind)));
-  const missing = $derived(value !== '' && !bodies.some((n) => n.uid === value));
+  const choices = $derived(
+    scene.data.nodes.filter((n) => n.uid !== self && (anyNode || BODIES.includes(n.kind))),
+  );
+  const missing = $derived(value !== '' && !choices.some((n) => n.uid === value));
 </script>
 
 <div class="campo">
   <span class="flabel">{label}</span>
   <div class="pick">
     <select class="sel" class:warn={missing} aria-label={label} aria-invalid={missing} value={value} onchange={(e) => onchange(e.currentTarget.value)}>
-      <option value="">Ponto fixo no mundo</option>
-      {#each bodies as n (n.uid)}
+      <option value="">{emptyLabel}</option>
+      {#each choices as n (n.uid)}
         <option value={n.uid}>{n.name} ({n.kind})</option>
       {/each}
       {#if missing}
-        <option value={value}>Nó ausente ou não é corpo</option>
+        <option value={value}>{anyNode ? 'Nó ausente' : 'Nó ausente ou não é corpo'}</option>
       {/if}
     </select>
   </div>
   {#if missing}
-    <p class="aviso" role="status"><TriangleAlert size={11} /> O nó escolhido não é um corpo da cena.</p>
+    <p class="aviso" role="status">
+      <TriangleAlert size={11} />
+      {anyNode ? 'O nó escolhido não existe mais na cena.' : 'O nó escolhido não é um corpo da cena.'}
+    </p>
   {/if}
 </div>
 

@@ -10,6 +10,7 @@
 
 use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
+use nexo_core::scene::value_of;
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Compiled, Context, Graph, Host, Pausa, Scheduler, TraceEvent, VmError, compile};
 use nexo_physics::STEP;
@@ -84,7 +85,7 @@ pub(crate) fn iniciar(cena: &Scene, textos: &BTreeMap<Uid, String>) -> Result<Ve
         let Some(texto) = textos.get(&uid) else {
             continue;
         };
-        match Instancia::novo(uid, texto) {
+        match Instancia::novo(cena, uid, texto) {
             Ok(inst) => instancias.push(inst),
             Err(erro) => erros.push(format!("Script de '{}': {erro}", nome_de(cena, uid))),
         }
@@ -115,7 +116,7 @@ pub(crate) fn sincronizar(
                     console.push(erro_no_console(cena, uid, format!("recarga falhou, segue a versão anterior: {erro}")));
                 }
             },
-            None => match Instancia::novo(uid, texto) {
+            None => match Instancia::novo(cena, uid, texto) {
                 Ok(inst) => instancias.push(inst),
                 Err(erro) => console.push(erro_no_console(cena, uid, erro)),
             },
@@ -210,11 +211,12 @@ pub(crate) fn registrar(inst: &mut Instancia, cena: &Scene, console: &mut Vec<Me
 
 impl Instancia {
     /// Instância nova: compila o grafo e agenda o evento "Ao ficar pronto", que roda no primeiro quadro.
-    fn novo(dono: Uid, texto: &str) -> Result<Instancia, String> {
+    /// The node's exported values (VIS-022) are applied to the new context.
+    fn novo(cena: &Scene, dono: Uid, texto: &str) -> Result<Instancia, String> {
         let grafo = compilar(texto)?;
         let mut agenda = Scheduler::new();
         agenda.iniciar(&grafo, "OnReady");
-        let contexto = grafo.new_context(dono.0);
+        let contexto = context_of_node(cena, dono, &grafo)?;
         Ok(Instancia {
             dono,
             texto: texto.to_string(),
@@ -333,6 +335,14 @@ fn compilar(texto: &str) -> Result<Compiled, String> {
     compile(&grafo).map_err(|erros| erros.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
 }
 
+/// Context of a node: its variables start with the exported values stored in `script_vars` (VIS-022). Without
+/// the map, or with an empty one, the script's defaults apply.
+fn context_of_node(cena: &Scene, dono: Uid, grafo: &Compiled) -> Result<Context, String> {
+    let values = cena.node(dono).map(|n| value_of(n, "script_vars")).unwrap_or(serde_json::Value::Null);
+    let empty = serde_json::Map::new();
+    grafo.new_context_with(dono.0, values.as_object().unwrap_or(&empty))
+}
+
 fn nome_de(cena: &Scene, uid: Uid) -> String {
     cena.node(uid).map_or_else(|| uid.to_string(), |n| n.name.clone())
 }
@@ -345,8 +355,9 @@ fn erro_no_console(cena: &Scene, dono: Uid, texto: String) -> Mensagem {
 mod tests {
     use super::*;
     use nexo_core::AudioPlayback;
-    use nexo_graph::Value;
+    use nexo_graph::{PinType, Value};
     use nexo_physics::Physics;
+    use serde_json::json;
 
     /// Test world: an empty scene, with the physics and audio that the prints do not use.
     struct Cenario {
@@ -421,7 +432,7 @@ mod tests {
     }
 
     fn instancia(dono: u64, g: &Graph) -> Instancia {
-        Instancia::novo(Uid(dono), &g.to_ron().unwrap()).unwrap()
+        Instancia::novo(&Scene::new("Teste", 1), Uid(dono), &g.to_ron().unwrap()).unwrap()
     }
 
     /// Next operation until `pare` holds, with at most ten steps.
@@ -589,5 +600,66 @@ mod tests {
 
         assert!(todas[0].tomar_rastro().is_empty());
         assert!(!todas[1].tomar_rastro().is_empty());
+    }
+
+    /// Scene with one node whose `script_vars` are `values`, and the script text: an exported Float "vida" (default
+    /// 1.0) and a local Int "local" (default 7).
+    fn scene_with_node(values: serde_json::Value) -> (Scene, Uid, String) {
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Float, Value::Float(1.0), true).unwrap();
+        g.add_variable("local", PinType::Int, Value::Int(7), false).unwrap();
+        let text = g.to_ron().unwrap();
+        let mut scene = Scene::new_default("Teste", 1);
+        let root = scene.roots()[0];
+        let node = scene.add_node(Some(root), "Node2D", None).unwrap();
+        scene.set_prop(node, "script_vars", values, None).unwrap();
+        (scene, node, text)
+    }
+
+    #[test]
+    fn exported_value_of_the_node_starts_the_instance() {
+        let (scene, node, text) = scene_with_node(json!({"vida": {"Float": 4.0}}));
+        let inst = Instancia::novo(&scene, node, &text).unwrap();
+        // The exported variable takes the node's value; the local one keeps the script's default.
+        assert_eq!(inst.contexto.vars, vec![Value::Float(4.0), Value::Int(7)]);
+    }
+
+    #[test]
+    fn node_without_exported_values_starts_at_the_default() {
+        let (scene, node, text) = scene_with_node(json!({}));
+        let inst = Instancia::novo(&scene, node, &text).unwrap();
+        assert_eq!(inst.contexto.vars, vec![Value::Float(1.0), Value::Int(7)]);
+    }
+
+    #[test]
+    fn malformed_exported_value_refuses_the_play() {
+        let (scene, node, text) = scene_with_node(json!({"vida": {"Float": "quatro"}}));
+        let texts = BTreeMap::from([(node, text)]);
+        let error = iniciar(&scene, &texts).err().expect("a malformed value must refuse the play");
+        assert!(error.contains("Script de 'Node2D'"), "{error}");
+        assert!(error.contains("vida"), "{error}");
+    }
+
+    #[test]
+    fn script_reads_the_node_value_on_each_frame() {
+        // OnProcess copies "vida" into "copia": the VM must read the node's value, not the script default (VIS-022).
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Float, Value::Float(1.0), true).unwrap();
+        g.add_variable("copia", PinType::Float, Value::Float(0.0), false).unwrap();
+        let ev = adiciona(&mut g, "OnProcess");
+        let get = adiciona(&mut g, "GetVariable");
+        g.set_value(get, "name", Value::String("vida".into())).unwrap();
+        let set = adiciona(&mut g, "SetVariable");
+        g.set_value(set, "name", Value::String("copia".into())).unwrap();
+        g.connect((ev, "exec"), (set, "exec")).unwrap();
+        g.connect((get, "value"), (set, "value")).unwrap();
+        let text = g.to_ron().unwrap();
+        let mut c = Cenario::novo();
+        // The test world starts empty: the node is a root.
+        let node = c.cena.add_node(None, "Node2D", None).unwrap();
+        c.cena.set_prop(node, "script_vars", json!({"vida": {"Float": 4.0}}), None).unwrap();
+        let mut inst = Instancia::novo(&c.cena, node, &text).unwrap();
+        quadro_de(&mut inst, &mut c, 0).unwrap();
+        assert_eq!(inst.contexto.vars[1], Value::Float(4.0));
     }
 }

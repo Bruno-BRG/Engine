@@ -808,6 +808,13 @@ pub(crate) fn coerce(def: &PropDef, v: &Value) -> Result<Value, String> {
             }
             json!(pts)
         }
+        PropKind::Map => {
+            // Only the container is checked here; each key's value is validated by the code that reads it.
+            if !v.is_object() {
+                return Err(bad());
+            }
+            v.clone()
+        }
     };
     Ok(out)
 }
@@ -1049,6 +1056,42 @@ mod tests {
         s.set_prop(a, "layer", json!("moeda"), None).unwrap();
         assert_eq!(value_of(s.node(a).unwrap(), "layer"), json!("moeda"));
         assert!(s.set_prop(a, "layer", json!(3), None).is_err());
+    }
+
+    #[test]
+    fn script_vars_accepts_only_an_object() {
+        // VIS-022: the map must be an object. Each value is checked by the reader (nexo-graph, ir.rs).
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        assert!(s.set_prop(a, "script_vars", json!([1, 2]), None).is_err());
+        assert!(s.set_prop(a, "script_vars", json!("vida"), None).is_err());
+        s.set_prop(a, "script_vars", json!({"vida": {"Float": 3.0}}), None).unwrap();
+        assert_eq!(value_of(s.node(a).unwrap(), "script_vars"), json!({"vida": {"Float": 3.0}}));
+    }
+
+    #[test]
+    fn script_vars_empty_map_is_not_stored() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        s.set_prop(a, "script_vars", json!({"vida": {"Float": 3.0}}), None).unwrap();
+        s.set_prop(a, "script_vars", json!({}), None).unwrap();
+        assert!(!s.node(a).unwrap().props.contains_key("script_vars"));
+    }
+
+    #[test]
+    fn script_vars_go_with_the_copy_and_come_back_on_undo() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.set_prop(a, "script_vars", json!({"vida": {"Float": 3.0}}), None).unwrap();
+        let copy = s.duplicate_node(a).unwrap();
+        assert_eq!(value_of(s.node(copy).unwrap(), "script_vars"), json!({"vida": {"Float": 3.0}}));
+        assert_eq!(s.undo().as_deref(), Some("Duplicar Sprite2D"));
+        assert!(s.node(a).unwrap().props.contains_key("script_vars"));
+        assert_eq!(s.undo().as_deref(), Some("Editar Valores exportados"));
+        assert!(!s.node(a).unwrap().props.contains_key("script_vars"));
     }
 
     #[test]
