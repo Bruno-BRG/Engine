@@ -2,7 +2,7 @@ import type { ProjectInfo } from '../platform';
 
 export type Workspace = 'cena' | 'jogo' | 'logica' | 'animacao' | 'sprite';
 export type BottomTab = 'assets' | 'console' | 'depurador' | 'csharp' | 'mixer';
-/** Abas do painel da direita: Inspector (propriedades) e Nó (sinais, SCN-034). */
+/** Tabs of the right panel: Inspector (properties) and Node (signals, SCN-034). */
 export type RightTab = 'inspector' | 'no';
 /** Ferramentas de transformação, como no Unity (VPT-001). */
 export type Tool = 'hand' | 'move' | 'rotate' | 'scale' | 'rect';

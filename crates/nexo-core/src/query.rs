@@ -346,9 +346,9 @@ pub struct OutlineNode {
     /// Transformação no mundo (na reprodução, já com os comportamentos aplicados).
     pub world: Xf,
     pub props: Map<String, Value>,
-    /// Sinais que o tipo emite, para a aba Nó (SCN-034). Vazio para os tipos que não emitem.
+    /// Signals the type emits, for the Node tab (SCN-034). Empty for types that emit none.
     pub signals: Vec<SignalDef>,
-    /// Ligações deste nó como emissor (SCN-034).
+    /// Connections from this node as emitter (SCN-034).
     pub connections: Vec<Connection>,
 }
 
@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn outline_leva_sinais_e_ligacoes_do_emissor() {
+    fn outline_includes_emitter_signals_and_connections() {
         let mut s = Scene::new_default("Principal", 7);
         let root = s.roots()[0];
         let t = s.add_node(Some(root), "Timer", None).unwrap();
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(timer["connections"][0]["signal"], "timeout");
         assert_eq!(timer["connections"][0]["target"], json!(sp.to_string()));
         assert_eq!(timer["connections"][0]["method"], "on_timeout");
-        // Os sprites não emitem sinais e não têm ligações: as listas saem vazias, não ausentes.
+        // Sprites emit no signals and have no connections: the lists are empty, not missing.
         let sprite = nodes.iter().find(|n| n["uid"] == json!(sp.to_string())).unwrap();
         assert_eq!(sprite["signals"], json!([]));
         assert_eq!(sprite["connections"], json!([]));

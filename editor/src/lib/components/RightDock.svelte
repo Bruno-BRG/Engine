@@ -4,13 +4,13 @@
   import NodeTab from './NodeTab.svelte';
   import { SlidersHorizontal, Waypoints } from '@lucide/svelte';
 
-  // Painel da direita: Inspector (propriedades) e Nó (sinais, SCN-034). A aba escolhida fica salva.
+  // Right-side panel: Inspector (properties) and Node (signals, SCN-034). The chosen tab is saved.
   const tabs: { id: RightTab; label: string; icon: typeof SlidersHorizontal }[] = [
     { id: 'inspector', label: 'Inspector', icon: SlidersHorizontal },
     { id: 'no', label: 'Nó', icon: Waypoints },
   ];
 
-  function escolhe(id: RightTab) {
+  function choose(id: RightTab) {
     app.rightTab = id;
     app.persistUi();
   }
@@ -24,7 +24,7 @@
         role="tab"
         aria-selected={app.rightTab === t.id}
         class:active={app.rightTab === t.id}
-        onclick={() => escolhe(t.id)}
+        onclick={() => choose(t.id)}
       >
         <Icon size={13} />
         {t.label}

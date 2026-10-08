@@ -5,65 +5,70 @@
 
   let { emitter, signal, onclose }: { emitter: NodeView; signal: SignalDef; onclose: () => void } = $props();
 
-  /** Nome de método aceito: começa por letra ou _, segue com letras sem acento, números ou _ (até 64). */
-  const METODO = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+  /** Accepted method name: starts with a letter or _, then unaccented letters, digits or _ (up to 64). */
+  const METHOD_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-  let alvo = $state('');
-  let metodo = $state('');
-  let erro = $state('');
-  let campo: HTMLInputElement | undefined;
+  let target = $state('');
+  let method = $state('');
+  /** Error returned by the last connect attempt. Cleared as soon as the user edits a field. */
+  let error = $state('');
+  let input: HTMLInputElement | undefined;
 
-  const limpo = $derived(metodo.trim());
-  const repetida = $derived(
+  const trimmed = $derived(method.trim());
+  const duplicate = $derived(
     (scene.node(emitter.uid)?.connections ?? []).some(
-      (c) => c.signal === signal.name && c.target === alvo && c.method === limpo,
+      (c) => c.signal === signal.name && c.target === target && c.method === trimmed,
     ),
   );
-  /** Motivo para ainda não ligar. Vazio enquanto o campo está em branco, sem mostrar aviso antes de digitar. */
-  const problema = $derived(
-    limpo === ''
+  /** Reason the connection is not allowed yet. Empty while the field is blank, so no warning shows before typing. */
+  const problem = $derived(
+    trimmed === ''
       ? ''
-      : !METODO.test(limpo)
+      : !METHOD_PATTERN.test(trimmed)
         ? 'Use letras sem acento, números e _, começando por letra ou _ (até 64 caracteres).'
-        : repetida
+        : duplicate
           ? 'Essa ligação já existe.'
           : '',
   );
-  const podeLigar = $derived(limpo !== '' && problema === '' && alvo !== '');
+  const canConnect = $derived(trimmed !== '' && problem === '' && target !== '');
 
-  function enviar(e: SubmitEvent) {
+  function edited() {
+    error = '';
+  }
+
+  function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (!podeLigar) return;
-    const motivo = scene.connect(emitter.uid, signal.name, alvo, limpo);
-    if (motivo) erro = motivo;
+    if (!canConnect) return;
+    const reason = scene.connect(emitter.uid, signal.name, target, trimmed);
+    if (reason) error = reason;
     else onclose();
   }
 
   onMount(() => {
-    // Alvo inicial: o primeiro nó que não é o emissor. Sem outro nó, o próprio emissor.
-    alvo = scene.data.nodes.find((n) => n.uid !== emitter.uid)?.uid ?? emitter.uid;
-    metodo = `on_${signal.name}`;
-    campo?.focus();
-    campo?.select();
+    // Initial target: the first node that is not the emitter. Without another node, the emitter itself.
+    target = scene.data.nodes.find((n) => n.uid !== emitter.uid)?.uid ?? emitter.uid;
+    method = `on_${signal.name}`;
+    input?.focus();
+    input?.select();
   });
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && onclose()} />
 
 <div class="scrim" role="presentation" onpointerdown={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="conectar-titulo">
-    <form class="miolo" onsubmit={enviar}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="connect-title">
+    <form class="form" onsubmit={submit}>
       <header>
-        <h3 id="conectar-titulo">Conectar {signal.label}</h3>
+        <h3 id="connect-title">Conectar {signal.label}</h3>
         <button type="button" class="icon-btn" aria-label="Fechar" onclick={onclose}><X size={16} /></button>
       </header>
-      <p class="de">De <strong>{emitter.name}</strong> · <span class="mono">{signal.name}</span></p>
+      <p class="from">De <strong>{emitter.name}</strong> · <span class="mono">{signal.name}</span></p>
 
       <label class="row">
         <span>Nó alvo</span>
-        <select class="field" bind:value={alvo}>
+        <select class="field" bind:value={target} onchange={edited}>
           {#each scene.data.nodes as n (n.uid)}
-            <option value={n.uid}>{'  '.repeat(n.depth)}{n.name} · {n.kind}</option>
+            <option value={n.uid}>{'  '.repeat(n.depth)}{n.name} · {n.kind}</option>
           {/each}
         </select>
       </label>
@@ -72,25 +77,26 @@
         <span>Método do script do alvo</span>
         <input
           class="field mono"
-          bind:this={campo}
-          bind:value={metodo}
+          bind:this={input}
+          bind:value={method}
+          oninput={edited}
           spellcheck="false"
           autocomplete="off"
           maxlength="64"
-          aria-invalid={problema !== '' ? 'true' : undefined}
+          aria-invalid={problem !== '' ? 'true' : undefined}
         />
         <small>Nome do evento no script do alvo que recebe o sinal.</small>
       </label>
 
-      <p class="aviso">A ligação fica salva no nó. Por enquanto o script do alvo ainda não recebe o sinal.</p>
+      <p class="note">A ligação fica salva no nó. Por enquanto o script do alvo ainda não recebe o sinal.</p>
 
-      {#if problema || erro}
-        <p class="erro" role="alert"><TriangleAlert size={12} /> {problema || erro}</p>
+      {#if problem || error}
+        <p class="error" role="alert"><TriangleAlert size={12} /> {problem || error}</p>
       {/if}
 
       <footer>
         <button type="button" class="btn ghost" onclick={onclose}>Cancelar</button>
-        <button type="submit" class="btn primary" disabled={!podeLigar}>Conectar</button>
+        <button type="submit" class="btn primary" disabled={!canConnect}>Conectar</button>
       </footer>
     </form>
   </div>
@@ -106,14 +112,14 @@
     background: var(--scrim);
     backdrop-filter: blur(4px);
   }
-  .dlg {
+  .dialog {
     width: min(380px, calc(100vw - 32px));
     padding: 16px 18px 14px;
     border-radius: var(--r-dlg);
     background: var(--bg-2);
     box-shadow: var(--shadow-pop);
   }
-  .miolo {
+  .form {
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -128,7 +134,7 @@
     font-size: var(--fs-15);
     font-weight: 650;
   }
-  .de {
+  .from {
     margin: 0;
     font-size: var(--fs-12);
     color: var(--text-dim);
@@ -148,13 +154,13 @@
     font-size: var(--fs-11);
     color: var(--text-faint);
   }
-  .aviso {
+  .note {
     margin: 0;
     font-size: var(--fs-11);
     color: var(--text-faint);
     line-height: 1.5;
   }
-  .erro {
+  .error {
     margin: 0;
     display: flex;
     align-items: flex-start;

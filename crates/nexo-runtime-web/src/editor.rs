@@ -164,15 +164,15 @@ impl SceneEditor {
         self.scene.change_kind(parse_uid(uid)?, kind).map_err(js_err)
     }
 
-    /// Liga o sinal `signal` do nó `emitter` ao nó `target`, chamando `method` (SCN-034). Erro se o tipo do emissor
-    /// não emite o sinal, se o método é inválido, se o alvo não existe ou se a ligação já existe.
+    /// Connects signal `signal` of node `emitter` to node `target`, calling `method` (SCN-034). Errors if the
+    /// emitter's type does not emit the signal, the method is invalid, the target does not exist, or the connection already exists.
     pub fn connect(&mut self, emitter: &str, signal: &str, target: &str, method: &str) -> Result<(), JsError> {
         self.scene
             .connect(parse_uid(emitter)?, signal, parse_uid(target)?, method)
             .map_err(js_err)
     }
 
-    /// Desfaz a ligação do nó `emitter` com o mesmo sinal, alvo e método (SCN-034).
+    /// Removes the connection from `emitter` with the same signal, target and method (SCN-034).
     pub fn disconnect(&mut self, emitter: &str, signal: &str, target: &str, method: &str) -> Result<(), JsError> {
         self.scene
             .disconnect(parse_uid(emitter)?, signal, parse_uid(target)?, method)

@@ -514,8 +514,8 @@ fn build() -> Vec<NodeType> {
     ]
 }
 
-/// A cena e a física emitem estes sinais e o editor os oferece nas ligações (SCN-034).
-/// `name` é o identificador gravado no arquivo e batido com o evento de origem; `label` é o texto da interface.
+/// The scene and physics emit these signals; the editor offers them for connections (SCN-034).
+/// `name` is the identifier stored in the file and matched against the source event; `label` is the interface text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignalDef {
@@ -524,7 +524,7 @@ pub struct SignalDef {
 }
 
 const TIMER_SIGNALS: &[SignalDef] = &[SignalDef { name: "timeout", label: "Tempo esgotado" }];
-/// Corpos sólidos recebem os dois lados de cada colisão (ver `Physics::process`).
+/// Solid bodies receive both sides of each collision (see `Physics::process`).
 const BODY_SIGNALS: &[SignalDef] = &[
     SignalDef { name: "collision_started", label: "Colisão começou" },
     SignalDef { name: "collision_ended", label: "Colisão terminou" },
@@ -536,7 +536,7 @@ const AREA_SIGNALS: &[SignalDef] = &[
     SignalDef { name: "area_exited", label: "Área saiu" },
 ];
 
-/// Sinais que um tipo emite. Vazio para os tipos que não emitem nenhum.
+/// Signals a type emits. Empty for types that emit none.
 pub fn signals_of(kind: &str) -> &'static [SignalDef] {
     match kind {
         "Timer" => TIMER_SIGNALS,
@@ -546,7 +546,7 @@ pub fn signals_of(kind: &str) -> &'static [SignalDef] {
     }
 }
 
-/// Definição de um sinal do tipo, pelo nome.
+/// Definition of the type's signal with the given name.
 pub fn signal_def(kind: &str, name: &str) -> Option<&'static SignalDef> {
     signals_of(kind).iter().find(|s| s.name == name)
 }
@@ -707,13 +707,13 @@ mod tests {
     }
 
     #[test]
-    fn sinais_por_tipo_batem_com_os_eventos_de_origem() {
+    fn signals_match_source_events_per_type() {
         assert_eq!(signals_of("Timer").iter().map(|s| s.name).collect::<Vec<_>>(), ["timeout"]);
         let area: Vec<&str> = signals_of("Area2D").iter().map(|s| s.name).collect();
         assert_eq!(area, ["body_entered", "body_exited", "area_entered", "area_exited"]);
         assert!(signal_def("RigidBody2D", "collision_started").is_some());
         assert!(signal_def("CharacterBody2D", "collision_ended").is_some());
-        // Sinais não são herdados por tipos que não os declaram: Sprite2D e Node2D não emitem nada.
+        // Signals are not inherited by types that do not declare them: Sprite2D and Node2D emit nothing.
         assert!(signal_def("Sprite2D", "timeout").is_none());
         assert!(signals_of("Node2D").is_empty());
     }

@@ -139,8 +139,8 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> CmdResult<()> {
     Ok(())
 }
 
-/// Formato 2 ou posterior é RON com o campo `format`. O formato 1 é JSON, ou RON sem esse campo.
-/// Vale `>= 2`: um arquivo do formato 3 já está em dia e não pode ser reescrito a cada abertura.
+/// Format 2 or later is RON with a `format` field. Format 1 is JSON, or RON without that field.
+/// Counts as `>= 2`: a format 3 file is already current and must not be rewritten on every open.
 fn is_format_2_or_later(text: &str) -> bool {
     #[derive(Deserialize)]
     struct Probe {
@@ -153,10 +153,10 @@ fn is_format_2_or_later(text: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Migra o layout antigo para o atual (SCN-001). Pode rodar a cada abertura: sem efeito quando já está em dia.
-/// Renomeia `projeto.nexo` e `cenas/` e reescreve a cena principal no formato atual. Antes de reescrever,
-/// copia o original para `scenes/principal.scene.ron.v1.bak` (sem sobrescrever um backup existente).
-/// Nunca apaga arquivos do usuário.
+/// Migrates the old layout to the current one (SCN-001). Can run on every open: it has no effect when the layout is already current.
+/// Renames `projeto.nexo` and `cenas/` and rewrites the main scene in the current format. Before rewriting,
+/// copies the original to `scenes/principal.scene.ron.v1.bak` (without overwriting an existing backup).
+/// Never deletes user files.
 fn migrate_layout(dir: &Path, seed: u64) -> CmdResult<()> {
     let legacy_project = dir.join(LEGACY_PROJECT_FILE);
     if legacy_project.is_file() && !dir.join(PROJECT_FILE).exists() {
@@ -360,10 +360,10 @@ pub(crate) mod testes {
         assert!(!dir.join(LEGACY_PROJECT_FILE).exists());
         assert!(!dir.join(LEGACY_SCENE_DIR).exists());
         let migrated = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
-        let formato = format!("format: {}", nexo_core::SCENE_FORMAT);
+        let expected = format!("format: {}", nexo_core::SCENE_FORMAT);
         assert!(
-            migrated.contains(&formato),
-            "cena migrada sem {formato}:\n{migrated}"
+            migrated.contains(&expected),
+            "migrated scene without {expected}:\n{migrated}"
         );
         assert!(is_format_2_or_later(&migrated));
         let backup =
@@ -402,15 +402,15 @@ pub(crate) mod testes {
     }
 
     #[test]
-    fn formato_posterior_conta_como_atual_e_nao_e_migrado() {
-        // Um arquivo do formato 3 (ou de um formato futuro) não é reescrito pela migração.
+    fn newer_format_counts_as_current_and_is_not_migrated() {
+        // A format 3 (or later) file is not rewritten by the migration.
         assert!(is_format_2_or_later("(\n    format: 3,\n    name: \"x\",\n)"));
         assert!(!is_format_2_or_later("(\n    name: \"x\",\n)"));
         assert!(!is_format_2_or_later("{\"version\": 1}"));
     }
 
     #[test]
-    fn criar_projeto_grava_cena_no_formato_atual() {
+    fn create_project_writes_scene_in_current_format() {
         let dir = pasta_temporaria("novo");
         let info = scaffold(&dir, "Novo", "vazio", &cena_v1()).unwrap();
         let text = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();

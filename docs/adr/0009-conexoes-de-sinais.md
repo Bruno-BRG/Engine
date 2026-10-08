@@ -22,4 +22,4 @@ SCN-034 connects a node's signals (the `timeout` of a Timer, the `body_entered` 
 
 - Connections are saved, undone and reloaded, but nothing runs them yet. Until VIS-002, the method name has no effect at runtime.
 - A project saved by this version cannot be opened by an older editor build. The refusal is explicit, so no data is lost silently.
-- Duplicate and paste remap only connections. Other UID references, such as `node_b` in the joints, are still copied as they are. That is a known gap, tracked separately.
+- Duplicate and paste remap only connections. Other UID references, such as `node_b` in the joints, are still copied as they are. That is a known gap, tracked as SCN-036 in the backlog.

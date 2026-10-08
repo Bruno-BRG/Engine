@@ -11,7 +11,7 @@ use std::str::FromStr;
 const MAX_HISTORY: usize = 200;
 /// Deslocamento aplicado a cópias e colagens, para não cobrirem o original.
 const PASTE_OFFSET: f64 = 32.0;
-/// Tamanho máximo do nome de um método de ligação.
+/// Maximum length of a connection's method name.
 const MAX_METHOD_LEN: usize = 64;
 
 /// Identificador estável de um nó. Vai para o arquivo como 16 dígitos hexadecimais,
@@ -47,14 +47,14 @@ impl<'de> Deserialize<'de> for Uid {
     }
 }
 
-/// Ligação de um sinal de um nó a um nó alvo (SCN-034). Fica no nó emissor, fora de `props`.
+/// A connection from a node's signal to a target node (SCN-034). Stored on the emitter, outside `props`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Connection {
-    /// Nome do sinal que o emissor emite, por exemplo "timeout" ou "body_entered".
+    /// Name of the signal the emitter emits, e.g. "timeout" or "body_entered".
     pub signal: String,
-    /// Nó que recebe o sinal.
+    /// Node that receives the signal.
     pub target: Uid,
-    /// Nome do método (evento) do script do alvo que roda quando o sinal chega.
+    /// Name of the method (event) on the target's script that runs when the signal arrives.
     pub method: String,
 }
 
@@ -66,7 +66,7 @@ pub struct Node {
     pub parent: Option<Uid>,
     pub children: Vec<Uid>,
     pub props: BTreeMap<String, Value>,
-    /// Ligações deste nó como emissor, na ordem em que foram feitas.
+    /// Connections from this node as emitter, in the order they were made.
     pub connections: Vec<Connection>,
 }
 
@@ -210,7 +210,7 @@ impl Scene {
         Ok(uid)
     }
 
-    /// Remove o nó e tudo abaixo dele. As ligações que apontam para esses nós somem junto (SCN-034).
+    /// Removes the node and everything below it. Connections that point to those nodes are removed too (SCN-034).
     pub fn remove_node(&mut self, uid: Uid) -> Result<(), String> {
         let name = self.node_or_err(uid)?.name.clone();
         self.begin(&format!("Excluir {name}"), None);
@@ -223,9 +223,9 @@ impl Scene {
         Ok(())
     }
 
-    /// Liga o sinal `signal` do nó `emitter` ao nó `target`, com o método `method` (SCN-034). O método tem os
-    /// espaços das pontas removidos. Recusa sinal que o tipo do emissor não emite, método inválido, alvo que não
-    /// existe e ligação repetida.
+    /// Connects signal `signal` of node `emitter` to node `target`, calling `method` (SCN-034). The method's
+    /// leading and trailing spaces are trimmed. Refuses a signal the emitter's type does not emit, an invalid
+    /// method, a missing target and a duplicate connection.
     pub fn connect(&mut self, emitter: Uid, signal: &str, target: Uid, method: &str) -> Result<(), String> {
         let method = method.trim();
         let kind = self.node_or_err(emitter)?.kind.clone();
@@ -244,7 +244,7 @@ impl Scene {
         Ok(())
     }
 
-    /// Desfaz a ligação do nó `emitter` com o mesmo sinal, alvo e método (SCN-034).
+    /// Removes the connection from `emitter` with the same signal, target and method (SCN-034).
     pub fn disconnect(&mut self, emitter: Uid, signal: &str, target: Uid, method: &str) -> Result<(), String> {
         let link = Connection { signal: signal.to_string(), target, method: method.trim().to_string() };
         let Some(i) = self.node_or_err(emitter)?.connections.iter().position(|c| *c == link) else {
@@ -342,8 +342,8 @@ impl Scene {
         Ok(Some(new))
     }
 
-    /// Troca o tipo do nó. Propriedades que o novo tipo não tem são descartadas, e também as ligações de
-    /// sinais que o novo tipo não emite (SCN-034).
+    /// Changes the node's type. Properties the new type does not have are dropped, and so are the signal
+    /// connections the new type does not emit (SCN-034).
     pub fn change_kind(&mut self, uid: Uid, kind: &str) -> Result<(), String> {
         check_kind(kind)?;
         if self.node_or_err(uid)?.kind == kind {
@@ -367,9 +367,9 @@ impl Scene {
         Ok(())
     }
 
-    /// Cena nova com a subárvore de `uid` como raiz (SCN-022: "Salvar ramo como cena").
-    /// Os UIDs são preservados, então referências dentro do ramo continuam válidas. Ligações para nós de fora do
-    /// ramo somem na cópia, porque o alvo não existiria nela (SCN-034).
+    /// New scene with the subtree of `uid` as its root (SCN-022: "Salvar ramo como cena").
+    /// UIDs are kept, so references inside the branch stay valid. Connections to nodes outside the branch are
+    /// dropped in the copy, because the target would not exist there (SCN-034).
     pub fn branch_as_scene(&self, uid: Uid, seed: u64) -> Result<Scene, String> {
         let node = self.node_or_err(uid)?;
         let mut scene = Scene::new(&node.name, seed);
@@ -560,7 +560,7 @@ impl Scene {
             };
             let children = src.children.iter().filter_map(|c| map.get(c).copied()).collect();
             let name = if *old == root { root_name.clone() } else { src.name.clone() };
-            // Alvo dentro da cópia aponta para a cópia; alvo de fora continua o mesmo nó (SCN-034).
+            // A target inside the copy points at the copy; a target outside it stays the same node (SCN-034).
             let connections = src
                 .connections
                 .iter()
@@ -598,8 +598,8 @@ impl Scene {
         }
     }
 
-    /// Remove as ligações que apontam para algum dos nós `removed`, em todos os nós da cena. Não registra histórico:
-    /// quem chama já registrou a operação, e o desfazer restaura o estado anterior inteiro.
+    /// Removes the connections that point to any of the `removed` nodes, from every node in the scene. Records no
+    /// history: the caller already recorded the operation, and undo restores the whole previous state.
     fn drop_links_to(&mut self, removed: &[Uid]) {
         for n in self.nodes.values_mut() {
             n.connections.retain(|c| !removed.contains(&c.target));
@@ -657,8 +657,8 @@ fn check_kind(kind: &str) -> Result<(), String> {
     registry::find(kind).map(|_| ()).ok_or_else(|| format!("Tipo de nó desconhecido: {kind}"))
 }
 
-/// Confere uma ligação contra o tipo do emissor: o sinal precisa ser um que o tipo emite, e o método um nome
-/// válido. Usado ao criar a ligação e ao carregar o arquivo (SCN-034).
+/// Checks a connection against the emitter's type: the signal must be one the type emits, and the method a
+/// valid name. Used when the connection is created and when a file is loaded (SCN-034).
 pub(crate) fn check_link(kind: &str, signal: &str, method: &str) -> Result<(), String> {
     if registry::signal_def(kind, signal).is_none() {
         return Err(format!("O tipo {kind} não emite o sinal {signal}"));
@@ -666,7 +666,7 @@ pub(crate) fn check_link(kind: &str, signal: &str, method: &str) -> Result<(), S
     check_method(method)
 }
 
-/// Nome de método: começa com letra ou `_`, segue com letras sem acento, números ou `_`, até 64 caracteres.
+/// Method name: starts with a letter or `_`, continues with unaccented letters, digits or `_`, up to 64 characters.
 fn check_method(method: &str) -> Result<(), String> {
     let mut chars = method.chars();
     let starts_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
@@ -1041,8 +1041,8 @@ mod tests {
         assert_eq!(ramo.node(a).unwrap().parent, None);
     }
 
-    /// Cena com um Timer (emissor) e um Sprite2D (alvo) na raiz. Devolve os UIDs de ambos.
-    fn cena_com_timer() -> (Scene, Uid, Uid) {
+    /// Scene with a Timer (emitter) and a Sprite2D (target) at the root. Returns the UIDs of both.
+    fn scene_with_timer() -> (Scene, Uid, Uid) {
         let mut s = cena();
         let root = s.roots()[0];
         let t = s.add_node(Some(root), "Timer", None).unwrap();
@@ -1051,8 +1051,8 @@ mod tests {
     }
 
     #[test]
-    fn conectar_pode_ser_desfeito_e_refeito() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn connect_can_be_undone_and_redone() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
         assert_eq!(s.node(t).unwrap().connections.len(), 1);
         assert_eq!(s.undo_label(), Some("Conectar sinal"));
@@ -1067,32 +1067,32 @@ mod tests {
     }
 
     #[test]
-    fn ligacao_invalida_nao_entra_no_historico() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn invalid_connection_is_not_recorded_in_history() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
-        let antes = s.undo.len();
-        // Sprite2D não emite timeout; método vazio, com espaço ou começado por número; alvo inexistente.
+        let before = s.undo.len();
+        // Sprite2D does not emit timeout; the method is empty, has a space, or starts with a digit; the target is missing.
         assert!(s.connect(sp, "timeout", t, "on_timeout").is_err());
         assert!(s.connect(t, "timeout", sp, "").is_err());
         assert!(s.connect(t, "timeout", sp, "1a").is_err());
         assert!(s.connect(t, "timeout", sp, "on timeout").is_err());
         assert!(s.connect(t, "timeout", Uid(0xdead), "on_timeout").is_err());
-        // A mesma ligação, com espaços nas pontas, é repetida depois de aparar.
+        // The same connection with spaces at the ends is a duplicate once trimmed.
         assert!(s.connect(t, "timeout", sp, "  on_timeout ").is_err());
-        assert_eq!(s.undo.len(), antes, "ligação recusada não registra desfazer");
+        assert_eq!(s.undo.len(), before, "a refused connection records no undo");
         assert_eq!(s.node(t).unwrap().connections.len(), 1);
     }
 
     #[test]
-    fn metodo_pode_apontar_para_o_proprio_emissor() {
-        let (mut s, t, _) = cena_com_timer();
+    fn method_can_point_at_the_emitter_itself() {
+        let (mut s, t, _) = scene_with_timer();
         s.connect(t, "timeout", t, "_auto_1").unwrap();
         assert_eq!(s.node(t).unwrap().connections[0].target, t);
     }
 
     #[test]
-    fn excluir_alvo_limpa_as_ligacoes_e_o_desfazer_as_devolve() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn removing_target_clears_its_connections_and_undo_restores_them() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
         s.remove_node(sp).unwrap();
         assert!(s.node(t).unwrap().connections.is_empty());
@@ -1101,8 +1101,8 @@ mod tests {
     }
 
     #[test]
-    fn excluir_emissor_nao_deixa_ligacao_pendurada() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn removing_emitter_leaves_no_dangling_connection() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
         s.remove_node(t).unwrap();
         assert!(s.node(t).is_none());
@@ -1110,17 +1110,17 @@ mod tests {
     }
 
     #[test]
-    fn remocao_de_reproducao_limpa_as_ligacoes_para_o_no_removido() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn runtime_removal_clears_connections_to_the_removed_node() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
-        let antes = s.undo.len();
+        let before = s.undo.len();
         s.remove_runtime(sp).unwrap();
         assert!(s.node(t).unwrap().connections.is_empty());
-        assert_eq!(s.undo.len(), antes);
+        assert_eq!(s.undo.len(), before);
     }
 
     #[test]
-    fn duplicar_remapeia_alvos_de_dentro_e_mantem_os_de_fora() {
+    fn duplicate_remaps_inside_targets_and_keeps_outside_ones() {
         let mut s = cena();
         let root = s.roots()[0];
         let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
@@ -1136,12 +1136,12 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert!(links.iter().any(|c| c.target == dentro2 && c.method == "on_dentro"));
         assert!(links.iter().any(|c| c.target == fora && c.method == "on_fora"));
-        // O original continua apontando para o próprio alvo.
+        // The original still points at its own target.
         assert!(s.node(t).unwrap().connections.iter().any(|c| c.target == dentro));
     }
 
     #[test]
-    fn colar_remapeia_alvos_de_dentro_da_copia() {
+    fn paste_remaps_inside_targets_of_the_copy() {
         let mut s = cena();
         let root = s.roots()[0];
         let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
@@ -1157,15 +1157,15 @@ mod tests {
     }
 
     #[test]
-    fn trocar_tipo_descarta_sinais_que_o_novo_tipo_nao_emite() {
-        let (mut s, t, sp) = cena_com_timer();
+    fn change_kind_drops_signals_the_new_kind_does_not_emit() {
+        let (mut s, t, sp) = scene_with_timer();
         s.connect(t, "timeout", sp, "on_timeout").unwrap();
         s.change_kind(t, "Node2D").unwrap();
         assert!(s.node(t).unwrap().connections.is_empty());
     }
 
     #[test]
-    fn ramo_salvo_como_cena_nao_leva_alvos_de_fora() {
+    fn branch_saved_as_scene_drops_outside_targets() {
         let mut s = cena();
         let root = s.roots()[0];
         let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
@@ -1178,6 +1178,45 @@ mod tests {
         let links = &ramo.node(t).unwrap().connections;
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, dentro);
+    }
+
+    #[test]
+    fn removing_group_containing_target_clears_the_connection() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let t = s.add_node(Some(root), "Timer", None).unwrap();
+        let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
+        let dentro = s.add_node(Some(grupo), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", dentro, "on_timeout").unwrap();
+        s.remove_node(grupo).unwrap();
+        assert!(s.node(t).unwrap().connections.is_empty());
+        assert_eq!(s.undo().as_deref(), Some("Excluir Node2D"));
+        assert_eq!(s.node(t).unwrap().connections.len(), 1);
+    }
+
+    #[test]
+    fn paste_keeps_target_outside_the_copy() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let t = s.add_node(Some(root), "Timer", None).unwrap();
+        let fora = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", fora, "on_fora").unwrap();
+        s.copy_node(t).unwrap();
+        let colado = s.paste_node(None).unwrap().unwrap();
+        let link = &s.node(colado).unwrap().connections[0];
+        assert_eq!(link.target, fora);
+        assert_eq!(link.method, "on_fora");
+    }
+
+    #[test]
+    fn disconnecting_missing_connection_is_refused_without_history() {
+        let (mut s, t, sp) = scene_with_timer();
+        s.connect(t, "timeout", sp, "on_timeout").unwrap();
+        let before = s.undo.len();
+        assert!(s.disconnect(t, "timeout", sp, "on_other").is_err());
+        assert!(s.disconnect(sp, "timeout", t, "on_timeout").is_err());
+        assert_eq!(s.undo.len(), before, "a refused disconnect records no undo");
+        assert_eq!(s.node(t).unwrap().connections.len(), 1);
     }
 
     #[test]
