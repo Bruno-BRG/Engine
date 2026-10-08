@@ -34,7 +34,7 @@ impl PinType {
     }
 
     /// Pin type of a registry property (VIS-021). Integer and mask become integer; enum, colour and UID
-    /// become text, as they are written. A list of points has no pin: `None`.
+    /// become text, as they are written. A list of points and a map have no pin: `None`.
     pub fn of_prop(kind: PropKind) -> Option<PinType> {
         match kind {
             PropKind::Float => Some(PinType::Float),
@@ -42,7 +42,7 @@ impl PinType {
             PropKind::Bool => Some(PinType::Bool),
             PropKind::Str | PropKind::Enum | PropKind::Color | PropKind::Uid => Some(PinType::String),
             PropKind::Vec2 => Some(PinType::Vec2),
-            PropKind::Points => None,
+            PropKind::Points | PropKind::Map => None,
         }
     }
 }
@@ -86,7 +86,7 @@ impl Value {
                 let par = json.as_array().filter(|a| a.len() == 2)?;
                 Value::Vec2([par[0].as_f64()?, par[1].as_f64()?])
             }
-            PropKind::Points => return None,
+            PropKind::Points | PropKind::Map => return None,
         })
     }
 }

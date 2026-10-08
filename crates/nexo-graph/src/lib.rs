@@ -19,7 +19,7 @@ pub use csharp::generate_csharp;
 pub use graph::{
     Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Refusal, Wire,
 };
-pub use ir::{Compiled, Op, Program, Reg, compile};
+pub use ir::{Compiled, Frame, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};
 pub use scheduler::{Pausa, Scheduler, recarregar_contexto};
 pub use types::{LogLevel, PinType, Value, Variable};

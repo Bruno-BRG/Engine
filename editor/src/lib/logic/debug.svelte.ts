@@ -6,6 +6,16 @@
 
 import type { TraceEvent, Value } from './model';
 
+/**
+ * One frame of the call stack of a paused operation (DBG-003), as `debug_state` sends it. The list goes from the event
+ * (the first frame) to the innermost frame. `node` is the node that opened the frame: the event node, the CallFunction
+ * node, or the TimerStart node.
+ */
+export type Frame =
+  | { kind: 'event'; node: number; name: string }
+  | { kind: 'function'; node: number; name: string }
+  | { kind: 'timer'; node: number };
+
 /** State of a script instance in the play session, as `debug_state` sends it. */
 export interface InstanciaDebug {
   /** UID of the node that runs the script. Identifies the instance. */
@@ -16,6 +26,9 @@ export interface InstanciaDebug {
   node: number | null;
   /** Event of the program of the operation where execution stopped. Null without a pause at an operation. */
   evento: string | null;
+  /** Call stack of the operation where execution stopped, from the event to the innermost frame.
+   * Empty without a pause. */
+  stack: Frame[];
 }
 
 class LogicDebug {

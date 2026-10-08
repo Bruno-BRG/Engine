@@ -1,5 +1,5 @@
-//! Depuração no editor (DBG-004): dados do desenho de física para o viewport. O método só lê a
-//! reprodução atual; a alternância de exibição fica no TypeScript.
+//! Depuração no editor (DBG-004): dados do desenho de física para o viewport. `debug_draw_json` only reads the
+//! current play session; the display toggle stays in TypeScript.
 //!
 //! Script debugger bridge (VIS-031, DBG-003). The methods only read or change the current play session. The
 //! TypeScript decides when to call them, and breakpoints and the followed instance outlive a single play session.
@@ -8,7 +8,7 @@ use crate::editor::{SceneEditor, js_err, to_json};
 use crate::host::Mundo;
 use crate::scripts::{self, Instancia, registrar};
 use nexo_core::Uid;
-use nexo_graph::{Host, TraceEvent, VmError};
+use nexo_graph::{Frame, Host, TraceEvent, VmError};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -18,6 +18,16 @@ fn evento_json(e: &TraceEvent) -> Json {
     match e {
         TraceEvent::Executou { evento, node } => json!({"Executou": {"evento": evento, "node": node}}),
         TraceEvent::Valor { node, valor } => json!({"Valor": {"node": node, "valor": valor}}),
+    }
+}
+
+/// Call stack frame as JSON, as the TypeScript panel reads it (DBG-003): {"kind": "event" | "function", "node",
+/// "name"} or {"kind": "timer", "node"}. `node` is the node that opened the frame.
+fn frame_json(frame: &Frame) -> Json {
+    match frame {
+        Frame::Event { node, event } => json!({"kind": "event", "node": node, "name": event}),
+        Frame::Function { node, name } => json!({"kind": "function", "node": node, "name": name}),
+        Frame::Timer { node } => json!({"kind": "timer", "node": node}),
     }
 }
 
@@ -70,8 +80,9 @@ impl SceneEditor {
         to_json(&eventos)
     }
 
-    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento}]. `pausada` is also true at
-    /// a frame-end pause, where `node` and `evento` are null. An empty list without a play session.
+    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento, stack}]. `pausada` is also
+    /// true at a frame-end pause, where `node`, `evento` and `stack` are empty. `stack` is the call stack of the paused
+    /// operation, from the event to the innermost frame (DBG-003). An empty list without a play session.
     pub fn debug_state(&self) -> Result<String, JsError> {
         let estado: Vec<Json> = match &self.play {
             Some(p) => p
@@ -79,11 +90,16 @@ impl SceneEditor {
                 .iter()
                 .map(|i| {
                     let pausa = i.pausa();
+                    let stack: Vec<Json> = match pausa {
+                        Some(x) => x.stack.iter().map(frame_json).collect(),
+                        None => Vec::new(),
+                    };
                     json!({
                         "uid": i.dono.to_string(),
                         "pausada": i.pausada(),
                         "node": pausa.map(|x| x.node),
                         "evento": pausa.map(|x| x.evento.as_str()),
+                        "stack": stack,
                     })
                 })
                 .collect(),
@@ -144,5 +160,34 @@ impl SceneEditor {
         registrar(inst, &p.scene, &mut self.console, resultado);
         self.atualizar_depuracao();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks only the JSON of each frame kind. It does not cover the panel, the double-click, or the stack
+    /// contents at a pause (those are tested in the graph crate and not in the editor).
+    #[test]
+    fn frame_json_has_the_shape_the_panel_reads() {
+        assert_eq!(
+            frame_json(&Frame::Event {
+                node: 3,
+                event: "OnReady".into()
+            }),
+            json!({"kind": "event", "node": 3, "name": "OnReady"})
+        );
+        assert_eq!(
+            frame_json(&Frame::Function {
+                node: 7,
+                name: "sum".into()
+            }),
+            json!({"kind": "function", "node": 7, "name": "sum"})
+        );
+        assert_eq!(
+            frame_json(&Frame::Timer { node: 9 }),
+            json!({"kind": "timer", "node": 9})
+        );
     }
 }

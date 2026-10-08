@@ -27,6 +27,9 @@ pub enum PropKind {
     Mask,
     /// Lista de pontos [[x, y], ...] (polígonos de colisão, PHY-011).
     Points,
+    /// JSON object. The registry only checks that it is an object; the meaning of each key belongs to the reader
+    /// (script exported values, VIS-022).
+    Map,
 }
 
 /// Lista das Configurações do Projeto de onde vêm os nomes válidos de um texto (SCN-033, AUD-001, PHY-023).
@@ -192,6 +195,9 @@ fn build() -> Vec<NodeType> {
                 // Script anexado ao nó (VIS-003, INS-005): o nome do arquivo `scripts/<nome>.logic.ron`, sem pasta
                 // e sem extensão. Vazio = nenhum. O Inspector mostra um slot próprio, não um campo de texto.
                 PropDef::new("script", "Script", "Lógica", PropKind::Str, json!("")),
+                // Exported variable values of the script (VIS-022), only those that differ from the default. Key: the
+                // variable name. Value: the graph's format, with node UIDs in hexadecimal (ADR 0012). Empty = script default.
+                PropDef::new("script_vars", "Valores exportados", "Lógica", PropKind::Map, json!({})),
             ],
         },
         NodeType {
@@ -629,6 +635,17 @@ mod tests {
     }
 
     #[test]
+    fn script_vars_is_a_map_with_empty_default() {
+        // VIS-022: every node has the map; its default is an empty object, and the editor sees it as "map".
+        let def = prop_def("Sprite2D", "script_vars").expect("Node.script_vars");
+        assert_eq!(def.kind, PropKind::Map);
+        assert_eq!(def.default, json!({}));
+        assert_eq!(def.group, "Lógica");
+        assert_eq!(serde_json::to_value(def).unwrap()["kind"], json!("map"));
+        assert!(prop_def("Timer", "script_vars").is_some());
+    }
+
+    #[test]
     fn nomes_de_tipo_unicos() {
         let mut names: Vec<&str> = node_types().iter().map(|t| t.name).collect();
         names.sort();
@@ -727,5 +744,24 @@ mod tests {
         assert_eq!(material["names"], json!("physics_materials"));
         let pitch = serde_json::to_value(prop_def("AudioStreamPlayer", "pitch_scale").unwrap()).unwrap();
         assert_eq!(pitch["slider"], json!(true));
+    }
+
+    #[test]
+    fn physics_node_types_are_2d_in_physics_category() {
+        // SCN-013 guard: the six body and shape types stay registered, 2D, and listed under "Física".
+        for name in [
+            "StaticBody2D",
+            "RigidBody2D",
+            "CharacterBody2D",
+            "Area2D",
+            "CollisionShape2D",
+            "CollisionPolygon2D",
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} is not registered"));
+            assert_eq!(def.category, "Física", "{name}");
+            assert!(is_2d(name), "{name}");
+        }
+        // The polygon's points are edited as a list of [x, y] pairs (PHY-011).
+        assert_eq!(prop_def("CollisionPolygon2D", "points").unwrap().kind, PropKind::Points);
     }
 }

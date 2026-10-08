@@ -262,6 +262,18 @@ pub enum Op {
     },
 }
 
+/// One frame of the call stack of an op (DBG-003). Functions and timers are embedded where they are called, so each
+/// frame stores the node that opened it: the event, the call, or the timer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame {
+    /// The event that starts the program ("OnReady", "OnProcess"...). Always the first frame.
+    Event { node: u64, event: String },
+    /// A function call (CallFunction): the calling node and the function name.
+    Function { node: u64, name: String },
+    /// The timeout branch of a timer (TimerStart), which runs in its own task.
+    Timer { node: u64 },
+}
+
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
@@ -276,6 +288,21 @@ pub struct Program {
     pub regs: usize,
     /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
     pub estado: Option<String>,
+    /// Distinct call stacks of the program, each from the event to the innermost frame (DBG-003). A function called
+    /// in two places has one stack per call.
+    pub stacks: Vec<Vec<Frame>>,
+    /// Index in `stacks` of the call stack of each op, at the same index as `ops`.
+    pub stack_of_op: Vec<usize>,
+}
+
+impl Program {
+    /// Call stack of the op at `pc`, from the event to the innermost frame (DBG-003). Empty when `pc` is not an op.
+    pub fn stack_at(&self, pc: usize) -> &[Frame] {
+        match self.stack_of_op.get(pc).and_then(|&i| self.stacks.get(i)) {
+            Some(stack) => stack.as_slice(),
+            None => &[],
+        }
+    }
 }
 
 /// Resultado da compilação: as variáveis do script, um programa por nó de evento e o estado inicial.
@@ -303,6 +330,72 @@ impl Compiled {
     pub fn programs_for<'a>(&'a self, event: &'a str) -> impl Iterator<Item = &'a Program> + 'a {
         self.programs.iter().filter(move |p| p.event == event)
     }
+
+    /// Context of one instance with its exported values (VIS-022). `exported` is the node's `script_vars` map: variable
+    /// name to value in the editor's format (ADR 0012). Only an exported variable with the same name and type takes
+    /// the value. An entry that does not match (variable removed, no longer exported, or another type after the
+    /// script changed) is ignored and the default stays. A malformed value is an error, with the variable's name.
+    pub fn new_context_with(
+        &self,
+        owner: u64,
+        exported: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Context, String> {
+        let mut context = self.new_context(owner);
+        for (name, data) in exported {
+            let Some((index, variable)) =
+                self.variables.iter().enumerate().find(|(_, v)| v.exported && v.name == *name)
+            else {
+                continue;
+            };
+            let ty = exported_type(data).map_err(|e| format!("valor exportado '{name}': {e}"))?;
+            if ty != variable.ty {
+                continue;
+            }
+            let value = exported_value(data).map_err(|e| format!("valor exportado '{name}': {e}"))?;
+            if let Some(slot) = context.vars.get_mut(index) {
+                *slot = value;
+            }
+        }
+        Ok(context)
+    }
+}
+
+/// Type named by the tag of an exported value: `{"Float": 2.5}` is a decimal. Any other shape is an error.
+fn exported_type(data: &serde_json::Value) -> Result<PinType, String> {
+    let tag = match data.as_object() {
+        Some(object) if object.len() == 1 => object.keys().next().map(String::as_str),
+        _ => None,
+    };
+    match tag {
+        Some("Bool") => Ok(PinType::Bool),
+        Some("Int") => Ok(PinType::Int),
+        Some("Float") => Ok(PinType::Float),
+        Some("String") => Ok(PinType::String),
+        Some("Vec2") => Ok(PinType::Vec2),
+        Some("Node") => Ok(PinType::Node),
+        _ => Err("esperado um objeto com um tipo, como {\"Float\": 2.5}".into()),
+    }
+}
+
+/// Value of an exported entry, in the graph's format. A node is written as hexadecimal text, because a 64-bit number
+/// loses precision in JavaScript.
+fn exported_value(data: &serde_json::Value) -> Result<Value, String> {
+    if let Some(node) = data.get("Node") {
+        let hex = node.as_str().ok_or("o UID do nó deve ser texto hexadecimal")?;
+        return Ok(Value::Node(node_id_from_hex(hex)?));
+    }
+    serde_json::from_value(data.clone()).map_err(|_| "valor não corresponde ao tipo da variável".to_string())
+}
+
+/// Node id from up to 16 hexadecimal digits. The empty text is no node, the same as `Node(0)`.
+fn node_id_from_hex(text: &str) -> Result<u64, String> {
+    if text.is_empty() {
+        return Ok(0);
+    }
+    if text.len() > 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("UID de nó inválido: '{text}'"));
+    }
+    u64::from_str_radix(text, 16).map_err(|_| format!("UID de nó inválido: '{text}'"))
 }
 
 fn err(node: u64, message: impl Into<String>) -> CompileError {
@@ -356,6 +449,12 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         produzidas: BTreeMap::new(),
         chamadas: Vec::new(),
         retornos: Vec::new(),
+        frames: vec![Frame::Event {
+            node: event.id,
+            event: event.kind.clone(),
+        }],
+        stacks: Vec::new(),
+        stack_of_op: Vec::new(),
     };
     e.flow(event.id, "exec")?;
     // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
@@ -370,6 +469,8 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         sources: e.sources,
         regs: e.regs,
         estado,
+        stacks: e.stacks,
+        stack_of_op: e.stack_of_op,
     })
 }
 
@@ -399,14 +500,32 @@ struct Emitter<'g> {
     chamadas: Vec<u64>,
     /// Saltos de Return à espera do fim do corpo da função que está sendo embutida, uma lista por chamada.
     retornos: Vec<Vec<usize>>,
+    /// Frames of the call stack being compiled: the event, then the functions and timers that contain the node.
+    frames: Vec<Frame>,
+    /// Distinct call stacks seen so far. Each op stores only the index of its own.
+    stacks: Vec<Vec<Frame>>,
+    /// Index in `stacks` of the call stack of each emitted op.
+    stack_of_op: Vec<usize>,
 }
 
 impl<'g> Emitter<'g> {
-    /// Acrescenta uma op e devolve o índice dela.
+    /// Appends an op and returns its index. The op records the current call stack (DBG-003).
     fn emit(&mut self, op: Op, source: u64) -> usize {
         self.ops.push(op);
         self.sources.push(source);
+        let stack = self.stack_index();
+        self.stack_of_op.push(stack);
         self.ops.len() - 1
+    }
+
+    /// Index in `stacks` of the current call stack. A stack enters the table once, so the table stays small: it grows
+    /// with the number of distinct call paths, not with the number of ops.
+    fn stack_index(&mut self) -> usize {
+        if let Some(i) = self.stacks.iter().position(|p| *p == self.frames) {
+            return i;
+        }
+        self.stacks.push(self.frames.clone());
+        self.stacks.len() - 1
     }
 
     fn reg(&mut self) -> Reg {
@@ -614,7 +733,9 @@ impl<'g> Emitter<'g> {
                 let to_end = self.emit(Op::Jump { target: 0 }, id);
                 let entry = self.ops.len();
                 self.patch(spawn, entry);
+                self.frames.push(Frame::Timer { node: id });
                 self.flow(id, "timeout")?;
+                self.frames.pop();
                 let end = self.ops.len();
                 self.patch(to_end, end);
                 Ok(())
@@ -711,7 +832,12 @@ impl<'g> Emitter<'g> {
                 }
                 self.chamadas.push(def.id);
                 self.retornos.push(Vec::new());
+                self.frames.push(Frame::Function {
+                    node: id,
+                    name: nome.clone(),
+                });
                 self.flow(def.id, "exec")?;
+                self.frames.pop();
                 let fim = self.ops.len();
                 for salto in self.retornos.pop().unwrap_or_default() {
                     self.patch(salto, fim);
@@ -1019,6 +1145,7 @@ impl<'g> Emitter<'g> {
 mod tests {
     use super::*;
     use crate::graph::{PinRef, Wire};
+    use nexo_core::scene::Uid;
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
         g.add_node(kind, [0.0, 0.0]).unwrap()
@@ -1157,5 +1284,236 @@ mod tests {
         assert!(ops.iter().any(|op| matches!(op, Op::GetProp { ty: PinType::Int, .. })), "{ops:?}");
         assert!(ops.iter().any(|op| matches!(op, Op::SetProp { ty: PinType::Int, .. })), "{ops:?}");
         assert!(ops.iter().any(|op| matches!(op, Op::SetProp { ty: PinType::String, .. })), "{ops:?}");
+    }
+
+    /// Print node with an embedded message.
+    fn print_node(g: &mut Graph, msg: &str) -> u64 {
+        let p = adiciona(g, "Print");
+        g.set_value(p, "msg", Value::String(msg.into())).unwrap();
+        p
+    }
+
+    /// Call node that calls the function `name`.
+    fn call_node(g: &mut Graph, name: &str) -> u64 {
+        let c = adiciona(g, "CallFunction");
+        g.set_value(c, "name", Value::String(name.into())).unwrap();
+        c
+    }
+
+    #[test]
+    fn function_called_twice_has_stack_per_call() {
+        // OnReady calls "f" twice in a row. The body of "f" (a Print) is embedded in each call.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let body = print_node(&mut g, "x");
+        g.connect((def, "exec"), (body, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let first = call_node(&mut g, "f");
+        let second = call_node(&mut g, "f");
+        g.connect((ev, "exec"), (first, "exec")).unwrap();
+        g.connect((first, "exec"), (second, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let body_stacks: Vec<Vec<Frame>> = (0..p.ops.len())
+            .filter(|&pc| p.sources[pc] == body)
+            .map(|pc| p.stack_at(pc).to_vec())
+            .collect();
+        let call_stack = |call: u64| {
+            vec![
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into(),
+                },
+                Frame::Function {
+                    node: call,
+                    name: "f".into(),
+                },
+            ]
+        };
+        assert!(body_stacks.contains(&call_stack(first)), "{body_stacks:?}");
+        assert!(body_stacks.contains(&call_stack(second)), "{body_stacks:?}");
+        assert!(
+            body_stacks
+                .iter()
+                .all(|stack| *stack == call_stack(first) || *stack == call_stack(second)),
+            "{body_stacks:?}"
+        );
+    }
+
+    #[test]
+    fn nested_call_stack_lists_outer_then_inner_function() {
+        // OnReady calls "outer"; the body of "outer" calls "inner"; the body of "inner" prints.
+        let mut g = Graph::default();
+        let inner_def = adiciona(&mut g, "Function");
+        g.set_value(inner_def, "name", Value::String("inner".into()))
+            .unwrap();
+        let body = print_node(&mut g, "deep");
+        g.connect((inner_def, "exec"), (body, "exec")).unwrap();
+        let outer_def = adiciona(&mut g, "Function");
+        g.set_value(outer_def, "name", Value::String("outer".into()))
+            .unwrap();
+        let inner_call = call_node(&mut g, "inner");
+        g.connect((outer_def, "exec"), (inner_call, "exec"))
+            .unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let outer_call = call_node(&mut g, "outer");
+        g.connect((ev, "exec"), (outer_call, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack = (0..p.ops.len())
+            .filter(|&pc| p.sources[pc] == body)
+            .map(|pc| p.stack_at(pc).to_vec())
+            .next()
+            .unwrap();
+        assert_eq!(
+            stack,
+            vec![
+                Frame::Event {
+                    node: ev,
+                    event: "OnReady".into(),
+                },
+                Frame::Function {
+                    node: outer_call,
+                    name: "outer".into(),
+                },
+                Frame::Function {
+                    node: inner_call,
+                    name: "inner".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn after_call_stack_returns_to_event() {
+        // OnReady calls "f", then prints "after", which is no longer inside the function.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let body = print_node(&mut g, "inside");
+        g.connect((def, "exec"), (body, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let call = call_node(&mut g, "f");
+        let after = print_node(&mut g, "after");
+        g.connect((ev, "exec"), (call, "exec")).unwrap();
+        g.connect((call, "exec"), (after, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack_of = |node: u64| -> Vec<Frame> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == node)
+                .map(|pc| p.stack_at(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let only_event = vec![Frame::Event {
+            node: ev,
+            event: "OnReady".into(),
+        }];
+        assert_eq!(stack_of(after), only_event);
+        assert_ne!(stack_of(body), only_event);
+    }
+
+    #[test]
+    fn timeout_branch_is_in_timer_frame() {
+        // TimerStart: the "started" branch runs in the current task; the "timeout" branch runs in the timer's task.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let tm = adiciona(&mut g, "TimerStart");
+        g.set_value(tm, "seconds", Value::Float(0.2)).unwrap();
+        g.connect((ev, "exec"), (tm, "exec")).unwrap();
+        let started = print_node(&mut g, "started");
+        g.connect((tm, "started"), (started, "exec")).unwrap();
+        let timeout = print_node(&mut g, "timeout");
+        g.connect((tm, "timeout"), (timeout, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let stack_of = |node: u64| -> Vec<Frame> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == node)
+                .map(|pc| p.stack_at(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let event = Frame::Event {
+            node: ev,
+            event: "OnReady".into(),
+        };
+        assert_eq!(stack_of(started), vec![event.clone()]);
+        assert_eq!(stack_of(timeout), vec![event, Frame::Timer { node: tm }]);
+    }
+
+    /// Script with three variables: two exported (float and node) and one local (integer).
+    fn script_with_variables() -> Compiled {
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Float, Value::Float(1.0), true).unwrap();
+        g.add_variable("local", PinType::Int, Value::Int(7), false).unwrap();
+        g.add_variable("alvo", PinType::Node, Value::Node(0), true).unwrap();
+        compile(&g).unwrap()
+    }
+
+    fn map_of(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn exported_value_replaces_the_default_of_the_instance() {
+        let c = script_with_variables();
+        let data = map_of(serde_json::json!({"vida": {"Float": 4.0}, "alvo": {"Node": "00000000000000ff"}}));
+        let ctx = c.new_context_with(1, &data).unwrap();
+        assert_eq!(ctx.vars, vec![Value::Float(4.0), Value::Int(7), Value::Node(255)]);
+        // Without values the instance starts at the script's default, as it did before VIS-022.
+        let none = map_of(serde_json::json!({}));
+        assert_eq!(c.new_context_with(1, &none).unwrap().vars, c.new_context(1).vars);
+    }
+
+    #[test]
+    fn local_variable_does_not_take_an_exported_value() {
+        let c = script_with_variables();
+        let ctx = c.new_context_with(1, &map_of(serde_json::json!({"local": {"Int": 9}}))).unwrap();
+        assert_eq!(ctx.vars[1], Value::Int(7));
+    }
+
+    #[test]
+    fn value_of_another_type_or_of_a_removed_variable_is_ignored() {
+        let c = script_with_variables();
+        // The script changed the type of "vida" after the value was saved, and "antiga" no longer exists.
+        let data = map_of(serde_json::json!({"vida": {"Int": 4}, "antiga": {"Float": 2.0}}));
+        let ctx = c.new_context_with(1, &data).unwrap();
+        assert_eq!(ctx.vars[0], Value::Float(1.0));
+    }
+
+    #[test]
+    fn node_uid_as_hex_text_round_trips_into_the_context() {
+        let c = script_with_variables();
+        // Values above 2^53 are the ones a JSON number would corrupt in the editor.
+        for id in [1u64, (1u64 << 53) + 1, u64::MAX - 1] {
+            let text = Uid(id).to_string();
+            assert_eq!(text.len(), 16);
+            assert_eq!(text.parse::<Uid>().unwrap(), Uid(id));
+            let ctx = c.new_context_with(1, &map_of(serde_json::json!({"alvo": {"Node": text}}))).unwrap();
+            assert_eq!(ctx.vars[2], Value::Node(id), "{text}");
+        }
+    }
+
+    #[test]
+    fn node_value_checks_its_hex_text() {
+        let c = script_with_variables();
+        let none = c.new_context_with(1, &map_of(serde_json::json!({"alvo": {"Node": ""}}))).unwrap();
+        assert_eq!(none.vars[2], Value::Node(0));
+        // A number instead of text is refused, for the same precision reason.
+        assert!(c.new_context_with(1, &map_of(serde_json::json!({"alvo": {"Node": 255}}))).is_err());
+        assert!(c.new_context_with(1, &map_of(serde_json::json!({"alvo": {"Node": "xyz"}}))).is_err());
+        assert!(c.new_context_with(1, &map_of(serde_json::json!({"alvo": {"Node": "1234567890abcdef0"}}))).is_err());
+    }
+
+    #[test]
+    fn malformed_value_is_an_error_that_names_the_variable() {
+        let c = script_with_variables();
+        let err = c.new_context_with(1, &map_of(serde_json::json!({"vida": {"Float": "quatro"}}))).unwrap_err();
+        assert!(err.contains("vida"), "{err}");
+        assert!(err.contains("tipo da variável"), "{err}");
+        assert!(c.new_context_with(1, &map_of(serde_json::json!({"vida": 4.0}))).is_err());
     }
 }

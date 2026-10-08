@@ -1,21 +1,23 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { logic } from '$lib/logic/store.svelte';
-  import { logicDebug, podeAcionar } from '$lib/logic/debug.svelte';
+  import { logicDebug, podeAcionar, type Frame } from '$lib/logic/debug.svelte';
   import { app } from '$lib/state/app.svelte';
   import { runtime } from '$lib/state/runtime.svelte';
   import { scene } from '$lib/state/scene.svelte';
   import { Bug, Play, StepForward, X } from '@lucide/svelte';
 
   // Visual logic section of the Depurador (VIS-031, DBG-003): the instance the debugger follows, the breakpoints of
-  // all scripts, its pause with Continuar and Next operation, and how many nodes ran in the last traced segment.
-  // Each node with a script is an instance, and the game keeps running while one of them is paused.
+  // all scripts, its pause with Continuar and Next operation, the call stack of the pause, and how many nodes ran in
+  // the last traced segment. Each node with a script is an instance, and the game keeps running while one is paused.
   const pontos = $derived(Object.entries(logicDebug.breaks).filter(([, ids]) => ids.length > 0));
   const escolhida = $derived(logicDebug.escolhida);
   // The banner shows any pause; the buttons also need a pause at an operation and a running game (see podeAcionar).
   const pausada = $derived(escolhida?.pausada ? escolhida : null);
   const acionavel = $derived(podeAcionar(escolhida, app.paused) ? escolhida : null);
   const rodaram = $derived(escolhida ? (logicDebug.executados[escolhida.uid] ?? []).length : 0);
+  // The call stack is listed innermost first: the frame on top is the one the paused operation belongs to.
+  const stack = $derived(escolhida ? [...escolhida.stack].reverse() : []);
 
   // The runtime observes the debugger only while this panel is open (or while a breakpoint exists).
   onMount(() => runtime.definirPainelDepurador(true));
@@ -44,6 +46,26 @@
     runtime.escolherInstancia(uid || null);
     const script = uid ? scriptDe(uid) : '';
     if (script && script !== logic.active) void logic.open(script);
+  }
+
+  /** Text of a call stack frame: the event, the function, or the timer. */
+  function frameLabel(frame: Frame): string {
+    if (frame.kind === 'event') return `Evento: ${logic.defsByKind.get(frame.name)?.label ?? frame.name}`;
+    if (frame.kind === 'function') return `Função: ${frame.name}`;
+    return 'Temporizador: tempo esgotado';
+  }
+
+  /** Double-click on a frame (Enter too): opens the instance's script in the Lógica workspace and selects the node. */
+  async function goToFrame(uid: string, frame: Frame) {
+    const script = scriptDe(uid);
+    if (!script) return;
+    await logic.openIn(script);
+    // The canvas measures itself when it mounts, so the frame waits for it before framing the selection.
+    await tick();
+    // The open can fail or be replaced by another open: then the workspace does not show this frame's script.
+    if (logic.active !== script) return;
+    logic.select([frame.node], [], false);
+    logic.frameSelection();
   }
 </script>
 
@@ -86,6 +108,28 @@
       <StepForward size={12} /> Próxima operação
     </button>
   </div>
+  {#if escolhida && stack.length}
+    <h4>Pilha de chamadas (mais interno primeiro)</h4>
+    <ol>
+      {#each stack as frame, i (i)}
+        <li>
+          <button
+            type="button"
+            class="frame"
+            class:current={i === 0}
+            title="Clique duplo para ir ao nó"
+            ondblclick={() => void goToFrame(escolhida.uid, frame)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') void goToFrame(escolhida.uid, frame);
+            }}
+          >
+            <span class="frame-name">{frameLabel(frame)}</span>
+            <span class="frame-node mono">{nomeDoPonto(scriptDe(escolhida.uid), frame.node)}</span>
+          </button>
+        </li>
+      {/each}
+    </ol>
+  {/if}
   {#if logicDebug.instancias.length === 0}
     <p class="nota">Pontos de parada e pausas valem durante o jogo (F5). Marque um nó com F9.</p>
   {/if}
@@ -164,6 +208,50 @@
   .botoes .btn {
     height: 22px;
     padding: 0 8px;
+  }
+  .frame {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: var(--r-ctl);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .frame:hover {
+    background: var(--bg-hover);
+  }
+  .frame.current {
+    background: var(--accent-soft);
+  }
+  .frame-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .frame-node {
+    flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-11);
+    color: var(--text-dim);
+  }
+  ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
   ul {
     list-style: none;

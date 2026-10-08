@@ -1155,6 +1155,8 @@ pub(crate) mod tests {
             sources: vec![5],
             regs: 0,
             estado: None,
+            stacks: Vec::new(),
+            stack_of_op: Vec::new(),
         };
         let mut ctx = Context {
             owner: 5,
