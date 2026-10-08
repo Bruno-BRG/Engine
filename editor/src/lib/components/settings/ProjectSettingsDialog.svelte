@@ -108,7 +108,11 @@
             aria-selected={settingsUi.tab === t.id}
             aria-controls="ps-panel"
             class:on={settingsUi.tab === t.id}
-            onclick={() => (settingsUi.tab = t.id)}
+            onclick={() => {
+              // Changing tab cancels a pending capture, so the next key or button does not bind to the old tab's action.
+              cancelCapture();
+              settingsUi.tab = t.id;
+            }}
           >
             {t.label}
           </button>

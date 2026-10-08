@@ -69,7 +69,7 @@ const ROTULOS: Record<string, string> = {
   dpad_right: 'Cruz para a direita',
   gamepad_lt: 'Gatilho LT',
   gamepad_rt: 'Gatilho RT',
-  'gamepad_left_x-':'Analógico esquerdo para a esquerda',
+  'gamepad_left_x-': 'Analógico esquerdo para a esquerda',
   'gamepad_left_x+': 'Analógico esquerdo para a direita',
   'gamepad_left_y-': 'Analógico esquerdo para cima',
   'gamepad_left_y+': 'Analógico esquerdo para baixo',
@@ -84,16 +84,24 @@ export function labelOf(code: string): string {
   return ROTULOS[code] ?? code;
 }
 
+/**
+ * Triggers are read only from the standard mapping. On other pads, index 6 is not LT, so it would give a false value.
+ */
+function hasTriggers(pad: Gamepad): boolean {
+  return pad.mapping === 'standard';
+}
+
 /** Botões do controle pressionados no quadro anterior: só as mudanças vão ao WASM. */
 let held = new Set<string>();
 
 /**
  * Lê todos os controles conectados e manda ao WASM os eixos e os botões que mudaram. Chamado a cada quadro
  * da reprodução, antes do quadro da lógica. Os botões valem em união: o de qualquer controle aciona. Cada
- * eixo vale o do controle com maior módulo. Sem controle, os eixos voltam a zero.
+ * eixo vale o do controle com maior módulo. Sem controle, os eixos voltam a zero. Com `reading` false (captura
+ * de ligação em andamento), solta tudo, para o botão da captura não chegar ao jogo.
  */
-export function pollGamepad(ed: SceneEditor): void {
-  const pads = connectedPads();
+export function pollGamepad(ed: SceneEditor, reading = true): void {
+  const pads = reading ? connectedPads() : [];
   const now = new Set<string>();
   const axes = new Map<string, number>();
   for (const code of ALL_AXES) axes.set(code, 0);
@@ -103,7 +111,9 @@ export function pollGamepad(ed: SceneEditor): void {
       if (code && button.pressed) now.add(code);
     });
     PAD_AXES.forEach((code, i) => keepStrongest(axes, code, pad.axes[i]));
-    PAD_TRIGGERS.forEach(([code, index]) => keepStrongest(axes, code, pad.buttons[index]?.value));
+    if (hasTriggers(pad)) {
+      PAD_TRIGGERS.forEach(([code, index]) => keepStrongest(axes, code, pad.buttons[index]?.value));
+    }
   }
   for (const [code, value] of axes) ed.set_axis(code, value);
   for (const code of held) if (!now.has(code)) ed.key_event(code, false);
@@ -167,9 +177,11 @@ function pressedForCapture(): Set<string> {
       const code = PAD_BUTTONS[i];
       if (code && (button.pressed || button.value >= CAPTURE_BUTTON)) codes.add(code);
     });
-    PAD_TRIGGERS.forEach(([code, index]) => {
-      if ((pad.buttons[index]?.value ?? 0) >= CAPTURE_AXIS) codes.add(code);
-    });
+    if (hasTriggers(pad)) {
+      PAD_TRIGGERS.forEach(([code, index]) => {
+        if ((pad.buttons[index]?.value ?? 0) >= CAPTURE_AXIS) codes.add(code);
+      });
+    }
     PAD_AXES.forEach((code, i) => {
       const raw = pad.axes[i] ?? 0;
       if (raw >= CAPTURE_AXIS) codes.add(`${code}+`);

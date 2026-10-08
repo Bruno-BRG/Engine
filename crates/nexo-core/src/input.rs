@@ -572,4 +572,51 @@ mod tests {
         let text = map.to_ron().unwrap();
         assert_eq!(InputMap::from_ron(&text).unwrap(), map);
     }
+
+    #[test]
+    fn trigger_edges_fire_only_on_the_change_frame() {
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 0.7);
+        assert!(input.action_just_pressed(&map, "fire"));
+        input.latch();
+        // Still held, and pushed further: no new edge.
+        input.set_axis("gamepad_lt", 0.9);
+        assert!(!input.action_just_pressed(&map, "fire"));
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_axis("gamepad_lt", 0.0);
+        assert!(input.action_released(&map, "fire"));
+        assert!(!input.action_just_pressed(&map, "fire"));
+        input.latch();
+        assert!(!input.action_released(&map, "fire"));
+    }
+
+    #[test]
+    fn trigger_has_no_negative_side() {
+        // Triggers are unsigned: "gamepad_lt-" reads the negative side, which a trigger never reaches.
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_lt-");
+        map.bind("boost", "gamepad_lt+");
+        let mut input = Input::default();
+        input.set_axis("gamepad_lt", 1.0);
+        assert!(!input.action_pressed(&map, "fire"));
+        assert!(input.action_pressed(&map, "boost"));
+    }
+
+    #[test]
+    fn action_stays_pressed_while_any_of_its_codes_is_held() {
+        // Two controls on the same action: releasing one does not release the action while the other holds.
+        let mut map = InputMap::defaults();
+        map.bind("fire", "gamepad_a");
+        map.bind("fire", "gamepad_rt");
+        let mut input = Input::default();
+        input.set_key("gamepad_a", true);
+        input.set_axis("gamepad_rt", 1.0);
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_key("gamepad_a", false);
+        assert!(input.action_pressed(&map, "fire"));
+        input.set_axis("gamepad_rt", 0.0);
+        assert!(!input.action_pressed(&map, "fire"));
+    }
 }
