@@ -1071,6 +1071,8 @@ pub(crate) mod tests {
             sources: vec![5],
             regs: 0,
             estado: None,
+            pilhas: Vec::new(),
+            pilha_de_op: Vec::new(),
         };
         let mut ctx = Context {
             owner: 5,

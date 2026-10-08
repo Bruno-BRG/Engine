@@ -1,5 +1,5 @@
-//! Depuração no editor (DBG-004): dados do desenho de física para o viewport. O método só lê a
-//! reprodução atual; a alternância de exibição fica no TypeScript.
+//! Depuração no editor (DBG-004): dados do desenho de física para o viewport. `debug_draw_json` only reads the
+//! current play session; the display toggle stays in TypeScript.
 //!
 //! Script debugger bridge (VIS-031, DBG-003). The methods only read or change the current play session. The
 //! TypeScript decides when to call them, and breakpoints and the followed instance outlive a single play session.
@@ -8,7 +8,7 @@ use crate::editor::{SceneEditor, js_err, to_json};
 use crate::host::Mundo;
 use crate::scripts::{self, Instancia, registrar};
 use nexo_core::Uid;
-use nexo_graph::{Host, TraceEvent, VmError};
+use nexo_graph::{Host, Quadro, TraceEvent, VmError};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -18,6 +18,16 @@ fn evento_json(e: &TraceEvent) -> Json {
     match e {
         TraceEvent::Executou { evento, node } => json!({"Executou": {"evento": evento, "node": node}}),
         TraceEvent::Valor { node, valor } => json!({"Valor": {"node": node, "valor": valor}}),
+    }
+}
+
+/// Call stack frame as JSON, as the TypeScript reads it (DBG-003): {"tipo": "evento" | "funcao", "no", "nome"} or
+/// {"tipo": "temporizador", "no"}. `no` is the node that opened the frame.
+fn quadro_json(q: &Quadro) -> Json {
+    match q {
+        Quadro::Evento { no, evento } => json!({"tipo": "evento", "no": no, "nome": evento}),
+        Quadro::Funcao { no, nome } => json!({"tipo": "funcao", "no": no, "nome": nome}),
+        Quadro::Temporizador { no } => json!({"tipo": "temporizador", "no": no}),
     }
 }
 
@@ -70,8 +80,9 @@ impl SceneEditor {
         to_json(&eventos)
     }
 
-    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento}]. `pausada` is also true at
-    /// a frame-end pause, where `node` and `evento` are null. An empty list without a play session.
+    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento, pilha}]. `pausada` is also
+    /// true at a frame-end pause, where `node`, `evento` and `pilha` are empty. `pilha` is the call stack of the paused
+    /// operation, from the event to the innermost frame (DBG-003). An empty list without a play session.
     pub fn debug_state(&self) -> Result<String, JsError> {
         let estado: Vec<Json> = match &self.play {
             Some(p) => p
@@ -79,11 +90,16 @@ impl SceneEditor {
                 .iter()
                 .map(|i| {
                     let pausa = i.pausa();
+                    let pilha: Vec<Json> = match pausa {
+                        Some(x) => x.pilha.iter().map(quadro_json).collect(),
+                        None => Vec::new(),
+                    };
                     json!({
                         "uid": i.dono.to_string(),
                         "pausada": i.pausada(),
                         "node": pausa.map(|x| x.node),
                         "evento": pausa.map(|x| x.evento.as_str()),
+                        "pilha": pilha,
                     })
                 })
                 .collect(),
@@ -144,5 +160,32 @@ impl SceneEditor {
         registrar(inst, &p.scene, &mut self.console, resultado);
         self.atualizar_depuracao();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quadros_da_pilha_tem_o_formato_que_o_typescript_le() {
+        assert_eq!(
+            quadro_json(&Quadro::Evento {
+                no: 3,
+                evento: "OnReady".into()
+            }),
+            json!({"tipo": "evento", "no": 3, "nome": "OnReady"})
+        );
+        assert_eq!(
+            quadro_json(&Quadro::Funcao {
+                no: 7,
+                nome: "soma".into()
+            }),
+            json!({"tipo": "funcao", "no": 7, "nome": "soma"})
+        );
+        assert_eq!(
+            quadro_json(&Quadro::Temporizador { no: 9 }),
+            json!({"tipo": "temporizador", "no": 9})
+        );
     }
 }

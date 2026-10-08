@@ -260,6 +260,18 @@ pub enum Op {
     },
 }
 
+/// Quadro da pilha de chamadas de uma op (DBG-003). Funções e temporizadores são embutidos no lugar de quem os
+/// chama, então cada quadro guarda o nó que o abriu: o evento, a chamada ou o temporizador.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Quadro {
+    /// The event that starts the program ("OnReady", "OnProcess"...). Always the first frame.
+    Evento { no: u64, evento: String },
+    /// A function call (CallFunction): the calling node and the function name.
+    Funcao { no: u64, nome: String },
+    /// The timeout branch of a timer (TimerStart), which runs in its own task.
+    Temporizador { no: u64 },
+}
+
 /// Programa de um nó de evento: as ops que rodam quando o evento dispara.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
@@ -274,6 +286,21 @@ pub struct Program {
     pub regs: usize,
     /// Nome do estado, nos eventos "State", "StateEnter" e "StateExit". Nos outros eventos, vazio.
     pub estado: Option<String>,
+    /// Pilhas de chamadas distintas do programa, cada uma do evento até o quadro mais interno (DBG-003). Uma função
+    /// chamada em dois lugares tem uma pilha por chamada.
+    pub pilhas: Vec<Vec<Quadro>>,
+    /// Índice em `pilhas` da pilha de cada op, no mesmo índice de `ops`.
+    pub pilha_de_op: Vec<usize>,
+}
+
+impl Program {
+    /// Call stack of the op at `pc`, from the event to the innermost frame (DBG-003). Empty when `pc` is not an op.
+    pub fn pilha_em(&self, pc: usize) -> &[Quadro] {
+        match self.pilha_de_op.get(pc).and_then(|&i| self.pilhas.get(i)) {
+            Some(pilha) => pilha.as_slice(),
+            None => &[],
+        }
+    }
 }
 
 /// Resultado da compilação: as variáveis do script, um programa por nó de evento e o estado inicial.
@@ -354,6 +381,12 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         produzidas: BTreeMap::new(),
         chamadas: Vec::new(),
         retornos: Vec::new(),
+        quadros: vec![Quadro::Evento {
+            no: event.id,
+            evento: event.kind.clone(),
+        }],
+        pilhas: Vec::new(),
+        pilha_de_op: Vec::new(),
     };
     e.flow(event.id, "exec")?;
     // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
@@ -368,6 +401,8 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         sources: e.sources,
         regs: e.regs,
         estado,
+        pilhas: e.pilhas,
+        pilha_de_op: e.pilha_de_op,
     })
 }
 
@@ -397,14 +432,33 @@ struct Emitter<'g> {
     chamadas: Vec<u64>,
     /// Saltos de Return à espera do fim do corpo da função que está sendo embutida, uma lista por chamada.
     retornos: Vec<Vec<usize>>,
+    /// Quadros da pilha de chamadas em compilação: o evento, depois as funções e os temporizadores que contêm
+    /// o nó.
+    quadros: Vec<Quadro>,
+    /// Pilhas de chamadas distintas já vistas. Cada op guarda só o índice da sua.
+    pilhas: Vec<Vec<Quadro>>,
+    /// Índice em `pilhas` da pilha de cada op emitida.
+    pilha_de_op: Vec<usize>,
 }
 
 impl<'g> Emitter<'g> {
-    /// Acrescenta uma op e devolve o índice dela.
+    /// Acrescenta uma op e devolve o índice dela. A op guarda a pilha de chamadas atual (DBG-003).
     fn emit(&mut self, op: Op, source: u64) -> usize {
         self.ops.push(op);
         self.sources.push(source);
+        let pilha = self.indice_da_pilha();
+        self.pilha_de_op.push(pilha);
         self.ops.len() - 1
+    }
+
+    /// Índice em `pilhas` da pilha de chamadas atual. Uma pilha entra na tabela uma vez, então a tabela segue
+    /// pequena: ela cresce com o número de caminhos de chamada distintos, não com o de ops.
+    fn indice_da_pilha(&mut self) -> usize {
+        if let Some(i) = self.pilhas.iter().position(|p| *p == self.quadros) {
+            return i;
+        }
+        self.pilhas.push(self.quadros.clone());
+        self.pilhas.len() - 1
     }
 
     fn reg(&mut self) -> Reg {
@@ -607,7 +661,9 @@ impl<'g> Emitter<'g> {
                 let to_end = self.emit(Op::Jump { target: 0 }, id);
                 let entry = self.ops.len();
                 self.patch(spawn, entry);
+                self.quadros.push(Quadro::Temporizador { no: id });
                 self.flow(id, "timeout")?;
+                self.quadros.pop();
                 let end = self.ops.len();
                 self.patch(to_end, end);
                 Ok(())
@@ -704,7 +760,12 @@ impl<'g> Emitter<'g> {
                 }
                 self.chamadas.push(def.id);
                 self.retornos.push(Vec::new());
+                self.quadros.push(Quadro::Funcao {
+                    no: id,
+                    nome: nome.clone(),
+                });
                 self.flow(def.id, "exec")?;
+                self.quadros.pop();
                 let fim = self.ops.len();
                 for salto in self.retornos.pop().unwrap_or_default() {
                     self.patch(salto, fim);
@@ -1115,5 +1176,125 @@ mod tests {
                 .any(|e| e.node == Some(inst) && e.message.contains("antes do nó rodar")),
             "{erros:?}"
         );
+    }
+
+    /// Print de uma linha, com a mensagem embutida.
+    fn imprime(g: &mut Graph, msg: &str) -> u64 {
+        let p = adiciona(g, "Print");
+        g.set_value(p, "msg", Value::String(msg.into())).unwrap();
+        p
+    }
+
+    /// Chamada da função "f" (nome embutido) no nó dado.
+    fn chama(g: &mut Graph, nome: &str) -> u64 {
+        let c = adiciona(g, "CallFunction");
+        g.set_value(c, "name", Value::String(nome.into())).unwrap();
+        c
+    }
+
+    #[test]
+    fn funcao_chamada_duas_vezes_tem_pilha_por_chamada() {
+        // OnReady chama "f" duas vezes em sequência. O corpo de "f" (um Print) é embutido em cada chamada.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let corpo = imprime(&mut g, "x");
+        g.connect((def, "exec"), (corpo, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let primeira = chama(&mut g, "f");
+        let segunda = chama(&mut g, "f");
+        g.connect((ev, "exec"), (primeira, "exec")).unwrap();
+        g.connect((primeira, "exec"), (segunda, "exec")).unwrap();
+        let c = compile(&g).unwrap();
+        let p = &c.programs[0];
+        let pilhas_do_corpo: Vec<Vec<Quadro>> = (0..p.ops.len())
+            .filter(|&pc| p.sources[pc] == corpo)
+            .map(|pc| p.pilha_em(pc).to_vec())
+            .collect();
+        let da_chamada = |chamada: u64| {
+            vec![
+                Quadro::Evento {
+                    no: ev,
+                    evento: "OnReady".into(),
+                },
+                Quadro::Funcao {
+                    no: chamada,
+                    nome: "f".into(),
+                },
+            ]
+        };
+        assert!(
+            pilhas_do_corpo.contains(&da_chamada(primeira)),
+            "{pilhas_do_corpo:?}"
+        );
+        assert!(
+            pilhas_do_corpo.contains(&da_chamada(segunda)),
+            "{pilhas_do_corpo:?}"
+        );
+        assert!(
+            pilhas_do_corpo
+                .iter()
+                .all(|pilha| *pilha == da_chamada(primeira) || *pilha == da_chamada(segunda)),
+            "{pilhas_do_corpo:?}"
+        );
+    }
+
+    #[test]
+    fn depois_da_chamada_a_pilha_volta_ao_evento() {
+        // OnReady: chama "f" e depois imprime "depois", que já não está dentro da função.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        g.set_value(def, "name", Value::String("f".into())).unwrap();
+        let corpo = imprime(&mut g, "dentro");
+        g.connect((def, "exec"), (corpo, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let c = chama(&mut g, "f");
+        let depois = imprime(&mut g, "depois");
+        g.connect((ev, "exec"), (c, "exec")).unwrap();
+        g.connect((c, "exec"), (depois, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let pilha_do = |no: u64| -> Vec<Quadro> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == no)
+                .map(|pc| p.pilha_em(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let so_o_evento = vec![Quadro::Evento {
+            no: ev,
+            evento: "OnReady".into(),
+        }];
+        assert_eq!(pilha_do(depois), so_o_evento);
+        assert_ne!(pilha_do(corpo), so_o_evento);
+    }
+
+    #[test]
+    fn ramo_de_tempo_esgotado_entra_na_pilha_do_temporizador() {
+        // TimerStart: "iniciou" roda na tarefa atual; "fim" roda na tarefa do temporizador.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let tm = adiciona(&mut g, "TimerStart");
+        g.set_value(tm, "seconds", Value::Float(0.2)).unwrap();
+        g.connect((ev, "exec"), (tm, "exec")).unwrap();
+        let iniciou = imprime(&mut g, "iniciou");
+        g.connect((tm, "started"), (iniciou, "exec")).unwrap();
+        let fim = imprime(&mut g, "fim");
+        g.connect((tm, "timeout"), (fim, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let p = &compiled.programs[0];
+        let pilha_do = |no: u64| -> Vec<Quadro> {
+            (0..p.ops.len())
+                .filter(|&pc| p.sources[pc] == no)
+                .map(|pc| p.pilha_em(pc).to_vec())
+                .next()
+                .unwrap()
+        };
+        let evento = Quadro::Evento {
+            no: ev,
+            evento: "OnReady".into(),
+        };
+        assert_eq!(pilha_do(iniciou), vec![evento.clone()]);
+        assert_eq!(pilha_do(fim), vec![evento, Quadro::Temporizador { no: tm }]);
     }
 }

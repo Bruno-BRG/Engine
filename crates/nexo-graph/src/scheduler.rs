@@ -3,17 +3,19 @@
 //! pontos de parada, o passo a passo e o rastro para o editor. Cada instância tem o seu agendador: a escolha de
 //! instância no depurador é só qual agendador (e qual contexto) o editor mostra.
 
-use crate::ir::Compiled;
+use crate::ir::{Compiled, Quadro};
 use crate::vm::{
     Ambiente, Context, Host, Latente, Parada, Tarefa, TraceEvent, Vm, VmError, avancar, progride,
 };
 use std::collections::BTreeSet;
 
-/// Onde a execução parou para depuração: o nó da op que vai rodar e o evento do programa.
+/// Onde a execução parou para depuração: o nó da op que vai rodar, o evento do programa e a pilha de chamadas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pausa {
     pub node: u64,
     pub evento: String,
+    /// Call stack of the paused operation, from the event to the innermost frame (DBG-003).
+    pub pilha: Vec<Quadro>,
 }
 
 /// Tarefas de uma instância, com a pausa de depuração, os sinais pendentes e o rastro.
@@ -38,8 +40,12 @@ impl Scheduler {
     }
 
     /// Cria uma tarefa para cada programa do evento `evento` ("OnReady", "OnProcess"...). Chame a cada quadro
-    /// para os eventos de quadro; os de início, uma vez.
+    /// para os eventos de quadro; os de início, uma vez. Does nothing while paused, so a paused instance
+    /// does not pile up tasks (DBG-003).
     pub fn iniciar(&mut self, compiled: &Compiled, evento: &str) {
+        if self.pausa.is_some() {
+            return;
+        }
         for (i, programa) in compiled.programs.iter().enumerate() {
             if programa.event == evento {
                 self.tarefas.push(Tarefa::nova(i, programa));
@@ -183,8 +189,11 @@ impl Scheduler {
     }
 
     /// Cria uma tarefa para cada nó "State" do estado dado. Chame a cada quadro, com o estado ativo do contexto
-    /// (`ctx.estado`), antes do `tick`.
+    /// (`ctx.estado`), antes do `tick`. Does nothing while paused (DBG-003).
     pub fn iniciar_estado(&mut self, compiled: &Compiled, estado: &str) {
+        if self.pausa.is_some() {
+            return;
+        }
         self.iniciar_evento(compiled, "State", estado);
     }
 
@@ -284,6 +293,7 @@ impl Scheduler {
                     self.pausa = Some(Pausa {
                         node,
                         evento: programa.event.clone(),
+                        pilha: programa.pilha_em(self.tarefas[i].pc).to_vec(),
                     });
                     self.inicio = i;
                     return Ok(());
@@ -974,5 +984,152 @@ mod tests {
                 .any(|e| e.node == Some(vai) && e.message.contains("estado 'Nada' não existe")),
             "{erros:?}"
         );
+    }
+
+    /// Função "f" com um Print "dentro" e um "fim" depois dele. OnReady chama "f". Devolve os ids: o evento, a
+    /// chamada e o Print "dentro".
+    fn grafo_com_pausa_na_funcao() -> (Graph, u64, u64, u64) {
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "f");
+        let dentro = imprime(&mut g, (def, "exec"), "dentro");
+        imprime(&mut g, (dentro, "exec"), "fim");
+        let ev = adiciona(&mut g, "OnReady");
+        let chamada = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chamada, "name", "f");
+        g.connect((ev, "exec"), (chamada, "exec")).unwrap();
+        (g, ev, chamada, dentro)
+    }
+
+    #[test]
+    fn pausa_dentro_de_funcao_leva_a_pilha_e_continuar_termina() {
+        let (g, ev, chamada, dentro) = grafo_com_pausa_na_funcao();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_ponto_de_parada(dentro, true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+
+        let pausa = sched
+            .pausa()
+            .expect("a função devia pausar no ponto de parada");
+        assert_eq!(pausa.node, dentro);
+        assert_eq!(
+            pausa.pilha,
+            [
+                Quadro::Evento {
+                    no: ev,
+                    evento: "OnReady".into()
+                },
+                Quadro::Funcao {
+                    no: chamada,
+                    nome: "f".into()
+                },
+            ]
+        );
+        assert!(host.impressos.is_empty());
+
+        // O ponto de parada não dispara de novo no mesmo nó: o resto da função roda e a pilha some.
+        sched.continuar(&compiled, &mut ctx, &mut host).unwrap();
+        assert!(sched.pausa().is_none());
+        assert_eq!(
+            host.impressos,
+            [
+                (LogLevel::Info, "dentro".to_string()),
+                (LogLevel::Info, "fim".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn pausa_no_temporizador_dentro_de_funcao_tem_a_cadeia_completa() {
+        // "f" inicia um temporizador de 0,1 s; o ramo de tempo esgotado imprime "tarde", com ponto de parada.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "f");
+        let tm = adiciona(&mut g, "TimerStart");
+        g.set_value(tm, "seconds", Value::Float(0.1)).unwrap();
+        g.connect((def, "exec"), (tm, "exec")).unwrap();
+        let tarde = imprime(&mut g, (tm, "timeout"), "tarde");
+        let ev = adiciona(&mut g, "OnReady");
+        let chamada = adiciona(&mut g, "CallFunction");
+        texto(&mut g, chamada, "name", "f");
+        g.connect((ev, "exec"), (chamada, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_ponto_de_parada(tarde, true);
+        sched.iniciar(&compiled, "OnReady");
+        for _ in 0..10 {
+            sched.tick(&compiled, &mut ctx, &mut host, 0.1).unwrap();
+            if sched.pausa().is_some() {
+                break;
+            }
+        }
+
+        let pausa = sched
+            .pausa()
+            .expect("o temporizador devia pausar no ponto de parada");
+        assert_eq!(pausa.node, tarde);
+        assert_eq!(
+            pausa.pilha,
+            [
+                Quadro::Evento {
+                    no: ev,
+                    evento: "OnReady".into()
+                },
+                Quadro::Funcao {
+                    no: chamada,
+                    nome: "f".into()
+                },
+                Quadro::Temporizador { no: tm },
+            ]
+        );
+        assert!(host.impressos.is_empty());
+    }
+
+    #[test]
+    fn iniciar_em_pausa_nao_cresce_a_fila() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnProcess");
+        let pa = imprime(&mut g, (ev, "exec"), "a");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_ponto_de_parada(pa, true);
+        sched.iniciar(&compiled, "OnProcess");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert!(sched.pausa().is_some());
+        let tarefas = sched.tarefas();
+
+        for _ in 0..10 {
+            sched.iniciar(&compiled, "OnProcess");
+            sched.iniciar_estado(&compiled, "");
+        }
+
+        assert_eq!(sched.tarefas(), tarefas, "iniciar em pausa criou tarefas");
+    }
+
+    #[test]
+    fn recarga_limpa_a_pausa_do_agendador() {
+        let (g, _, _, dentro) = grafo_com_pausa_na_funcao();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut sched = Scheduler::new();
+        sched.definir_ponto_de_parada(dentro, true);
+        sched.iniciar(&compiled, "OnReady");
+        sched
+            .tick(&compiled, &mut ctx, &mut Mock::default(), 0.0)
+            .unwrap();
+        assert!(sched.pausa().is_some());
+
+        let _ = sched.recarregar(&ctx, &compiled, &compiled);
+
+        assert!(sched.pausa().is_none());
+        assert_eq!(sched.tarefas(), 0);
     }
 }
