@@ -36,7 +36,8 @@ export interface GraphNode {
   id: number;
   kind: string;
   position: [number, number];
-  values: Record<string, Value>;
+  /** Valores embutidos. Ausente quando o nó não tem nenhum: o Rust omite o campo vazio. */
+  values?: Record<string, Value>;
 }
 
 export interface PinRef {
@@ -80,9 +81,22 @@ export interface GraphSnapshot {
   pins: ResolvedPin[];
 }
 
+/** Erro de validação do grafo. `suggestion` é null quando não há um jeito claro de corrigir. */
 export interface GraphError {
   node: number | null;
   message: string;
+  suggestion: string | null;
+}
+
+/** Motivo de uma ligação recusada (VIS-013): o que aconteceu e, quando há, como corrigir. */
+export interface Recusa {
+  message: string;
+  suggestion: string | null;
+}
+
+/** Texto de um motivo para o toast e para os títulos: o que aconteceu, seguido da sugestão. */
+export function textoRecusa(r: Recusa): string {
+  return r.suggestion ? `${r.message}. ${r.suggestion}` : r.message;
 }
 
 /** Trecho copiado (copy_fragment): o que vai para a área de transferência, no mesmo formato do Rust. */

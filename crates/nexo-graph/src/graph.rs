@@ -86,11 +86,13 @@ pub struct Fragment {
     pub variables: Vec<Variable>,
 }
 
-/// Erro de validação ou de compilação. `node` é o nó onde o problema foi achado, quando há um.
+/// Erro de validação ou de compilação. `node` é o nó onde o problema foi achado, quando há um. `suggestion` diz
+/// como corrigir, quando o erro é uma recusa de ligação com caminho claro (VIS-013).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompileError {
     pub node: Option<u64>,
     pub message: String,
+    pub suggestion: Option<&'static str>,
 }
 
 impl fmt::Display for CompileError {
@@ -105,6 +107,137 @@ pub(crate) fn erro(node: u64, message: impl Into<String>) -> CompileError {
     CompileError {
         node: Some(node),
         message: message.into(),
+        suggestion: None,
+    }
+}
+
+/// Erro de validação a partir de uma recusa: o texto e a sugestão vêm do motivo.
+pub(crate) fn erro_de(node: u64, motivo: &Recusa) -> CompileError {
+    CompileError {
+        node: Some(node),
+        message: motivo.message(),
+        suggestion: Some(motivo.suggestion()),
+    }
+}
+
+/// Por que uma ligação ou um fio é recusado (VIS-013). `message()` diz o que aconteceu e é o texto que o editor
+/// mostra; `suggestion()` diz como corrigir. Os textos são os de sempre: `collapse_to_function` e os testes os
+/// comparam por substring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Recusa {
+    /// O nó não existe no grafo.
+    NoAusente { node: u64 },
+    /// O nó não tem a saída (`saida`) ou a entrada `pin`. `etiqueta` é o rótulo do nó, por exemplo "Add#3".
+    PinoAusente {
+        etiqueta: String,
+        pin: String,
+        saida: bool,
+    },
+    /// O tipo do nó não está na biblioteca.
+    TipoDesconhecido { kind: String },
+    /// As duas pontas têm tipos diferentes. `de` e `para` são "nó.pino", com o rótulo do nó.
+    TiposIncompativeis {
+        de: String,
+        ty_de: PinType,
+        para: String,
+        ty_para: PinType,
+    },
+    /// A entrada já tem um fio. Vale para fluxo e para dados.
+    EntradaOcupada { node: u64, pin: String },
+    /// A ligação fecharia um ciclo da classe dada (`fluxo` ou dados). `de` é a saída, `para` a entrada.
+    CicloAoLigar { fluxo: bool, de: u64, para: u64 },
+    /// A validação achou um ciclo que já está no grafo.
+    CicloNoGrafo { fluxo: bool, node: u64 },
+    /// Reroute sem fio na entrada: o tipo dele ainda não existe.
+    RerouteSemEntrada { node: u64 },
+    /// Cadeia de reroutes que volta sobre si mesma.
+    CicloReroute { node: u64 },
+    /// Nó de variável sem o nome embutido.
+    VariavelSemNome { etiqueta: String },
+    /// O nome aponta para uma variável que o script não tem.
+    VariavelInexistente { name: String },
+    /// Entrada com mais de um fio (grafo editado à mão).
+    EntradaDupla { node: u64, pin: String },
+}
+
+/// Texto da classe de ciclo, como aparece nas mensagens.
+fn classe_de_ciclo(fluxo: bool) -> &'static str {
+    if fluxo { "de fluxo" } else { "de dados" }
+}
+
+impl Recusa {
+    /// O que aconteceu, em português. É o texto que o editor mostra.
+    pub fn message(&self) -> String {
+        match self {
+            Recusa::NoAusente { node } => format!("nó {node} não existe no grafo"),
+            Recusa::PinoAusente {
+                etiqueta,
+                pin,
+                saida: true,
+            } => format!("{etiqueta} não tem a saída '{pin}'"),
+            Recusa::PinoAusente {
+                etiqueta,
+                pin,
+                saida: false,
+            } => format!("{etiqueta} não tem a entrada '{pin}'"),
+            Recusa::TipoDesconhecido { kind } => format!("tipo de nó desconhecido: '{kind}'"),
+            Recusa::TiposIncompativeis {
+                de,
+                ty_de,
+                para,
+                ty_para,
+            } => format!(
+                "tipos incompatíveis: {de} ({}) não pode ligar em {para} ({})",
+                ty_de.nome(),
+                ty_para.nome()
+            ),
+            Recusa::EntradaOcupada { node, pin } => {
+                format!("a entrada '{pin}' do nó {node} já está conectada")
+            }
+            Recusa::CicloAoLigar { fluxo, de, para } => format!(
+                "ligação criaria um ciclo {}: o nó {para} já alcança o nó {de}",
+                classe_de_ciclo(*fluxo)
+            ),
+            Recusa::CicloNoGrafo { fluxo, node } => {
+                format!("ciclo {} no nó {node}", classe_de_ciclo(*fluxo))
+            }
+            Recusa::RerouteSemEntrada { node } => {
+                format!("reroute {node} sem fio de entrada: tipo indefinido")
+            }
+            Recusa::CicloReroute { node } => format!("ciclo de reroute no nó {node}"),
+            Recusa::VariavelSemNome { etiqueta } => {
+                format!("{etiqueta} precisa do nome da variável embutido")
+            }
+            Recusa::VariavelInexistente { name } => format!("variável '{name}' não existe"),
+            Recusa::EntradaDupla { node, pin } => {
+                format!("a entrada '{pin}' do nó {node} está ligada mais de uma vez")
+            }
+        }
+    }
+
+    /// Como corrigir. Toda recusa de ligação tem uma sugestão: o editor a mostra junto do motivo.
+    pub fn suggestion(&self) -> &'static str {
+        match self {
+            Recusa::NoAusente { .. }
+            | Recusa::PinoAusente { .. }
+            | Recusa::TipoDesconhecido { .. } => "Recrie o nó pela busca",
+            Recusa::TiposIncompativeis { .. } => {
+                "Ligue a um pino da mesma cor e forma, ou solte no vazio para buscar um compatível (fluxo só liga a fluxo)"
+            }
+            Recusa::EntradaOcupada { .. } => "Remova o fio atual antes",
+            Recusa::CicloAoLigar { fluxo: true, .. } | Recusa::CicloNoGrafo { fluxo: true, .. } => {
+                "Use While ou ForEach para repetir"
+            }
+            Recusa::CicloAoLigar { fluxo: false, .. }
+            | Recusa::CicloNoGrafo { fluxo: false, .. } => {
+                "Guarde com SetVariable e leia com GetVariable"
+            }
+            Recusa::RerouteSemEntrada { .. } => "Ligue a entrada do reroute primeiro",
+            Recusa::CicloReroute { .. } => "Remova um dos fios da cadeia de reroutes",
+            Recusa::VariavelSemNome { .. } => "Escreva o nome da variável no campo do nó",
+            Recusa::VariavelInexistente { .. } => "Crie no painel Variáveis ou escolha outra",
+            Recusa::EntradaDupla { .. } => "Remova um dos fios que chegam nela",
+        }
     }
 }
 
@@ -145,8 +278,10 @@ fn pin_ref((node, pin): (u64, &str)) -> PinRef {
 }
 
 /// Definição do tipo do nó na biblioteca, ou erro quando o tipo não existe.
-pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, String> {
-    library::find(&node.kind).ok_or_else(|| format!("tipo de nó desconhecido: '{}'", node.kind))
+pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, Recusa> {
+    library::find(&node.kind).ok_or_else(|| Recusa::TipoDesconhecido {
+        kind: node.kind.clone(),
+    })
 }
 
 impl Graph {
@@ -266,7 +401,10 @@ impl Graph {
             let n = self
                 .node(node)
                 .ok_or_else(|| format!("nó {node} não existe no grafo"))?;
-            (self.input_type(n, pin)?, n.etiqueta())
+            (
+                self.input_type(n, pin).map_err(|e| e.message())?,
+                n.etiqueta(),
+            )
         };
         if value.ty() != ty {
             return Err(format!(
@@ -568,7 +706,7 @@ impl Graph {
             return Err("nenhum nó selecionado".into());
         }
         for n in &dentro {
-            let def = def_of(n)?;
+            let def = def_of(n).map_err(|e| e.message())?;
             if def.event || n.kind == "Function" {
                 return Err(format!("{} não pode entrar numa função", n.etiqueta()));
             }
@@ -647,7 +785,7 @@ impl Graph {
     /// Liga a saída `from` (nó, pino) à entrada `to`. Recusa pino inexistente, tipos diferentes, entrada já
     /// ligada e ciclo. Em caso de erro, o grafo fica como estava.
     pub fn connect(&mut self, from: (u64, &str), to: (u64, &str)) -> Result<(), String> {
-        self.can_connect(from, to)?;
+        self.can_connect(from, to).map_err(|e| e.message())?;
         self.wires.push(Wire {
             from: pin_ref(from),
             to: pin_ref(to),
@@ -656,26 +794,26 @@ impl Graph {
     }
 
     /// Diz se `connect` aceitaria a ligação, sem mudar o grafo. Devolve o tipo do fio, ou o motivo da recusa
-    /// (VIS-013): o editor mostra o motivo ao soltar o fio e ao passar sobre a entrada.
-    pub fn can_connect(&self, from: (u64, &str), to: (u64, &str)) -> Result<PinType, String> {
+    /// (VIS-013): o editor mostra o motivo e a sugestão ao soltar o fio e ao passar sobre a entrada.
+    pub fn can_connect(&self, from: (u64, &str), to: (u64, &str)) -> Result<PinType, Recusa> {
         let from = pin_ref(from);
         let to = pin_ref(to);
         let ty = self.endpoint_type(&from, &to)?;
         // Cada entrada aceita um fio só. Vale para fluxo e para dados.
         if self.wires.iter().any(|w| w.to == to) {
-            return Err(format!(
-                "a entrada '{}' do nó {} já está conectada",
-                to.pin, to.node
-            ));
+            return Err(Recusa::EntradaOcupada {
+                node: to.node,
+                pin: to.pin,
+            });
         }
         // Há ciclo se o nó de destino já alcança o de origem pelos fios da mesma classe.
         let flow = ty == PinType::Flow;
         if self.reaches(to.node, from.node, flow) {
-            let classe = if flow { "de fluxo" } else { "de dados" };
-            return Err(format!(
-                "ligação criaria um ciclo {classe}: o nó {} já alcança o nó {}",
-                to.node, from.node
-            ));
+            return Err(Recusa::CicloAoLigar {
+                fluxo: flow,
+                de: from.node,
+                para: to.node,
+            });
         }
         Ok(ty)
     }
@@ -708,13 +846,13 @@ impl Graph {
 
     /// Tipo do fio de `from` até `to`, se as duas pontas existem, têm o pino e o tipo bate. A entrada de um
     /// reroute aceita qualquer tipo: o reroute copia o tipo da saída que o alimenta.
-    pub(crate) fn endpoint_type(&self, from: &PinRef, to: &PinRef) -> Result<PinType, String> {
+    pub(crate) fn endpoint_type(&self, from: &PinRef, to: &PinRef) -> Result<PinType, Recusa> {
         let a = self
             .node(from.node)
-            .ok_or_else(|| format!("nó {} não existe no grafo", from.node))?;
+            .ok_or(Recusa::NoAusente { node: from.node })?;
         let b = self
             .node(to.node)
-            .ok_or_else(|| format!("nó {} não existe no grafo", to.node))?;
+            .ok_or(Recusa::NoAusente { node: to.node })?;
         let out = self.output_type(a, &from.pin)?;
         let inp = if b.kind == REROUTE && to.pin == "in" {
             out
@@ -722,42 +860,47 @@ impl Graph {
             self.input_type(b, &to.pin)?
         };
         if out != inp {
-            return Err(format!(
-                "tipos incompatíveis: {}.{} ({}) não pode ligar em {}.{} ({})",
-                a.etiqueta(),
-                from.pin,
-                out.nome(),
-                b.etiqueta(),
-                to.pin,
-                inp.nome()
-            ));
+            return Err(Recusa::TiposIncompativeis {
+                de: format!("{}.{}", a.etiqueta(), from.pin),
+                ty_de: out,
+                para: format!("{}.{}", b.etiqueta(), to.pin),
+                ty_para: inp,
+            });
         }
         Ok(out)
     }
 
     /// Tipo de uma saída. Nós de variável seguem o tipo da variável que nomeiam; reroutes seguem o fio.
-    pub(crate) fn output_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, String> {
+    pub(crate) fn output_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, Recusa> {
         let def = def_of(node)?;
         let p = def
             .outputs
             .iter()
             .find(|p| p.name == pin)
-            .ok_or_else(|| format!("{} não tem a saída '{pin}'", node.etiqueta()))?;
+            .ok_or_else(|| Recusa::PinoAusente {
+                etiqueta: node.etiqueta(),
+                pin: pin.to_string(),
+                saida: true,
+            })?;
         self.resolve(node, p)
     }
 
     /// Tipo de uma entrada. Nós de variável seguem o tipo da variável que nomeiam; reroutes seguem o fio.
-    pub(crate) fn input_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, String> {
+    pub(crate) fn input_type(&self, node: &GraphNode, pin: &str) -> Result<PinType, Recusa> {
         let def = def_of(node)?;
         let p = def
             .inputs
             .iter()
             .find(|p| p.name == pin)
-            .ok_or_else(|| format!("{} não tem a entrada '{pin}'", node.etiqueta()))?;
+            .ok_or_else(|| Recusa::PinoAusente {
+                etiqueta: node.etiqueta(),
+                pin: pin.to_string(),
+                saida: false,
+            })?;
         self.resolve(node, p)
     }
 
-    fn resolve(&self, node: &GraphNode, pin: &PinDef) -> Result<PinType, String> {
+    fn resolve(&self, node: &GraphNode, pin: &PinDef) -> Result<PinType, Recusa> {
         if node.kind == REROUTE {
             return self.tipo_do_reroute(node);
         }
@@ -769,21 +912,21 @@ impl Graph {
 
     /// Tipo que um reroute passa adiante: o da saída que o alimenta, seguindo a cadeia de reroutes. Erro se a
     /// cadeia não tem origem (entrada sem fio) ou se ela dá a volta sobre si mesma.
-    fn tipo_do_reroute(&self, node: &GraphNode) -> Result<PinType, String> {
+    fn tipo_do_reroute(&self, node: &GraphNode) -> Result<PinType, Recusa> {
         let mut vistos = HashSet::new();
         let mut atual = node.id;
         loop {
             if !vistos.insert(atual) {
-                return Err(format!("ciclo de reroute no nó {atual}"));
+                return Err(Recusa::CicloReroute { node: atual });
             }
             let w = self
                 .wires
                 .iter()
                 .find(|w| w.to.node == atual && w.to.pin == "in")
-                .ok_or_else(|| format!("reroute {atual} sem fio de entrada: tipo indefinido"))?;
+                .ok_or(Recusa::RerouteSemEntrada { node: atual })?;
             let origem = self
                 .node(w.from.node)
-                .ok_or_else(|| format!("nó {} não existe no grafo", w.from.node))?;
+                .ok_or(Recusa::NoAusente { node: w.from.node })?;
             if origem.kind == REROUTE {
                 atual = origem.id;
                 continue;
@@ -794,18 +937,19 @@ impl Graph {
 
     /// Variável nomeada pelo nó. O nome é um valor embutido: não pode vir de fio, porque a variável é fixa na
     /// compilação.
-    pub(crate) fn variable_of(&self, node: &GraphNode) -> Result<&Variable, String> {
+    pub(crate) fn variable_of(&self, node: &GraphNode) -> Result<&Variable, Recusa> {
         let name = match node.values.get("name") {
             Some(Value::String(s)) => s.as_str(),
             _ => {
-                return Err(format!(
-                    "{} precisa do nome da variável embutido",
-                    node.etiqueta()
-                ));
+                return Err(Recusa::VariavelSemNome {
+                    etiqueta: node.etiqueta(),
+                });
             }
         };
         self.variable(name)
-            .ok_or_else(|| format!("variável '{name}' não existe"))
+            .ok_or_else(|| Recusa::VariavelInexistente {
+                name: name.to_string(),
+            })
     }
 
     /// True se `goal` é alcançável a partir de `start`, seguindo só os fios de fluxo (`flow` = true) ou só os
@@ -880,6 +1024,7 @@ impl Graph {
                 erros.push(CompileError {
                     node: Some(id),
                     message: format!("id repetido: {id}"),
+                    suggestion: None,
                 });
             }
         }
@@ -887,8 +1032,8 @@ impl Graph {
         for node in &self.nodes {
             let def = match def_of(node) {
                 Ok(def) => def,
-                Err(msg) => {
-                    erros.push(erro(node.id, msg));
+                Err(motivo) => {
+                    erros.push(erro_de(node.id, &motivo));
                     continue;
                 }
             };
@@ -904,7 +1049,7 @@ impl Graph {
                         ),
                     )),
                     Ok(_) => {}
-                    Err(msg) => erros.push(erro(node.id, msg)),
+                    Err(motivo) => erros.push(erro_de(node.id, &motivo)),
                 }
             }
             for p in &def.inputs {
@@ -924,25 +1069,25 @@ impl Graph {
                 }
             }
             if (node.kind == "GetVariable" || node.kind == "SetVariable")
-                && let Err(msg) = self.variable_of(node)
+                && let Err(motivo) = self.variable_of(node)
             {
-                erros.push(erro(node.id, msg));
+                erros.push(erro_de(node.id, &motivo));
             }
         }
 
         let mut ligadas = HashSet::new();
         for w in &self.wires {
-            if let Err(msg) = self.endpoint_type(&w.from, &w.to) {
-                erros.push(erro(w.to.node, msg));
+            if let Err(motivo) = self.endpoint_type(&w.from, &w.to) {
+                erros.push(erro_de(w.to.node, &motivo));
                 continue;
             }
             if !ligadas.insert(&w.to) {
-                erros.push(erro(
+                erros.push(erro_de(
                     w.to.node,
-                    format!(
-                        "a entrada '{}' do nó {} está ligada mais de uma vez",
-                        w.to.pin, w.to.node
-                    ),
+                    &Recusa::EntradaDupla {
+                        node: w.to.node,
+                        pin: w.to.pin.clone(),
+                    },
                 ));
             }
         }
@@ -953,17 +1098,20 @@ impl Graph {
                 erros.push(CompileError {
                     node: None,
                     message: "nome de variável vazio".into(),
+                    suggestion: None,
                 });
             } else if !nomes.insert(&v.name) {
                 erros.push(CompileError {
                     node: None,
                     message: format!("variável '{}' declarada mais de uma vez", v.name),
+                    suggestion: None,
                 });
             }
             if v.ty == PinType::Flow {
                 erros.push(CompileError {
                     node: None,
                     message: format!("variável '{}' não pode ser do tipo fluxo", v.name),
+                    suggestion: None,
                 });
             }
             if v.default.ty() != v.ty {
@@ -975,15 +1123,24 @@ impl Graph {
                         v.default.ty().nome(),
                         v.ty.nome()
                     ),
+                    suggestion: None,
                 });
             }
         }
 
         if let Some(id) = self.ciclo(true) {
-            erros.push(erro(id, format!("ciclo de fluxo no nó {id}")));
+            let motivo = Recusa::CicloNoGrafo {
+                fluxo: true,
+                node: id,
+            };
+            erros.push(erro_de(id, &motivo));
         }
         if let Some(id) = self.ciclo(false) {
-            erros.push(erro(id, format!("ciclo de dados no nó {id}")));
+            let motivo = Recusa::CicloNoGrafo {
+                fluxo: false,
+                node: id,
+            };
+            erros.push(erro_de(id, &motivo));
         }
 
         // Funções e estados (VIS-026, VIS-027): nomes únicos, sem vazio, e referências que apontam para algo.
@@ -1302,10 +1459,240 @@ mod tests {
         let cmp = adiciona(&mut g, "Greater");
         let soma = adiciona(&mut g, "Add");
         let erro = g.can_connect((cmp, "result"), (soma, "a")).unwrap_err();
-        assert!(erro.contains("incompatíveis"), "{erro}");
+        assert!(erro.message().contains("incompatíveis"), "{erro:?}");
         let mult = adiciona(&mut g, "Multiply");
         assert_eq!(g.can_connect((soma, "result"), (mult, "a")), Ok(PinType::Float));
         assert!(g.wires.is_empty());
+    }
+
+    /// Toda recusa traz motivo e sugestão não vazios: é o que o editor mostra.
+    fn motivo_completo(motivo: &Recusa) {
+        assert!(!motivo.message().trim().is_empty(), "{motivo:?}");
+        assert!(!motivo.suggestion().trim().is_empty(), "{motivo:?}");
+    }
+
+    #[test]
+    fn recusa_no_ausente_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let motivo = g.can_connect((ev, "exec"), (99, "exec")).unwrap_err();
+        assert_eq!(motivo, Recusa::NoAusente { node: 99 });
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_pino_ausente_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g
+            .can_connect((ev, "exec"), (soma, "entrada_falsa"))
+            .unwrap_err();
+        assert!(
+            matches!(motivo, Recusa::PinoAusente { saida: false, .. }),
+            "{motivo:?}"
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_tipo_desconhecido_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        // Um nó de tipo que a biblioteca não tem: só chega ao grafo por um arquivo editado à mão.
+        g.nodes.push(GraphNode {
+            id: 50,
+            kind: "NaoExiste".into(),
+            position: [0.0, 0.0],
+            values: BTreeMap::new(),
+        });
+        let motivo = g.can_connect((ev, "exec"), (50, "exec")).unwrap_err();
+        assert_eq!(
+            motivo,
+            Recusa::TipoDesconhecido {
+                kind: "NaoExiste".into()
+            }
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_tipos_incompativeis_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let cmp = adiciona(&mut g, "Greater");
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g.can_connect((cmp, "result"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(motivo, Recusa::TiposIncompativeis { .. }),
+            "{motivo:?}"
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_entrada_ocupada_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        g.connect((a, "result"), (m, "a")).unwrap();
+        let motivo = g.can_connect((b, "result"), (m, "a")).unwrap_err();
+        assert_eq!(
+            motivo,
+            Recusa::EntradaOcupada {
+                node: m,
+                pin: "a".into()
+            }
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_ciclo_ao_ligar_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Sequence");
+        let b = adiciona(&mut g, "Sequence");
+        g.connect((a, "then_0"), (b, "exec")).unwrap();
+        let fluxo = g.can_connect((b, "then_0"), (a, "exec")).unwrap_err();
+        assert!(
+            matches!(fluxo, Recusa::CicloAoLigar { fluxo: true, .. }),
+            "{fluxo:?}"
+        );
+        motivo_completo(&fluxo);
+        let soma = adiciona(&mut g, "Add");
+        let dados = g.can_connect((soma, "result"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(dados, Recusa::CicloAoLigar { fluxo: false, .. }),
+            "{dados:?}"
+        );
+        motivo_completo(&dados);
+    }
+
+    #[test]
+    fn recusa_ciclo_no_grafo_tem_sugestao() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        // Ciclo de dados montado à mão: a validação aponta o nó, com a sugestão.
+        g.wires.push(Wire {
+            from: pin_ref((a, "result")),
+            to: pin_ref((b, "a")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((b, "result")),
+            to: pin_ref((a, "a")),
+        });
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("ciclo de dados"))
+            .expect("a validação acha o ciclo");
+        assert!(erro.node.is_some());
+        assert_eq!(
+            erro.suggestion,
+            Some("Guarde com SetVariable e leia com GetVariable")
+        );
+    }
+
+    #[test]
+    fn recusa_reroute_sem_entrada_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let r = g.add_reroute([0.0, 0.0]);
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g.can_connect((r, "out"), (soma, "a")).unwrap_err();
+        assert_eq!(motivo, Recusa::RerouteSemEntrada { node: r });
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_ciclo_de_reroute_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let r1 = g.add_reroute([0.0, 0.0]);
+        let r2 = g.add_reroute([0.0, 0.0]);
+        // Dois reroutes que se alimentam: montado à mão, porque connect já recusaria.
+        g.wires.push(Wire {
+            from: pin_ref((r1, "out")),
+            to: pin_ref((r2, "in")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((r2, "out")),
+            to: pin_ref((r1, "in")),
+        });
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g.can_connect((r1, "out"), (soma, "a")).unwrap_err();
+        assert!(matches!(motivo, Recusa::CicloReroute { .. }), "{motivo:?}");
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_variavel_sem_nome_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let le = adiciona(&mut g, "GetVariable");
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g.can_connect((le, "value"), (soma, "a")).unwrap_err();
+        assert!(
+            matches!(motivo, Recusa::VariavelSemNome { .. }),
+            "{motivo:?}"
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_variavel_inexistente_tem_motivo_e_sugestao() {
+        let mut g = Graph::default();
+        let le = adiciona(&mut g, "GetVariable");
+        g.set_value(le, "name", Value::String("nada".into()))
+            .unwrap();
+        let soma = adiciona(&mut g, "Add");
+        let motivo = g.can_connect((le, "value"), (soma, "a")).unwrap_err();
+        assert_eq!(
+            motivo,
+            Recusa::VariavelInexistente {
+                name: "nada".into()
+            }
+        );
+        motivo_completo(&motivo);
+    }
+
+    #[test]
+    fn recusa_entrada_dupla_tem_sugestao() {
+        let mut g = Graph::default();
+        let a = adiciona(&mut g, "Add");
+        let b = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        // Duas saídas na mesma entrada: só existe em grafo editado à mão.
+        g.wires.push(Wire {
+            from: pin_ref((a, "result")),
+            to: pin_ref((m, "a")),
+        });
+        g.wires.push(Wire {
+            from: pin_ref((b, "result")),
+            to: pin_ref((m, "a")),
+        });
+        let erro = g
+            .validate()
+            .into_iter()
+            .find(|e| e.message.contains("mais de uma vez"))
+            .expect("a validação acha a entrada dupla");
+        assert_eq!(erro.node, Some(m));
+        assert!(erro.suggestion.is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn recusa_nao_muda_o_grafo() {
+        let mut g = Graph::default();
+        let cmp = adiciona(&mut g, "Greater");
+        let soma = adiciona(&mut g, "Add");
+        let a = adiciona(&mut g, "Add");
+        let m = adiciona(&mut g, "Multiply");
+        g.connect((a, "result"), (m, "a")).unwrap();
+        let antes = g.clone();
+        // Três recusas: tipos, entrada ocupada e nó que não existe.
+        assert!(g.connect((cmp, "result"), (soma, "a")).is_err());
+        assert!(g.connect((soma, "result"), (m, "a")).is_err());
+        assert!(g.connect((a, "result"), (99, "a")).is_err());
+        assert!(g.can_connect((cmp, "result"), (soma, "a")).is_err());
+        assert_eq!(g, antes);
     }
 
     #[test]

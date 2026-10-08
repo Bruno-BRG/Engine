@@ -26,9 +26,11 @@ import {
   type NodeDef,
   type PinRef,
   type PinType,
+  type Recusa,
   type Value,
   type Variable,
   type Wire,
+  textoRecusa,
 } from './model';
 
 /** Eventos que só podem aparecer uma vez por script. Os de estado podem repetir, com nomes diferentes. */
@@ -382,13 +384,27 @@ class LogicState {
     return ok;
   }
 
-  /** Motivo pelo qual a ligação seria recusada, ou undefined se ela é válida. Não muda o grafo. */
-  checkConnection(from: PinRef, to: PinRef): string | undefined {
-    return this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin) ?? undefined;
+  /** Motivo (e sugestão) pelo qual a ligação seria recusada, ou undefined se ela é válida. Não muda o grafo. */
+  checkConnection(from: PinRef, to: PinRef): Recusa | undefined {
+    const texto = this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin);
+    return texto ? (JSON.parse(texto) as Recusa) : undefined;
   }
 
-  connect(from: PinRef, to: PinRef): boolean {
-    return this.#run('Ligação recusada', (ed) => ed.connect(from.node, from.pin, to.node, to.pin));
+  /**
+   * Liga duas pontas (VIS-013). Recusada, mostra o motivo e a sugestão, e o grafo fica como estava. Com `substitui`
+   * (a entrada que já tinha um fio), esse fio sai só depois que a nova ligação foi aceita: se ela for recusada, o
+   * fio antigo continua. Soltar o fio de volta na mesma entrada não muda nada.
+   */
+  connect(from: PinRef, to: PinRef, substitui: PinRef | null = null): boolean {
+    if (substitui && substitui.node === to.node && substitui.pin === to.pin) return true;
+    const motivo = this.checkConnection(from, to);
+    if (motivo) {
+      log.toast('warn', 'Ligação recusada', textoRecusa(motivo));
+      return false;
+    }
+    const ok = this.#run('Ligação recusada', (ed) => ed.connect(from.node, from.pin, to.node, to.pin));
+    if (ok && substitui) this.disconnectInput(substitui.node, substitui.pin);
+    return ok;
   }
 
   disconnect(w: Wire) {
