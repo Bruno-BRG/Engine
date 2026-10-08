@@ -8,3 +8,6 @@ editor/src/lib/runtime/pkg/
 editor/src-tauri/gen/
 *.log
 .DS_Store
+
+# Worktrees dos agentes de desenvolvimento
+.claude/
