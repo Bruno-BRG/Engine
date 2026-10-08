@@ -1123,37 +1123,37 @@ mod tests {
     fn duplicate_remaps_inside_targets_and_keeps_outside_ones() {
         let mut s = cena();
         let root = s.roots()[0];
-        let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
-        let t = s.add_node(Some(grupo), "Timer", None).unwrap();
-        let dentro = s.add_node(Some(grupo), "Sprite2D", None).unwrap();
-        let fora = s.add_node(Some(root), "Sprite2D", None).unwrap();
-        s.connect(t, "timeout", dentro, "on_dentro").unwrap();
-        s.connect(t, "timeout", fora, "on_fora").unwrap();
-        let copia = s.duplicate_node(grupo).unwrap();
-        let filhos = s.node(copia).unwrap().children.clone();
-        let (t2, dentro2) = (filhos[0], filhos[1]);
+        let group = s.add_node(Some(root), "Node2D", None).unwrap();
+        let t = s.add_node(Some(group), "Timer", None).unwrap();
+        let inside = s.add_node(Some(group), "Sprite2D", None).unwrap();
+        let outside = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", inside, "on_inside").unwrap();
+        s.connect(t, "timeout", outside, "on_outside").unwrap();
+        let copy = s.duplicate_node(group).unwrap();
+        let children = s.node(copy).unwrap().children.clone();
+        let (t2, inside2) = (children[0], children[1]);
         let links = &s.node(t2).unwrap().connections;
         assert_eq!(links.len(), 2);
-        assert!(links.iter().any(|c| c.target == dentro2 && c.method == "on_dentro"));
-        assert!(links.iter().any(|c| c.target == fora && c.method == "on_fora"));
+        assert!(links.iter().any(|c| c.target == inside2 && c.method == "on_inside"));
+        assert!(links.iter().any(|c| c.target == outside && c.method == "on_outside"));
         // The original still points at its own target.
-        assert!(s.node(t).unwrap().connections.iter().any(|c| c.target == dentro));
+        assert!(s.node(t).unwrap().connections.iter().any(|c| c.target == inside));
     }
 
     #[test]
     fn paste_remaps_inside_targets_of_the_copy() {
         let mut s = cena();
         let root = s.roots()[0];
-        let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
-        let t = s.add_node(Some(grupo), "Timer", None).unwrap();
-        let dentro = s.add_node(Some(grupo), "Sprite2D", None).unwrap();
-        s.connect(t, "timeout", dentro, "on_dentro").unwrap();
-        s.copy_node(grupo).unwrap();
-        let colado = s.paste_node(None).unwrap().unwrap();
-        let filhos = s.node(colado).unwrap().children.clone();
-        let link = &s.node(filhos[0]).unwrap().connections[0];
-        assert_eq!(link.target, filhos[1]);
-        assert_ne!(filhos[1], dentro);
+        let group = s.add_node(Some(root), "Node2D", None).unwrap();
+        let t = s.add_node(Some(group), "Timer", None).unwrap();
+        let inside = s.add_node(Some(group), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", inside, "on_inside").unwrap();
+        s.copy_node(group).unwrap();
+        let pasted = s.paste_node(None).unwrap().unwrap();
+        let children = s.node(pasted).unwrap().children.clone();
+        let link = &s.node(children[0]).unwrap().connections[0];
+        assert_eq!(link.target, children[1]);
+        assert_ne!(children[1], inside);
     }
 
     #[test]
@@ -1168,16 +1168,16 @@ mod tests {
     fn branch_saved_as_scene_drops_outside_targets() {
         let mut s = cena();
         let root = s.roots()[0];
-        let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
-        let t = s.add_node(Some(grupo), "Timer", None).unwrap();
-        let dentro = s.add_node(Some(grupo), "Sprite2D", None).unwrap();
-        let fora = s.add_node(Some(root), "Sprite2D", None).unwrap();
-        s.connect(t, "timeout", dentro, "on_dentro").unwrap();
-        s.connect(t, "timeout", fora, "on_fora").unwrap();
-        let ramo = s.branch_as_scene(grupo, 9).unwrap();
-        let links = &ramo.node(t).unwrap().connections;
+        let group = s.add_node(Some(root), "Node2D", None).unwrap();
+        let t = s.add_node(Some(group), "Timer", None).unwrap();
+        let inside = s.add_node(Some(group), "Sprite2D", None).unwrap();
+        let outside = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", inside, "on_inside").unwrap();
+        s.connect(t, "timeout", outside, "on_outside").unwrap();
+        let branch = s.branch_as_scene(group, 9).unwrap();
+        let links = &branch.node(t).unwrap().connections;
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, dentro);
+        assert_eq!(links[0].target, inside);
     }
 
     #[test]
@@ -1185,10 +1185,10 @@ mod tests {
         let mut s = cena();
         let root = s.roots()[0];
         let t = s.add_node(Some(root), "Timer", None).unwrap();
-        let grupo = s.add_node(Some(root), "Node2D", None).unwrap();
-        let dentro = s.add_node(Some(grupo), "Sprite2D", None).unwrap();
-        s.connect(t, "timeout", dentro, "on_timeout").unwrap();
-        s.remove_node(grupo).unwrap();
+        let group = s.add_node(Some(root), "Node2D", None).unwrap();
+        let inside = s.add_node(Some(group), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", inside, "on_timeout").unwrap();
+        s.remove_node(group).unwrap();
         assert!(s.node(t).unwrap().connections.is_empty());
         assert_eq!(s.undo().as_deref(), Some("Excluir Node2D"));
         assert_eq!(s.node(t).unwrap().connections.len(), 1);
@@ -1199,13 +1199,13 @@ mod tests {
         let mut s = cena();
         let root = s.roots()[0];
         let t = s.add_node(Some(root), "Timer", None).unwrap();
-        let fora = s.add_node(Some(root), "Sprite2D", None).unwrap();
-        s.connect(t, "timeout", fora, "on_fora").unwrap();
+        let outside = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.connect(t, "timeout", outside, "on_outside").unwrap();
         s.copy_node(t).unwrap();
-        let colado = s.paste_node(None).unwrap().unwrap();
-        let link = &s.node(colado).unwrap().connections[0];
-        assert_eq!(link.target, fora);
-        assert_eq!(link.method, "on_fora");
+        let pasted = s.paste_node(None).unwrap().unwrap();
+        let link = &s.node(pasted).unwrap().connections[0];
+        assert_eq!(link.target, outside);
+        assert_eq!(link.method, "on_outside");
     }
 
     #[test]
