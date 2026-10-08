@@ -1,6 +1,8 @@
-//! Depuração no editor: física para o viewport (DBG-004) e a ponte do depurador de scripts (VIS-031, DBG-003). Os
-//! métodos só leem ou mudam a reprodução atual; quem decide quando chamar é o TypeScript. Os pontos de parada e a
-//! escolha da instância valem também para as reproduções seguintes, até mudar.
+//! Depuração no editor (DBG-004): dados do desenho de física para o viewport. O método só lê a
+//! reprodução atual; a alternância de exibição fica no TypeScript.
+//!
+//! Script debugger bridge (VIS-031, DBG-003). The methods only read or change the current play session, and the
+//! TypeScript decides when to call them. Breakpoints and the followed instance outlive a single play session.
 
 use crate::editor::{SceneEditor, js_err, to_json};
 use crate::host::Mundo;
@@ -11,7 +13,7 @@ use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
-/// Evento do rastro em JSON: {"Executou": {evento, node}} ou {"Valor": {node, valor}}, como o TypeScript o lê.
+/// Trace event as JSON: {"Executou": {evento, node}} or {"Valor": {node, valor}}, as the TypeScript reads it.
 fn evento_json(e: &TraceEvent) -> Json {
     match e {
         TraceEvent::Executou { evento, node } => json!({"Executou": {"evento": evento, "node": node}}),
@@ -28,8 +30,8 @@ impl SceneEditor {
         to_json(&draw)
     }
 
-    /// Pontos de parada por instância, em JSON: {"<uid do nó>": [ids dos nós do script]}. Substitui os anteriores.
-    /// Cada instância recebe os pontos do próprio UID: um script com dois nós tem dois pontos de parada (VIS-031).
+    /// Breakpoints per instance, as JSON: {"<node UID>": [ids of the script's nodes]}. Replaces the previous ones.
+    /// Each instance gets the breakpoints of its own UID, so a script on two nodes has two breakpoint sets (VIS-031).
     pub fn set_breakpoints(&mut self, json: &str) -> Result<(), JsError> {
         let mapa: BTreeMap<String, Vec<u64>> = serde_json::from_str(json).map_err(js_err)?;
         let mut pontos = BTreeMap::new();
@@ -37,19 +39,25 @@ impl SceneEditor {
             pontos.insert(uid.parse::<Uid>().map_err(js_err)?, nos.into_iter().collect::<BTreeSet<u64>>());
         }
         self.pontos = pontos;
-        self.aplicar_depuracao();
+        self.atualizar_depuracao();
         Ok(())
     }
 
-    /// Escolhe a instância que o depurador acompanha: só ela grava o rastro (DBG-003). Texto vazio tira a escolha.
+    /// Chooses the instance the debugger follows. Only it may record a trace (DBG-003). An empty string clears the choice.
     pub fn debug_select(&mut self, uid: &str) -> Result<(), JsError> {
         self.selecionada = if uid.is_empty() { None } else { Some(uid.parse::<Uid>().map_err(js_err)?) };
-        self.aplicar_depuracao();
+        self.atualizar_depuracao();
         Ok(())
     }
 
-    /// Rastro da instância escolhida desde a última chamada, em JSON (lista de eventos, ver `evento_json`). Esvazia a
-    /// fila. Lista vazia sem reprodução ou sem instância escolhida.
+    /// Tells the runtime whether the Depurador panel is open. An open panel lets the followed instance record a trace.
+    pub fn debug_panel(&mut self, aberto: bool) {
+        self.painel_aberto = aberto;
+        self.atualizar_depuracao();
+    }
+
+    /// Trace of the followed instance since the last call, as JSON (a list of events, see `evento_json`). Empties the
+    /// queue. An empty list without a play session or without a followed instance.
     pub fn debug_trace(&mut self) -> Result<String, JsError> {
         let escolhida = self.selecionada;
         let eventos: Vec<Json> = match (self.play.as_mut(), escolhida) {
@@ -62,8 +70,8 @@ impl SceneEditor {
         to_json(&eventos)
     }
 
-    /// Estado das instâncias da reprodução, em JSON: [{uid, pausada, node, evento}]. `pausada` vale também para a
-    /// pausa de fim de quadro, em que `node` e `evento` são null. Lista vazia sem reprodução.
+    /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento}]. `pausada` is also true at
+    /// a frame-end pause, where `node` and `evento` are null. An empty list without a play session.
     pub fn debug_state(&self) -> Result<String, JsError> {
         let estado: Vec<Json> = match &self.play {
             Some(p) => p
@@ -84,28 +92,29 @@ impl SceneEditor {
         to_json(&estado)
     }
 
-    /// Continuar (VIS-031): a instância `uid` sai da pausa e roda o resto do quadro, uma vez, e os quadros seguintes
-    /// até a próxima pausa. As outras instâncias não mudam. Erro de script vai ao Console.
+    /// Continuar (VIS-031): instance `uid` leaves the pause, runs the rest of the frame once, and the next frames up to
+    /// the next pause. The other instances do not change. A script error goes to the console.
     pub fn debug_continue(&mut self, uid: &str) -> Result<(), JsError> {
         self.depurar(uid, |inst, host| inst.continuar(host))
     }
 
-    /// Próxima operação (VIS-031): a instância `uid` roda uma operação e para antes da seguinte, mesmo que ela esteja
-    /// no evento ou no quadro seguinte. Erro de script vai ao Console.
+    /// Próxima operação (VIS-031): instance `uid` runs one operation and stops before the next, even when that one
+    /// belongs to the next event or frame. A script error goes to the console.
     pub fn debug_step(&mut self, uid: &str) -> Result<(), JsError> {
         self.depurar(uid, |inst, host| inst.passo(host))
     }
 }
 
 impl SceneEditor {
-    /// Aplica os pontos de parada e a escolha às instâncias da reprodução, se houver uma.
-    fn aplicar_depuracao(&mut self) {
+    /// Applies the breakpoints and the trace policy to the instances of the play session, if there is one.
+    fn atualizar_depuracao(&mut self) {
         if let Some(p) = &mut self.play {
-            scripts::aplicar_depuracao(&mut p.instancias, &self.pontos, self.selecionada);
+            scripts::aplicar_pontos(&mut p.instancias, &self.pontos);
+            scripts::atualizar_rastro(&mut p.instancias, self.selecionada, self.painel_aberto);
         }
     }
 
-    /// Roda uma ação do depurador na instância `uid`. Erro de execução vai ao Console, como nos quadros normais.
+    /// Runs a debugger action on instance `uid`. An execution error goes to the console, as in regular frames.
     fn depurar(
         &mut self,
         uid: &str,
@@ -133,6 +142,7 @@ impl SceneEditor {
             acao(inst, host)
         };
         registrar(inst, &p.scene, &mut self.console, resultado);
+        self.atualizar_depuracao();
         Ok(())
     }
 }

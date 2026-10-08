@@ -38,10 +38,12 @@ pub struct SceneEditor {
     pub(crate) console: Vec<Mensagem>,
     /// Último ponteiro enviado por `pointer_event`.
     pub(crate) pointer: Ponteiro,
-    /// Pontos de parada por instância (UID do nó que roda o script), como `set_breakpoints` os recebe (VIS-031).
+    /// Breakpoints per instance, keyed by the UID of the node that runs the script, as `set_breakpoints` receives them.
     pub(crate) pontos: BTreeMap<Uid, BTreeSet<u64>>,
-    /// Instância que o depurador acompanha: só ela grava o rastro (`debug_select`, DBG-003).
+    /// Instance the debugger follows. Only it may record a trace, and only with a reason (`debug_select`, DBG-003).
     pub(crate) selecionada: Option<Uid>,
+    /// Whether the Depurador panel is open (`debug_panel`). An open panel lets the followed instance record a trace.
+    pub(crate) painel_aberto: bool,
 }
 
 pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
@@ -82,6 +84,7 @@ impl SceneEditor {
             pointer: Ponteiro::default(),
             pontos: BTreeMap::new(),
             selecionada: None,
+            painel_aberto: false,
         }
     }
 
@@ -193,7 +196,8 @@ impl SceneEditor {
     pub fn play_start(&mut self) -> Result<(), JsError> {
         let scene = self.scene.play_copy();
         let mut instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
-        scripts::aplicar_depuracao(&mut instancias, &self.pontos, self.selecionada);
+        scripts::aplicar_pontos(&mut instancias, &self.pontos);
+        scripts::atualizar_rastro(&mut instancias, self.selecionada, self.painel_aberto);
         let physics = Physics::build(&scene, &self.settings);
         let mut audio = AudioPlayback::default();
         audio.autoplay(&scene);
@@ -220,6 +224,7 @@ impl SceneEditor {
             p.time += dt;
             let passos = p.physics.advance(&mut p.scene, dt);
             p.timers.advance(&p.scene, dt);
+            scripts::atualizar_rastro(&mut p.instancias, self.selecionada, self.painel_aberto);
             scripts::tick(p, passos, &self.settings, &self.input, self.pointer, &mut self.console, dt);
             p.audio.update(&p.scene, p.time);
             self.input.latch();
