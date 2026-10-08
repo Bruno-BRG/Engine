@@ -14,25 +14,30 @@ pub use crate::graph::CompileError;
 /// Índice de um registrador do programa.
 pub type Reg = usize;
 
-/// Comando de áudio na IR. Os valores vêm de registradores, como os de qualquer op.
+/// Comando de áudio na IR (AUD-004). Os valores vêm de registradores, como os de qualquer op. Os campos seguem o
+/// contrato do núcleo: o nó é um registrador de nó, o stream é o texto com o UID do asset, e os volumes são em dB.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AudioOp {
     Play {
-        sound: Reg,
+        node: Reg,
+        stream: Reg,
+        volume_db: Reg,
+        pitch: Reg,
         bus: Reg,
-        volume: Reg,
+        looping: Reg,
+        from_start: Reg,
     },
     Stop {
-        sound: Reg,
+        node: Reg,
     },
     Fade {
-        sound: Reg,
-        volume: Reg,
+        node: Reg,
+        to_db: Reg,
         seconds: Reg,
     },
     SetBus {
         bus: Reg,
-        volume: Reg,
+        volume_db: Reg,
     },
 }
 
@@ -635,28 +640,35 @@ impl<'g> Emitter<'g> {
                 self.flow(id, "exec")
             }
             "PlaySound" => {
-                let r = self.entradas(node, &["sound", "bus", "volume"])?;
+                let r = self.entradas(
+                    node,
+                    &["node", "stream", "volume", "pitch", "bus", "loop", "reiniciar"],
+                )?;
                 self.emit(
                     Op::Audio(AudioOp::Play {
-                        sound: r[0],
-                        bus: r[1],
-                        volume: r[2],
+                        node: r[0],
+                        stream: r[1],
+                        volume_db: r[2],
+                        pitch: r[3],
+                        bus: r[4],
+                        looping: r[5],
+                        from_start: r[6],
                     }),
                     id,
                 );
                 self.flow(id, "exec")
             }
             "StopSound" => {
-                let sound = self.input(node, "sound")?;
-                self.emit(Op::Audio(AudioOp::Stop { sound }), id);
+                let node_reg = self.input(node, "node")?;
+                self.emit(Op::Audio(AudioOp::Stop { node: node_reg }), id);
                 self.flow(id, "exec")
             }
             "FadeSound" => {
-                let r = self.entradas(node, &["sound", "volume", "seconds"])?;
+                let r = self.entradas(node, &["node", "volume", "seconds"])?;
                 self.emit(
                     Op::Audio(AudioOp::Fade {
-                        sound: r[0],
-                        volume: r[1],
+                        node: r[0],
+                        to_db: r[1],
                         seconds: r[2],
                     }),
                     id,
@@ -668,7 +680,7 @@ impl<'g> Emitter<'g> {
                 self.emit(
                     Op::Audio(AudioOp::SetBus {
                         bus: r[0],
-                        volume: r[1],
+                        volume_db: r[1],
                     }),
                     id,
                 );

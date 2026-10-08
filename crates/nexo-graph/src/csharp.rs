@@ -275,19 +275,29 @@ fn instrucao(c: &Compiled, op: &Op) -> String {
             format!("r{dst} = Nexo.MoveAndSlide(r{node}, r{velocity});")
         }
         Op::Audio(comando) => match comando {
-            AudioOp::Play { sound, bus, volume } => {
-                format!("Nexo.Audio.Play(r{sound}, r{bus}, r{volume});")
+            AudioOp::Play {
+                node,
+                stream,
+                volume_db,
+                pitch,
+                bus,
+                looping,
+                from_start,
+            } => {
+                format!(
+                    "Nexo.Audio.Play(r{node}, r{stream}, r{bus}, r{volume_db}, r{pitch}, r{looping}, r{from_start});"
+                )
             }
-            AudioOp::Stop { sound } => format!("Nexo.Audio.Stop(r{sound});"),
+            AudioOp::Stop { node } => format!("Nexo.Audio.Stop(r{node});"),
             AudioOp::Fade {
-                sound,
-                volume,
+                node,
+                to_db,
                 seconds,
             } => {
-                format!("Nexo.Audio.Fade(r{sound}, r{volume}, r{seconds});")
+                format!("Nexo.Audio.Fade(r{node}, r{to_db}, r{seconds});")
             }
-            AudioOp::SetBus { bus, volume } => {
-                format!("Nexo.Audio.SetBusVolume(r{bus}, r{volume});")
+            AudioOp::SetBus { bus, volume_db } => {
+                format!("Nexo.Audio.SetBusVolume(r{bus}, r{volume_db});")
             }
         },
         Op::Jump { target } => format!("goto L{target};"),

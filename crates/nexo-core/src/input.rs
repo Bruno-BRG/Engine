@@ -103,6 +103,8 @@ pub struct Input {
     axes: BTreeMap<String, f64>,
     /// Força das ações vinda de joysticks de toque, em (0, 1].
     strength: BTreeMap<String, f64>,
+    /// Estado do quadro anterior, guardado por `latch`. As bordas (pressionada agora, solta agora) comparam com ele.
+    antes: Option<Box<Input>>,
 }
 
 impl Input {
@@ -158,6 +160,32 @@ impl Input {
     pub fn action_value(&self, map: &InputMap, action: &str) -> f64 {
         let from_codes = map.keys(action).iter().map(|code| self.code_value(code)).fold(0.0, f64::max);
         from_codes.max(self.strength.get(action).copied().unwrap_or(0.0))
+    }
+
+    /// Fecha o quadro: guarda o estado atual para as bordas do quadro seguinte. A reprodução chama no fim de
+    /// cada quadro, depois dos scripts.
+    pub fn latch(&mut self) {
+        self.antes = Some(Box::new(Input {
+            down: self.down.clone(),
+            axes: self.axes.clone(),
+            strength: self.strength.clone(),
+            antes: None,
+        }));
+    }
+
+    /// A ação estava pressionada no quadro anterior (falso antes do primeiro `latch`).
+    fn estava_pressionada(&self, map: &InputMap, action: &str) -> bool {
+        self.antes.as_ref().is_some_and(|antes| antes.action_pressed(map, action))
+    }
+
+    /// True só no quadro em que a ação passou de solta para pressionada (INP-003).
+    pub fn action_just_pressed(&self, map: &InputMap, action: &str) -> bool {
+        self.action_pressed(map, action) && !self.estava_pressionada(map, action)
+    }
+
+    /// True só no quadro em que a ação passou de pressionada para solta (INP-003).
+    pub fn action_released(&self, map: &InputMap, action: &str) -> bool {
+        !self.action_pressed(map, action) && self.estava_pressionada(map, action)
     }
 
     /// True se a força da ação chega a `PRESS_THRESHOLD`: alguma tecla ligada está pressionada, ou um eixo ligado
@@ -279,6 +307,36 @@ mod tests {
         assert!(input.action_pressed(&map, "ui_left"));
         input.set_key("KeyA", false);
         assert!(!input.action_pressed(&map, "ui_left"));
+    }
+
+    #[test]
+    fn bordas_valem_so_no_quadro_da_mudanca() {
+        let map = InputMap::defaults();
+        let mut input = Input::default();
+        input.set_key("Space", true);
+        // Quadro do aperto: acabou de apertar, e não soltou.
+        assert!(input.action_just_pressed(&map, "ui_accept"));
+        assert!(!input.action_released(&map, "ui_accept"));
+        input.latch();
+        // Segue apertada no quadro seguinte: já não é borda.
+        assert!(!input.action_just_pressed(&map, "ui_accept"));
+        assert!(input.action_pressed(&map, "ui_accept"));
+        input.set_key("Space", false);
+        // Quadro da soltura: soltou, e não acabou de apertar.
+        assert!(input.action_released(&map, "ui_accept"));
+        assert!(!input.action_just_pressed(&map, "ui_accept"));
+        input.latch();
+        assert!(!input.action_released(&map, "ui_accept"));
+    }
+
+    #[test]
+    fn soltar_todas_as_teclas_conta_como_soltura() {
+        let map = InputMap::defaults();
+        let mut input = Input::default();
+        input.set_key("ArrowLeft", true);
+        input.latch();
+        input.release_all();
+        assert!(input.action_released(&map, "ui_left"));
     }
 
     #[test]

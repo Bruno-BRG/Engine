@@ -1,0 +1,219 @@
+//! Host da reprodução (VIS-023, INP-003, CON-004, AUD-004): a ponte entre a VM dos scripts visuais e o mundo da
+//! reprodução. A cena, a física, o áudio, a entrada e o console entram por referências emprestadas, montadas a cada
+//! quadro de cada script. O `Mundo` guarda o nó dono do script, para o console dizer de onde veio cada mensagem.
+
+use nexo_core::audio::DEFAULT_BUS;
+use nexo_core::registry::{self, PropKind};
+use nexo_core::scene::{as_vec2, value_of};
+use nexo_core::{AudioCommand, AudioPlayback, Input, ProjectSettings, Scene, Uid};
+use nexo_graph::{Host, LogLevel};
+use nexo_physics::Physics;
+use serde::Serialize;
+use serde_json::json;
+
+/// Ponteiro do mouse na reprodução: a posição na tela (pixels do canvas) e no mundo, como o viewport o desenha.
+/// O TypeScript envia com `pointer_event`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Ponteiro {
+    pub tela: [f64; 2],
+    pub mundo: [f64; 2],
+}
+
+/// Mensagem do console (CON-004), na ordem em que os scripts a escreveram. O TypeScript as lê em JSON.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct Mensagem {
+    /// "info", "warning" ou "error".
+    pub level: &'static str,
+    /// Nó que escreveu a mensagem: o dono do script.
+    pub node: Uid,
+    pub message: String,
+}
+
+/// O mundo visto por um script durante um quadro: as partes da reprodução e do projeto que o Host usa, e o nó dono.
+pub(crate) struct Mundo<'a> {
+    pub cena: &'a mut Scene,
+    pub fisica: &'a mut Physics,
+    pub audio: &'a mut AudioPlayback,
+    pub entrada: &'a Input,
+    pub ajustes: &'a ProjectSettings,
+    pub ponteiro: Ponteiro,
+    pub console: &'a mut Vec<Mensagem>,
+    /// Nó que roda o script: é a saída "self" dos eventos, e o dono das mensagens do console.
+    pub dono: Uid,
+}
+
+/// Componente de uma propriedade de vetor: "position_x" é o X de "position". Os scripts usam esses nomes (Mover até,
+/// Tween) como se fossem propriedades numéricas.
+fn componente(nome: &str) -> Option<(&'static str, usize)> {
+    match nome {
+        "position_x" => Some(("position", 0)),
+        "position_y" => Some(("position", 1)),
+        "scale_x" => Some(("scale", 0)),
+        "scale_y" => Some(("scale", 1)),
+        _ => None,
+    }
+}
+
+fn e_vetor(kind: &str, prop: &str) -> bool {
+    registry::prop_def(kind, prop).is_some_and(|d| d.kind == PropKind::Vec2)
+}
+
+/// Nível do console no contrato com o TypeScript. Print escreve "info", Warn "warning" e Error "error".
+fn nivel(level: LogLevel) -> &'static str {
+    match level {
+        LogLevel::Info => "info",
+        LogLevel::Warning => "warning",
+        LogLevel::Error => "error",
+    }
+}
+
+impl Mundo<'_> {
+    fn aviso(&mut self, message: String) {
+        self.console.push(Mensagem { level: "warning", node: self.dono, message });
+    }
+
+    fn barramento_existe(&self, nome: &str) -> bool {
+        self.ajustes.buses.iter().any(|b| b.name == nome)
+    }
+}
+
+impl Host for Mundo<'_> {
+    fn get_property(&mut self, node: u64, name: &str) -> Option<f64> {
+        let n = self.cena.node(Uid(node))?;
+        if let Some((prop, i)) = componente(name) {
+            if !e_vetor(&n.kind, prop) {
+                return None;
+            }
+            return value_of(n, prop).as_array()?.get(i)?.as_f64();
+        }
+        let def = registry::prop_def(&n.kind, name)?;
+        match def.kind {
+            PropKind::Float | PropKind::Int => value_of(n, name).as_f64(),
+            _ => None,
+        }
+    }
+
+    /// Grava sem histórico: a reprodução tem a sua própria cópia da cena, que não entra no desfazer.
+    fn set_property(&mut self, node: u64, name: &str, value: f64) -> bool {
+        let uid = Uid(node);
+        let Some(n) = self.cena.node(uid) else {
+            return false;
+        };
+        let (prop, valor) = if let Some((prop, i)) = componente(name) {
+            if !e_vetor(&n.kind, prop) {
+                return false;
+            }
+            let mut v = as_vec2(&value_of(n, prop));
+            v[i] = value;
+            (prop, json!(v))
+        } else {
+            match registry::prop_def(&n.kind, name) {
+                Some(d) if matches!(d.kind, PropKind::Float | PropKind::Int) => (name, json!(value)),
+                _ => return false,
+            }
+        };
+        self.cena.set_runtime_prop(uid, prop, valor).is_ok()
+    }
+
+    fn action_pressed(&self, action: &str) -> bool {
+        self.entrada.action_pressed(&self.ajustes.input, action)
+    }
+
+    fn action_just_pressed(&self, action: &str) -> bool {
+        self.entrada.action_just_pressed(&self.ajustes.input, action)
+    }
+
+    fn action_released(&self, action: &str) -> bool {
+        self.entrada.action_released(&self.ajustes.input, action)
+    }
+
+    fn axis(&self, negative: &str, positive: &str) -> f64 {
+        self.entrada.axis(&self.ajustes.input, negative, positive)
+    }
+
+    fn vector(&self, left: &str, right: &str, up: &str, down: &str) -> [f64; 2] {
+        self.entrada.vector(&self.ajustes.input, left, right, up, down)
+    }
+
+    fn mouse_world(&self) -> [f64; 2] {
+        self.ponteiro.mundo
+    }
+
+    fn mouse_screen(&self) -> [f64; 2] {
+        self.ponteiro.tela
+    }
+
+    fn log(&mut self, level: LogLevel, message: &str) {
+        self.console.push(Mensagem { level: nivel(level), node: self.dono, message: message.to_string() });
+    }
+
+    /// Primeiro nó da árvore com o nome dado (ordem de árvore).
+    fn find_node(&self, name: &str) -> Option<u64> {
+        self.cena
+            .pre_order()
+            .into_iter()
+            .find(|u| self.cena.node(*u).is_some_and(|n| n.name == name))
+            .map(|u| u.0)
+    }
+
+    /// Não suportado ainda: a reprodução não tem o catálogo de cenas do projeto (o texto das cenas, para copiá-las).
+    /// Devolve None, e a VM para com erro, que o console mostra uma vez por script.
+    fn instance_scene(&mut self, _scene: &str, _position: [f64; 2]) -> Option<u64> {
+        None
+    }
+
+    /// Remove o nó e os descendentes da cópia de reprodução, com os corpos de física e os sons deles.
+    fn destroy(&mut self, node: u64) {
+        let uid = Uid(node);
+        if self.cena.node(uid).is_none() {
+            return;
+        }
+        for u in self.cena.subtree(uid) {
+            self.fisica.remove(u);
+            if self.audio.is_playing(u) {
+                self.audio.stop(u);
+            }
+        }
+        let _ = self.cena.remove_runtime(uid);
+    }
+
+    /// Define a velocidade do personagem, que a física aplica no passo seguinte (60 Hz). O corpo anda no passo
+    /// depois desta chamada, e o chão devolvido é o do último passo. A velocidade fica no personagem, como
+    /// `velocity` do CharacterBody2D. None se o nó não é um personagem.
+    fn move_and_slide(&mut self, node: u64, velocity: [f64; 2]) -> Option<bool> {
+        let uid = Uid(node);
+        if !self.fisica.set_velocity(uid, velocity) {
+            return None;
+        }
+        Some(self.fisica.grounded(uid))
+    }
+
+    /// Comandos de áudio do script. Nó inexistente e barramento desconhecido viram aviso no console. Tocar em um
+    /// barramento que não existe usa o padrão (Master), como o motor faz.
+    fn audio(&mut self, command: AudioCommand) {
+        let command = match command {
+            AudioCommand::Play { node, stream, volume_db, pitch, bus, looping, from_start } => {
+                if self.cena.node(node).is_none() {
+                    self.aviso(format!("Tocar som: o nó {node} não existe"));
+                    return;
+                }
+                let bus = if self.barramento_existe(&bus) {
+                    bus
+                } else {
+                    self.aviso(format!("Tocar som: o barramento '{bus}' não existe; o som toca em {DEFAULT_BUS}"));
+                    DEFAULT_BUS.to_string()
+                };
+                AudioCommand::Play { node, stream, volume_db, pitch, bus, looping, from_start }
+            }
+            AudioCommand::SetBusVolume { bus, volume_db } => {
+                if !self.barramento_existe(&bus) {
+                    self.aviso(format!("Volume do barramento: o barramento '{bus}' não existe"));
+                    return;
+                }
+                AudioCommand::SetBusVolume { bus, volume_db }
+            }
+            outro => outro,
+        };
+        self.audio.push(command);
+    }
+}

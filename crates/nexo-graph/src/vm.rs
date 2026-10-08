@@ -4,9 +4,9 @@
 //! usa as mesmas ops. Cada op conta como um passo. Passado o orçamento, a execução vira erro em vez de travar o
 //! jogo, o que cobre os laços de fluxo infinitos.
 
-use crate::audio::AudioCommand;
 use crate::ir::{AudioOp, Op, Program, Reg};
 use crate::types::{LogLevel, Value};
+use nexo_core::{AudioCommand, Uid};
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -43,8 +43,8 @@ pub trait Host {
     /// Move o corpo `node` com a velocidade dada, parando nas paredes (como `move_and_slide` da Godot). Devolve
     /// se ele está no chão depois do movimento. `None` quando o nó não é um corpo que se move; a VM para com erro.
     fn move_and_slide(&mut self, node: u64, velocity: [f64; 2]) -> Option<bool>;
-    /// Executa um comando de áudio (tocar, parar, fade, volume de barramento). Som ou barramento desconhecido é
-    /// responsabilidade do host: ele deve registrar o problema, e a VM segue.
+    /// Executa um comando de áudio do núcleo (`nexo_core::AudioCommand`: tocar, parar, fade, volume de barramento).
+    /// Nó ou barramento desconhecido é responsabilidade do host: ele deve registrar o problema, e a VM segue.
     fn audio(&mut self, command: AudioCommand);
 }
 
@@ -89,6 +89,8 @@ pub enum VmError {
     Suspended { node: u64 },
     /// A IR não bate com o que a VM espera. Programas feitos por `compile` nunca chegam aqui.
     Malformed { node: u64, message: String },
+    /// Um valor que veio de um pino do jogo não é válido (por exemplo, o UID de um som que não é um UID).
+    InvalidValue { node: u64, message: String },
 }
 
 impl fmt::Display for VmError {
@@ -120,6 +122,9 @@ impl fmt::Display for VmError {
             }
             VmError::Malformed { node, message } => {
                 write!(f, "IR inválida no nó {node}: {message}")
+            }
+            VmError::InvalidValue { node, message } => {
+                write!(f, "valor inválido no nó {node}: {message}")
             }
         }
     }
@@ -509,26 +514,38 @@ fn executa(
         }
         Op::Audio(comando) => {
             let cmd = match comando {
-                AudioOp::Play { sound, bus, volume } => AudioCommand::Play {
-                    sound: text(regs, *sound, origem)?.to_string(),
+                AudioOp::Play {
+                    node,
+                    stream,
+                    volume_db,
+                    pitch,
+                    bus,
+                    looping,
+                    from_start,
+                } => AudioCommand::Play {
+                    node: Uid(node_id(regs, *node, origem)?),
+                    stream: uid_de_asset(text(regs, *stream, origem)?, origem)?,
+                    volume_db: float(regs, *volume_db, origem)?,
+                    pitch: float(regs, *pitch, origem)?,
                     bus: text(regs, *bus, origem)?.to_string(),
-                    volume: float(regs, *volume, origem)?,
+                    looping: boolean(regs, *looping, origem)?,
+                    from_start: boolean(regs, *from_start, origem)?,
                 },
-                AudioOp::Stop { sound } => AudioCommand::Stop {
-                    sound: text(regs, *sound, origem)?.to_string(),
+                AudioOp::Stop { node } => AudioCommand::Stop {
+                    node: Uid(node_id(regs, *node, origem)?),
                 },
                 AudioOp::Fade {
-                    sound,
-                    volume,
+                    node,
+                    to_db,
                     seconds,
                 } => AudioCommand::Fade {
-                    sound: text(regs, *sound, origem)?.to_string(),
-                    volume: float(regs, *volume, origem)?,
+                    node: Uid(node_id(regs, *node, origem)?),
+                    to_db: float(regs, *to_db, origem)?,
                     seconds: float(regs, *seconds, origem)?,
                 },
-                AudioOp::SetBus { bus, volume } => AudioCommand::SetBusVolume {
+                AudioOp::SetBus { bus, volume_db } => AudioCommand::SetBusVolume {
                     bus: text(regs, *bus, origem)?.to_string(),
-                    volume: float(regs, *volume, origem)?,
+                    volume_db: float(regs, *volume_db, origem)?,
                 },
             };
             amb.host.audio(cmd);
@@ -812,6 +829,15 @@ fn set(regs: &mut [Value], i: Reg, value: Value, node: u64) -> Result<(), VmErro
     }
 }
 
+/// UID de um asset de áudio, como texto de 16 dígitos hexadecimais (o formato do contrato do núcleo). Texto que
+/// não é UID é valor inválido: o pino foi preenchido errado no jogo, não a IR.
+fn uid_de_asset(s: &str, node: u64) -> Result<Uid, VmError> {
+    s.parse::<Uid>().map_err(|_| VmError::InvalidValue {
+        node,
+        message: format!("'{s}' não é o UID de um asset de áudio"),
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1085,5 +1111,93 @@ pub(crate) mod tests {
         host.props.insert((3, "x".to_string()), 0.0);
         let erro = Vm::run(program, &mut host, &mut compiled.new_context(3)).unwrap_err();
         assert_eq!(erro, VmError::DivisionByZero { node: dv });
+    }
+
+    /// OnReady -> Tocar -> Parar -> Fade -> Volume do barramento. O nó e o UID vêm dos pinos; os volumes em dB.
+    fn grafo_de_audio(stream: &str) -> Graph {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let pl = adiciona(&mut g, "PlaySound");
+        g.set_value(pl, "node", Value::Node(7)).unwrap();
+        texto(&mut g, pl, "stream", stream);
+        g.set_value(pl, "volume", Value::Float(-6.0)).unwrap();
+        let para = adiciona(&mut g, "StopSound");
+        g.set_value(para, "node", Value::Node(7)).unwrap();
+        let fade = adiciona(&mut g, "FadeSound");
+        g.set_value(fade, "node", Value::Node(9)).unwrap();
+        g.set_value(fade, "volume", Value::Float(-40.0)).unwrap();
+        g.set_value(fade, "seconds", Value::Float(0.5)).unwrap();
+        let bus = adiciona(&mut g, "SetBusVolume");
+        texto(&mut g, bus, "bus", "Musica");
+        g.set_value(bus, "volume", Value::Float(-3.0)).unwrap();
+        g.connect((ev, "exec"), (pl, "exec")).unwrap();
+        g.connect((pl, "exec"), (para, "exec")).unwrap();
+        g.connect((para, "exec"), (fade, "exec")).unwrap();
+        g.connect((fade, "exec"), (bus, "exec")).unwrap();
+        g
+    }
+
+    #[test]
+    fn comandos_de_audio_chegam_ao_host_no_contrato_do_nucleo() {
+        let compiled = compile(&grafo_de_audio("00000000000000ab")).unwrap();
+        let program = compiled.programs_for("OnReady").next().unwrap();
+        let mut host = Mock::default();
+        Vm::run(program, &mut host, &mut compiled.new_context(1)).unwrap();
+        assert_eq!(
+            host.audio,
+            [
+                AudioCommand::Play {
+                    node: Uid(7),
+                    stream: Uid(0xab),
+                    volume_db: -6.0,
+                    pitch: 1.0,
+                    bus: "Master".into(),
+                    looping: false,
+                    from_start: true,
+                },
+                AudioCommand::Stop { node: Uid(7) },
+                AudioCommand::Fade {
+                    node: Uid(9),
+                    to_db: -40.0,
+                    seconds: 0.5,
+                },
+                AudioCommand::SetBusVolume {
+                    bus: "Musica".into(),
+                    volume_db: -3.0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn uid_de_asset_invalido_vira_erro_de_valor() {
+        let compiled = compile(&grafo_de_audio("tiro.wav")).unwrap();
+        let program = compiled.programs_for("OnReady").next().unwrap();
+        let erro = Vm::run(program, &mut Mock::default(), &mut compiled.new_context(1)).unwrap_err();
+        assert!(
+            matches!(erro, VmError::InvalidValue { .. }),
+            "{erro:?}"
+        );
+        assert!(erro.to_string().contains("tiro.wav"), "{erro}");
+    }
+
+    #[test]
+    fn tocar_sem_asset_e_recusado_na_compilacao() {
+        let mut g = grafo_de_audio("00000000000000ab");
+        let pl = g.nodes.iter().find(|n| n.kind == "PlaySound").unwrap().id;
+        // Sem o valor embutido e sem fio, o pino de UID é obrigatório.
+        g.nodes
+            .iter_mut()
+            .find(|n| n.id == pl)
+            .unwrap()
+            .values
+            .remove("stream");
+        let erros = compile(&g).unwrap_err();
+        assert!(
+            erros
+                .iter()
+                .any(|e| e.node == Some(pl) && e.message.contains("obrigatória")),
+            "{erros:?}"
+        );
     }
 }

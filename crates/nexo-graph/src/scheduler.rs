@@ -289,8 +289,8 @@ pub fn recarregar_contexto(ctx: &Context, antigo: &Compiled, novo: &Compiled) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::AudioCommand;
     use crate::graph::Graph;
+    use nexo_core::{AudioCommand, Uid};
     use crate::ir::compile;
     use crate::types::{LogLevel, PinType, Value};
     use crate::vm::tests::{Mock, grafo_de_movimento};
@@ -678,8 +678,9 @@ mod tests {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         let pl = adiciona(&mut g, "PlaySound");
-        texto(&mut g, pl, "sound", "tiro.wav");
-        g.set_value(pl, "volume", Value::Float(0.5)).unwrap();
+        g.set_value(pl, "node", Value::Node(7)).unwrap();
+        texto(&mut g, pl, "stream", "00000000000000ab");
+        g.set_value(pl, "volume", Value::Float(-6.0)).unwrap();
         g.connect((ev, "exec"), (pl, "exec")).unwrap();
         let compiled = compile(&g).unwrap();
         let mut host = Mock::default();
@@ -688,12 +689,17 @@ mod tests {
         sched
             .tick(&compiled, &mut compiled.new_context(1), &mut host, 0.0)
             .unwrap();
+        // Os padrões dos pinos de Tocar: barramento Master, tom 1, sem repetir, reinicia.
         assert_eq!(
             host.audio,
             [AudioCommand::Play {
-                sound: "tiro.wav".into(),
+                node: Uid(7),
+                stream: Uid(0xab),
+                volume_db: -6.0,
+                pitch: 1.0,
                 bus: "Master".into(),
-                volume: 0.5
+                looping: false,
+                from_start: true,
             }]
         );
     }

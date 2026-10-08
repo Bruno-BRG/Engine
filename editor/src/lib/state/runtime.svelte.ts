@@ -1,6 +1,7 @@
 // Reprodução no editor (play-in-editor). O comportamento vive no Rust: o editor cria uma cópia
-// da cena, avança o relógio e a física, e recebe as teclas. Aqui ficam o relógio de quadros, o
-// retrato para o Depurador, a entrada do teclado e os eventos de física para o Console.
+// da cena, avança o relógio, a física e os scripts, e recebe as teclas. Aqui ficam o relógio de
+// quadros, o retrato para o Depurador, a entrada do teclado, os eventos de física e as mensagens
+// dos scripts para o Console, e a entrega do áudio ao motor.
 import { scene, type NodeView } from './scene.svelte';
 import { log } from './log.svelte';
 import { audio } from './audio.svelte';
@@ -14,6 +15,13 @@ export interface PhysicsEvent {
   other: string;
 }
 
+/** Mensagem do console que um script escreveu (CON-004), como o Rust a envia. `node` é o nó dono do script. */
+interface ConsoleMessage {
+  level: 'info' | 'warning' | 'error';
+  node: string;
+  message: string;
+}
+
 /** Teclas com ação padrão do navegador (rolar a página): bloqueadas durante a reprodução. */
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
 
@@ -22,20 +30,28 @@ class PlayRuntime {
   live = $state.raw<NodeView[]>([]);
   #sinceLive = 0;
 
-  start() {
+  /** Começa a reprodução. Devolve false se o jogo não começou: um script não compila, e o erro vai ao Console. */
+  start(): boolean {
     const ed = scene.editor;
-    if (!ed) return;
-    ed.play_start();
+    if (!ed) return false;
+    try {
+      ed.play_start();
+    } catch (e) {
+      log.error('O jogo não começou: ' + (e instanceof Error ? e.message : String(e)));
+      return false;
+    }
     ed.release_keys();
     resetGamepad();
     audio.beginPlay();
     // Os players com autoplay já estão na fila: começam neste mesmo clique.
     this.#drainAudio();
+    this.drainConsole();
     this.#sinceLive = 0;
     this.syncLive();
     window.addEventListener('keydown', this.#keyDown, true);
     window.addEventListener('keyup', this.#keyUp, true);
     window.addEventListener('blur', this.#blur);
+    return true;
   }
 
   /** Avança a reprodução em `dt` segundos. */
@@ -46,6 +62,7 @@ class PlayRuntime {
     ed.play_tick(dt);
     this.#drainEvents();
     this.#drainAudio();
+    this.drainConsole();
     this.#sinceLive += dt;
     if (this.#sinceLive > 0.1) {
       this.#sinceLive = 0;
@@ -87,6 +104,22 @@ class PlayRuntime {
     const ed = scene.editor;
     if (!ed) return;
     audio.consume(JSON.parse(ed.audio_commands()) as AudioCommand[]);
+  }
+
+  /**
+   * Leva ao Console as mensagens dos scripts (CON-004). Chamado a cada quadro e depois de `set_scripts`, que pode
+   * registrar erros de recarga mesmo com o jogo parado.
+   */
+  drainConsole() {
+    const ed = scene.editor;
+    if (!ed) return;
+    const mensagens = JSON.parse(ed.console_messages()) as ConsoleMessage[];
+    for (const m of mensagens) {
+      const opts = { nodeUid: m.node };
+      if (m.level === 'error') log.error(m.message, opts);
+      else if (m.level === 'warning') log.warn(m.message, opts);
+      else log.info(m.message, opts);
+    }
   }
 
   /** Leva ao Console as entradas e saídas de áreas. Contatos entre corpos ficam para a lógica visual. */

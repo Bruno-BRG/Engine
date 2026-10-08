@@ -3,10 +3,10 @@
 //! de parada (VIS-030, VIS-031, DBG-003).
 //!
 //! O caminho é: `Graph` (o que o editor edita e grava em `scripts/*.graph.ron`) -> `compile` -> `Compiled`
-//! (programas de IR) -> `Scheduler::tick` (ou `Vm::run`), com um `Host` que a cena implementa. Este crate não
-//! depende da cena nem da física: o mundo entra só pelo trait `Host`, cujo contrato está documentado em `vm.rs`.
+//! (programas de IR) -> `Scheduler::tick` (ou `Vm::run`), com um `Host` que a cena implementa. O mundo entra só
+//! pelo trait `Host`, cujo contrato está documentado em `vm.rs`. Os comandos de áudio são os do núcleo
+//! (`nexo_core::AudioCommand`, AUD-004): o grafo não tem tipo próprio para eles.
 
-pub mod audio;
 pub mod csharp;
 pub mod graph;
 pub mod ir;
@@ -15,7 +15,6 @@ pub mod scheduler;
 pub mod types;
 pub mod vm;
 
-pub use audio::AudioCommand;
 pub use csharp::generate_csharp;
 pub use graph::{Comment, CompileError, Graph, GraphNode, PinRef, Wire};
 pub use ir::{Compiled, Op, Program, Reg, compile};

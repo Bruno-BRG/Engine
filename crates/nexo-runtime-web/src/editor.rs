@@ -2,22 +2,26 @@
 //! o estado e envia operações de forma síncrona, sem ida e volta pelo Tauri a cada movimento.
 //! A reprodução guarda uma cópia da cena e um relógio; a edição fica intacta enquanto joga.
 
+use crate::host::{Mensagem, Ponteiro};
+use crate::scripts::{self, Instancia};
 use nexo_core::query::{self, Draw};
 use nexo_core::timer::{TimerEvent, Timers};
 use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, registry};
 use nexo_physics::{Physics, check_reference};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
 
-/// Reprodução: cópia da cena, relógio, mundo de física, áudio e temporizadores montados a partir dela.
+/// Reprodução: cópia da cena, relógio, mundo de física, áudio, temporizadores e scripts montados a partir dela.
 pub(crate) struct Play {
     /// `pub(crate)` para `input_devices` ler as propriedades dos nós (joystick de toque).
     pub(crate) scene: Scene,
-    time: f64,
-    physics: Physics,
-    audio: AudioPlayback,
-    timers: Timers,
+    pub(crate) time: f64,
+    pub(crate) physics: Physics,
+    pub(crate) audio: AudioPlayback,
+    pub(crate) timers: Timers,
+    pub(crate) instancias: Vec<Instancia>,
 }
 
 #[wasm_bindgen]
@@ -28,9 +32,15 @@ pub struct SceneEditor {
     /// Configurações do projeto (settings.ron). O mapa de entrada usado pelo jogo é `settings.input`.
     settings: ProjectSettings,
     pub(crate) input: Input,
+    /// Grafos de script por UID do nó, como `set_scripts` os recebe (texto RON).
+    pub(crate) scripts: BTreeMap<Uid, String>,
+    /// Mensagens do console que os scripts escreveram e ainda não foram lidas (CON-004).
+    pub(crate) console: Vec<Mensagem>,
+    /// Último ponteiro enviado por `pointer_event`.
+    pub(crate) pointer: Ponteiro,
 }
 
-fn js_err(e: impl std::fmt::Display) -> JsError {
+pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
 
@@ -56,6 +66,9 @@ impl SceneEditor {
             play: None,
             settings: ProjectSettings::default(),
             input: Input::default(),
+            scripts: BTreeMap::new(),
+            console: Vec::new(),
+            pointer: Ponteiro::default(),
         }
     }
 
@@ -162,14 +175,20 @@ impl SceneEditor {
     /// Inicia a reprodução a partir de uma cópia da cena de edição, no tempo zero.
     /// A física é montada com as posições atuais dos nós.
     /// Os players com autoplay e os timers com autostart começam aqui.
-    pub fn play_start(&mut self) {
+    /// Os scripts de `set_scripts` são compilados antes: se um grafo tem erro, a reprodução não começa e o erro
+    /// (lançado como exceção no TypeScript) diz em qual script está.
+    pub fn play_start(&mut self) -> Result<(), JsError> {
         let scene = self.scene.play_copy();
+        let instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
         let physics = Physics::build(&scene, &self.settings);
         let mut audio = AudioPlayback::default();
         audio.autoplay(&scene);
         let mut timers = Timers::default();
         timers.autostart(&scene);
-        self.play = Some(Play { scene, time: 0.0, physics, audio, timers });
+        // Bordas de entrada: a tecla já apertada antes de começar não conta como aperto no primeiro quadro.
+        self.input.latch();
+        self.play = Some(Play { scene, time: 0.0, physics, audio, timers, instancias });
+        Ok(())
     }
 
     pub fn play_stop(&mut self) {
@@ -180,14 +199,16 @@ impl SceneEditor {
         self.play.is_some()
     }
 
-    /// Avança a reprodução em `dt` segundos: o relógio, a física (passos fixos), os temporizadores e a
-    /// atenuação dos sons 2D pela posição da câmera.
+    /// Avança a reprodução em `dt` segundos: o relógio, a física (passos fixos), os temporizadores, os scripts
+    /// (VIS-023) e a atenuação dos sons 2D pela posição da câmera. As bordas de entrada são fechadas no fim.
     pub fn play_tick(&mut self, dt: f64) {
         if let Some(p) = &mut self.play {
             p.time += dt;
             p.physics.advance(&mut p.scene, dt);
             p.timers.advance(&p.scene, dt);
+            scripts::tick(p, &self.settings, &self.input, self.pointer, &mut self.console, dt);
             p.audio.update(&p.scene, p.time);
+            self.input.latch();
         }
     }
 
