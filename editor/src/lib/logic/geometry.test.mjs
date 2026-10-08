@@ -13,6 +13,7 @@ import {
   fitMap,
   flowLayout,
   minimapToCamera,
+  normRect,
   showsDetail,
   toWorld,
 } from './geometry.ts';
@@ -120,21 +121,60 @@ test('detail shows from the threshold up, and not below it', () => {
   assert.equal(showsDetail(1), true);
 });
 
-test('a minimap drag does not drift: with the fit fixed, the camera lands on the pointer at every event', () => {
-  // The fit is the one taken when the drag began. The pointer goes six pixels right, then six back to the start.
-  const fit = fitMap([-300, -200, 900, 600], 168, 110, 6);
-  const start = { x: 120, y: 90, zoom: 1 };
-  const xs = [85, 86, 87, 88, 89, 90, 89, 88, 87, 86, 85, 84];
+// The minimap drag as Minimap.svelte runs it. The map is fitted to the bounds of the graph and of the view box.
+// The view box moves with the camera, so when the graph is smaller than the view, a fit recomputed on every
+// event moves too.
+const MAP = { w: 168, h: 110, margin: 6 };
+const CANVAS = { w: 800, h: 500 };
+const GRAPH = [0, 0, 400, 300];
+const DRAG_Y = 55;
+/**
+ * Pointer positions of the drag: pointerdown at x = 84, then 12 px to the right and 12 px back, one event per pixel.
+ */
+const DRAG_XS = [84, ...Array.from({ length: 12 }, (_, i) => 85 + i), ...Array.from({ length: 12 }, (_, i) => 95 - i)];
+const viewOf = (cam) => {
+  const a = toWorld(cam, 0, 0);
+  const b = toWorld(cam, CANVAS.w, CANVAS.h);
+  return normRect(a[0], a[1], b[0], b[1]);
+};
+/** The fit Minimap.svelte computes from a camera: the bounds of the view box and of the graph. */
+const fitFor = (cam) => fitMap(boundsOf([viewOf(cam), GRAPH]), MAP.w, MAP.h, MAP.margin);
+
+/**
+ * Runs the drag with one event per entry of `xs`, at height `y`, and returns the world point at the centre of the
+ * canvas after each event. `pinned` true keeps the fit taken at pointerdown for the whole drag (the code now). `pinned`
+ * false takes the fit again on every event, from the camera of that moment (the code before 81a2b57).
+ */
+function dragCentres(pinned, start, xs, y) {
+  const pinnedFit = fitFor(start);
   let cam = start;
-  for (const x of xs) {
-    cam = minimapToCamera(cam, fit, x, 55, 800, 500);
-    // The world point under the pointer, measured with that same fit, is the centre of the canvas.
-    const [cx, cy] = toWorld(cam, 400, 250);
-    assert.ok(Math.abs(cx - (x - fit.x) / fit.scale) < 1e-9);
-    assert.ok(Math.abs(cy - (55 - fit.y) / fit.scale) < 1e-9);
-  }
-  // Back at the first pointer position, the camera is the one that position gives from any start.
-  assert.deepEqual(cam, minimapToCamera(start, fit, 84, 55, 800, 500));
+  return xs.map((x) => {
+    cam = minimapToCamera(cam, pinned ? pinnedFit : fitFor(cam), x, y, CANVAS.w, CANVAS.h);
+    return toWorld(cam, CANVAS.w / 2, CANVAS.h / 2);
+  });
+}
+
+test('a minimap drag keeps the fit taken at pointerdown, so the camera does not drift', () => {
+  // A pixel of pointer travel moves the world point under the pointer by 1 / scale. So after each event, the centre of
+  // the canvas is the pointerdown point plus the sum of the pointer's displacements so far, divided by the scale.
+  const start = { x: 0, y: 0, zoom: 0.5 };
+  const fit = fitFor(start);
+  const centres = dragCentres(true, start, DRAG_XS, DRAG_Y);
+  const origin = (DRAG_XS[0] - fit.x) / fit.scale;
+  centres.forEach((c, k) => {
+    const expected = origin + (DRAG_XS[k] - DRAG_XS[0]) / fit.scale;
+    assert.ok(Math.abs(c[0] - expected) < 1e-9, `event ${k}: centre at ${c[0]}, expected ${expected}`);
+    assert.ok(Math.abs(c[1] - (DRAG_Y - fit.y) / fit.scale) < 1e-9, `event ${k}: centre y`);
+  });
+});
+
+test('the same drag with the fit recomputed on every event drifts, which is what the pinned fit prevents', () => {
+  const start = { x: 0, y: 0, zoom: 0.5 };
+  const fit = fitFor(start);
+  const centres = dragCentres(false, start, DRAG_XS, DRAG_Y);
+  // The pointer is back at the pointerdown position, but the centre is more than one world unit away from its point.
+  const drift = centres[centres.length - 1][0] - (DRAG_XS[0] - fit.x) / fit.scale;
+  assert.ok(Math.abs(drift) > 1, `the recomputed fit should drift, got ${drift}`);
 });
 
 test('the camera a minimap pointer gives depends only on the pointer and the zoom, not on the old camera', () => {

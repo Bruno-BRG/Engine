@@ -22,13 +22,13 @@
     return normRect(a[0], a[1], b[0], b[1]);
   });
   const nodeRects = $derived(
-    logic.snap.nodes.map((n) => ({ id: n.id, rect: logic.rectOf(n), sel: logic.selNodes.includes(n.id) })),
+    logic.snap.nodes.map((n) => ({ id: n.id, rect: logic.rectOf(n), isSelected: logic.selNodes.includes(n.id) })),
   );
   const commentRects = $derived(
     logic.snap.comments.map((c) => ({
       id: c.id,
       rect: [c.position[0], c.position[1], c.size[0], c.size[1]] as Rect,
-      sel: logic.selComments.includes(c.id),
+      isSelected: logic.selComments.includes(c.id),
     })),
   );
   /** The map covers the whole graph and the part on screen, so the view box is always visible on it. */
@@ -74,7 +74,8 @@
   // The map sits over the canvas: its pointer, wheel and menu events stop here, so they do not pan or zoom the graph.
   function pointerDown(e: PointerEvent) {
     e.stopPropagation();
-    if (!svg) return;
+    // Only the left button drags the map. Other buttons are stopped here and do nothing.
+    if (e.button !== 0 || !svg) return;
     // The view box moves with the camera, so the fit used for the whole drag is the one taken now.
     dragFit = fit;
     dragging = true;
@@ -111,11 +112,11 @@
   >
     {#each nodeRects as n (`n${n.id}`)}
       {@const p = onMap(n.rect)}
-      <rect class="node" class:sel={n.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
+      <rect class="node" class:selected={n.isSelected} x={p.x} y={p.y} width={p.w} height={p.h} />
     {/each}
     {#each commentRects as c (`c${c.id}`)}
       {@const p = onMap(c.rect)}
-      <rect class="box" class:sel={c.sel} x={p.x} y={p.y} width={p.w} height={p.h} />
+      <rect class="box" class:selected={c.isSelected} x={p.x} y={p.y} width={p.w} height={p.h} />
     {/each}
     <rect class="view" x={frame.x} y={frame.y} width={frame.w} height={frame.h} />
   </svg>
@@ -142,7 +143,7 @@
     fill: var(--text-faint);
     opacity: 0.6;
   }
-  .node.sel {
+  .node.selected {
     fill: var(--accent);
     opacity: 1;
   }
@@ -152,7 +153,7 @@
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
-  .box.sel {
+  .box.selected {
     stroke: var(--accent);
   }
   .view {
