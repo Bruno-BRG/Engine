@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from '$lib/state/app.svelte';
-  import { paletteCommands, fuzzyScore, type Command } from '$lib/commands';
+  import { paletteCommands, fuzzyScore, keysOf, type Command } from '$lib/commands';
   import { Search, CornerDownLeft } from '@lucide/svelte';
 
   let query = $state('');
@@ -65,12 +65,13 @@
     <div class="list" bind:this={list}>
       {#each results as c, i (c.id)}
         {@const showGroup = !query.trim() && (i === 0 || results[i - 1].group !== c.group)}
+        {@const keys = keysOf(c)}
         {#if showGroup}<div class="group">{c.group}</div>{/if}
         <button data-active={i === index} class:active={i === index} onpointermove={() => (index = i)} onclick={() => run(c)}>
           <span class="title">{c.title}</span>
           {#if query.trim()}<span class="grp">{c.group}</span>{/if}
-          {#if c.keys}
-            <span class="keys">{#each keyParts(c.keys) as k}<kbd>{k}</kbd>{/each}</span>
+          {#if keys}
+            <span class="keys">{#each keyParts(keys) as k}<kbd>{k}</kbd>{/each}</span>
           {/if}
           {#if i === index}<CornerDownLeft size={13} class="enter" />{/if}
         </button>
@@ -86,7 +87,7 @@
     position: fixed;
     inset: 0;
     z-index: 150;
-    background: rgb(5 6 10 / 0.45);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     display: flex;
     justify-content: center;
@@ -145,7 +146,7 @@
     width: 100%;
     height: 36px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--r-ctl);
     text-align: left;
     color: var(--text);
   }

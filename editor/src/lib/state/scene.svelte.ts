@@ -1,216 +1,332 @@
-// Cena em edição, seleção e histórico de desfazer/refazer.
+// Cena em edição. A árvore de nós vive no Rust (crate nexo-core, via WebAssembly, SCN-005).
+// Este módulo guarda uma cópia reativa do contorno para a interface e envia as operações.
+// Toda edição passa por aqui, para que a interface e a cena nunca divirjam.
+import { createSceneEditor, randomSeed, readNodeRegistry, type SceneEditor } from '$lib/runtime/engine';
+import { log } from './log.svelte';
 
-export type ShapeKind = 0 | 1 | 2; // retângulo, círculo, losango
-export type BehaviorKind = 'girar' | 'flutuar' | 'pulsar';
+export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid';
 
-export interface Behavior {
-  kind: BehaviorKind;
-  speed: number;
-}
-
-export interface SceneObject {
-  id: string;
+export interface PropDef {
   name: string;
-  shape: ShapeKind;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  rotation: number; // graus
-  color: string;
-  visible: boolean;
-  locked: boolean;
-  behaviors: Behavior[];
+  label: string;
+  group: string;
+  kind: PropKind;
+  default: unknown;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  unit: string | null;
+  options: string[];
+  asset: string | null;
 }
 
-export interface SceneData {
-  version: 1;
+export interface NodeType {
+  name: string;
+  base: string | null;
+  category: string;
+  description: string;
+  props: PropDef[];
+}
+
+/** Forma de colisão no mundo: `points` são os cantos (retângulo) ou pontos do círculo. */
+export interface ShapeOutline {
+  uid: string;
+  owner: string;
+  points: [number, number][];
+}
+
+export interface NodeView {
+  uid: string;
+  name: string;
+  kind: string;
+  parent: string | null;
+  children: string[];
+  depth: number;
+  visible: boolean;
+  world: { x: number; y: number; rot: number; sx: number; sy: number };
+  props: Record<string, any>;
+}
+
+export interface Outline {
   name: string;
   screen: [number, number];
-  objects: SceneObject[];
+  playing: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+  nodes: NodeView[];
 }
 
-export const SHAPE_NAMES = ['Retângulo', 'Círculo', 'Losango'] as const;
-
-export const BEHAVIORS: Record<BehaviorKind, { name: string; description: string; unit: string; default: number }> = {
-  girar: { name: 'Girar', description: 'Gira o objeto continuamente.', unit: '°/s', default: 90 },
-  flutuar: { name: 'Flutuar', description: 'Sobe e desce suavemente.', unit: 'ciclos/s', default: 1 },
-  pulsar: { name: 'Pulsar', description: 'Aumenta e diminui de tamanho.', unit: 'ciclos/s', default: 1.5 },
+const EMPTY: Outline = {
+  name: 'Principal',
+  screen: [1280, 720],
+  playing: false,
+  canUndo: false,
+  canRedo: false,
+  undoLabel: null,
+  redoLabel: null,
+  nodes: [],
 };
 
-export const newId = () => Math.random().toString(36).slice(2, 10);
-
-export function emptyScene(name = 'Principal'): SceneData {
-  return { version: 1, name, screen: [1280, 720], objects: [] };
-}
-
-const MAX_HISTORY = 200;
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 class SceneState {
-  data = $state<SceneData>(emptyScene());
-  selectedId = $state<string | null>(null);
+  #ed: SceneEditor | null = null;
+  #ready: Promise<SceneEditor> | null = null;
+
+  /** Contorno da cena. Substituído inteiro a cada operação. */
+  data = $state.raw<Outline>(EMPTY);
+  /** Tipos de nó registrados no Rust, na ordem do menu de criação. */
+  types = $state.raw<NodeType[]>([]);
+  /** Nós selecionados, na ordem de seleção. O último é o principal. */
+  selection = $state<string[]>([]);
   hoveredId = $state<string | null>(null);
-  /** Incrementa a cada mudança; o viewport e o salvamento automático observam este valor. */
+  /** Incrementa a cada mudança; o salvamento automático observa este valor. */
   revision = $state(0);
-  canUndo = $state(false);
-  canRedo = $state(false);
-  lastAction = $state('');
 
-  #undo: { label: string; snap: string }[] = [];
-  #redo: { label: string; snap: string }[] = [];
-  #coalesceKey: string | null = null;
-  #coalesceAt = 0;
+  byUid = $derived(new Map(this.data.nodes.map((n) => [n.uid, n] as const)));
+  selected = $derived(this.selectedId ? (this.byUid.get(this.selectedId) ?? null) : null);
 
-  selected = $derived(this.data.objects.find((o) => o.id === this.selectedId) ?? null);
+  get selectedId(): string | null {
+    return this.selection.at(-1) ?? null;
+  }
+  set selectedId(uid: string | null) {
+    this.select(uid);
+  }
+  get canUndo() {
+    return this.data.canUndo;
+  }
+  get canRedo() {
+    return this.data.canRedo;
+  }
+  /** Nome do último passo feito, para a barra de status. */
+  get lastAction() {
+    return this.data.undoLabel ?? '';
+  }
+  /** Há algo na área de transferência? Reativo: a interface reage ao copiar. */
+  hasClipboard = $state(false);
+  /** Acesso direto ao editor WASM (uso restrito a viewport e reprodução). */
+  get editor(): SceneEditor | null {
+    return this.#ed;
+  }
+  get rootIds() {
+    return this.data.nodes.filter((n) => n.parent == null).map((n) => n.uid);
+  }
 
-  load(data: SceneData) {
-    this.data = data;
-    this.selectedId = null;
+  /** Garante que o editor WASM existe e que os tipos foram lidos. */
+  ensure(): Promise<SceneEditor> {
+    this.#ready ??= createSceneEditor().then((ed) => {
+      this.#ed = ed;
+      this.types = JSON.parse(readNodeRegistry()) as NodeType[];
+      return ed;
+    });
+    return this.#ready;
+  }
+
+  /** Carrega o texto de uma cena (formato atual ou formato 1 migrado). */
+  async load(text: string) {
+    const ed = await this.ensure();
+    ed.load_text(text, randomSeed());
+    this.#reset();
+  }
+
+  /** Cena nova com raiz e câmera. */
+  async newDefault(name: string) {
+    const ed = await this.ensure();
+    ed.new_default(name, randomSeed());
+    this.#reset();
+  }
+
+  /** Texto RON de uma cena feita só com a subárvore de `uid` (SCN-022). */
+  branchText(uid: string): string {
+    if (!this.#ed) throw new Error('A cena ainda não foi carregada');
+    return this.#ed.branch_to_ron(uid, randomSeed());
+  }
+
+  /** Texto RON da cena atual, para salvar. */
+  snapshot(): string {
+    if (!this.#ed) throw new Error('A cena ainda não foi carregada');
+    return this.#ed.to_ron();
+  }
+
+  #reset() {
+    this.selection = [];
     this.hoveredId = null;
-    this.#undo = [];
-    this.#redo = [];
-    this.#sync();
+    this.#refresh();
+  }
+
+  #refresh() {
+    if (!this.#ed) return;
+    this.data = JSON.parse(this.#ed.outline() as unknown as string) as Outline;
     this.revision++;
   }
 
-  snapshot(): SceneData {
-    return $state.snapshot(this.data) as SceneData;
-  }
-
-  /**
-   * Aplica uma alteração registrando um passo de desfazer.
-   * Alterações seguidas com a mesma chave (arrastar, scrub) viram um passo só.
-   */
-  mutate(label: string, fn: (d: SceneData) => void, coalesceKey?: string) {
-    const t = performance.now();
-    const merge =
-      coalesceKey != null &&
-      coalesceKey === this.#coalesceKey &&
-      (coalesceKey.startsWith('drag:') || t - this.#coalesceAt < 1000);
-    if (!merge) {
-      this.#undo.push({ label, snap: JSON.stringify(this.snapshot()) });
-      if (this.#undo.length > MAX_HISTORY) this.#undo.shift();
-      this.#redo = [];
+  /** Executa uma operação do editor, atualiza o contorno e registra erros no console. */
+  #run<T>(fn: (ed: SceneEditor) => T): T | undefined {
+    if (!this.#ed) return undefined;
+    try {
+      const r = fn(this.#ed);
+      this.#refresh();
+      return r;
+    } catch (e) {
+      log.error('Operação recusada: ' + message(e));
+      return undefined;
     }
-    this.#coalesceKey = coalesceKey ?? null;
-    this.#coalesceAt = t;
-    fn(this.data);
-    this.lastAction = label;
-    this.#sync();
-    this.revision++;
   }
 
-  /** Encerra o agrupamento atual (por exemplo, ao soltar o mouse). */
+  // ---------- Seleção e consultas ----------
+
+  /** Seleciona um nó (substitui a seleção). `null` limpa. Com `additive`, alterna o nó na seleção. */
+  select(uid: string | null, additive = false) {
+    if (uid == null) {
+      this.selection = [];
+      return;
+    }
+    if (!this.byUid.has(uid)) return;
+    if (!additive) {
+      this.selection = [uid];
+      return;
+    }
+    this.selection = this.selection.includes(uid)
+      ? this.selection.filter((u) => u !== uid)
+      : [...this.selection, uid];
+  }
+
+  isSelected(uid: string) {
+    return this.selection.includes(uid);
+  }
+
+  node(uid: string): NodeView | undefined {
+    return this.byUid.get(uid);
+  }
+
+  /** Filhos diretos de um nó, na ordem da árvore. */
+  children(uid: string | null): NodeView[] {
+    const ids = uid == null ? this.rootIds : (this.byUid.get(uid)?.children ?? []);
+    return ids.map((id) => this.byUid.get(id)).filter((n): n is NodeView => !!n);
+  }
+
+  isLocked(uid: string) {
+    return !!this.byUid.get(uid)?.props.locked;
+  }
+
+  pick(x: number, y: number): string | null {
+    return this.#ed?.pick(x, y) ?? null;
+  }
+
+  /** Limites [minx, miny, maxx, maxy] do nó no mundo, ou null. */
+  bounds(uid: string): [number, number, number, number] | null {
+    const b = this.#ed?.bounds(uid);
+    return b && b.length === 4 ? (b as unknown as [number, number, number, number]) : null;
+  }
+
+  /** Contornos das formas de colisão (VPT-005): pontos no mundo, em volta de cada forma ativa. */
+  shapeOutlines(): ShapeOutline[] {
+    if (!this.#ed) return [];
+    return JSON.parse(this.#ed.shape_outlines() as unknown as string) as ShapeOutline[];
+  }
+
+  /** Câmera atual [x, y, zoom] ou null. */
+  camera(): [number, number, number] | null {
+    const c = this.#ed?.camera();
+    return c && c.length === 3 ? [c[0], c[1], c[2]] : null;
+  }
+
+  // ---------- Operações ----------
+
+  /** Cria um nó do tipo `kind` dentro de `parent` (ou na raiz) e o seleciona. */
+  add(kind: string, parent: string | null = null, index?: number): string | null {
+    const uid = this.#run((ed) => ed.add_node(parent ?? undefined, kind, index));
+    if (uid) this.selection = [uid];
+    return uid ?? null;
+  }
+
+  remove(uid: string) {
+    this.#run((ed) => ed.remove_node(uid));
+    this.selection = this.selection.filter((u) => this.byUid.has(u));
+  }
+
+  removeSelected() {
+    for (const uid of [...this.selection]) this.remove(uid);
+  }
+
+  duplicate(uid: string) {
+    const copy = this.#run((ed) => ed.duplicate_node(uid));
+    if (copy) this.selection = [copy];
+  }
+
+  duplicateSelected() {
+    const ids = [...this.selection];
+    this.selection = [];
+    for (const uid of ids) {
+      const copy = this.#run((ed) => ed.duplicate_node(uid));
+      if (copy) this.selection = [...this.selection, copy];
+    }
+  }
+
+  copy(uid: string) {
+    this.#run((ed) => ed.copy_node(uid));
+    this.hasClipboard = this.#ed?.has_clipboard() ?? false;
+  }
+
+  /** Copia e remove. Desfazer restaura o nó na mesma posição. */
+  cut(uid: string) {
+    this.copy(uid);
+    this.remove(uid);
+  }
+
+  /** Cola a área de transferência dentro de `parent` (ou na raiz) e seleciona a cópia. */
+  paste(parent: string | null = null) {
+    const uid = this.#run((ed) => ed.paste_node(parent ?? undefined));
+    if (uid) this.selection = [uid];
+  }
+
+  rename(uid: string, name: string) {
+    this.#run((ed) => ed.rename_node(uid, name));
+  }
+
+  /** Define uma ou mais propriedades. Com `coalesceKey`, alterações seguidas viram um passo de desfazer. */
+  setProps(uid: string, patch: Record<string, unknown>, coalesceKey?: string) {
+    this.#run((ed) => {
+      for (const [key, value] of Object.entries(patch)) {
+        ed.set_prop(uid, key, JSON.stringify(value), coalesceKey);
+      }
+    });
+  }
+
+  setProp(uid: string, key: string, value: unknown, coalesceKey?: string) {
+    this.setProps(uid, { [key]: value }, coalesceKey);
+  }
+
+  /** Move o nó para `parent` (ou raiz) na posição final `index` entre os irmãos. */
+  move(uid: string, parent: string | null, index: number) {
+    this.#run((ed) => ed.move_node(uid, parent ?? undefined, index));
+  }
+
+  changeKind(uid: string, kind: string) {
+    this.#run((ed) => ed.change_kind(uid, kind));
+  }
+
+  /** Fecha o agrupamento de alterações (soltar o mouse, sair de um campo numérico). */
   endGroup() {
-    this.#coalesceKey = null;
+    this.#ed?.end_group();
   }
 
-  undo() {
-    const step = this.#undo.pop();
-    if (!step) return null;
-    this.#redo.push({ label: step.label, snap: JSON.stringify(this.snapshot()) });
-    this.#restore(step.snap);
-    return step.label;
+  undo(): string | null {
+    const label = this.#run((ed) => ed.undo());
+    this.#pruneSelection();
+    return label ?? null;
   }
 
-  redo() {
-    const step = this.#redo.pop();
-    if (!step) return null;
-    this.#undo.push({ label: step.label, snap: JSON.stringify(this.snapshot()) });
-    this.#restore(step.snap);
-    return step.label;
+  redo(): string | null {
+    const label = this.#run((ed) => ed.redo());
+    this.#pruneSelection();
+    return label ?? null;
   }
 
-  #restore(snap: string) {
-    this.data = JSON.parse(snap);
-    if (this.selectedId && !this.data.objects.some((o) => o.id === this.selectedId)) this.selectedId = null;
-    this.#coalesceKey = null;
-    this.#sync();
-    this.revision++;
-  }
-
-  #sync() {
-    this.canUndo = this.#undo.length > 0;
-    this.canRedo = this.#redo.length > 0;
-  }
-
-  // ---------- Operações comuns ----------
-
-  uniqueName(base: string) {
-    const names = new Set(this.data.objects.map((o) => o.name));
-    if (!names.has(base)) return base;
-    let i = 2;
-    while (names.has(base + ' ' + i)) i++;
-    return base + ' ' + i;
-  }
-
-  add(shape: ShapeKind, x: number, y: number, extra: Partial<SceneObject> = {}) {
-    const palette = ['#7c5cff', '#3ddc97', '#ffb84d', '#ff5c7a', '#5cc8ff', '#ff7ad9'];
-    const obj: SceneObject = {
-      id: newId(),
-      name: this.uniqueName(SHAPE_NAMES[shape]),
-      shape,
-      x: Math.round(x),
-      y: Math.round(y),
-      w: 96,
-      h: 96,
-      rotation: 0,
-      color: palette[this.data.objects.length % palette.length],
-      visible: true,
-      locked: false,
-      behaviors: [],
-      ...extra,
-    };
-    this.mutate('Criar ' + obj.name, (d) => d.objects.push(obj));
-    this.selectedId = obj.id;
-    return obj;
-  }
-
-  remove(id: string) {
-    const obj = this.data.objects.find((o) => o.id === id);
-    if (!obj) return;
-    this.mutate('Excluir ' + obj.name, (d) => {
-      d.objects = d.objects.filter((o) => o.id !== id);
-    });
-    if (this.selectedId === id) this.selectedId = null;
-  }
-
-  duplicate(id: string) {
-    const src = this.data.objects.find((o) => o.id === id);
-    if (!src) return;
-    const copy: SceneObject = {
-      ...structuredClone($state.snapshot(src) as SceneObject),
-      id: newId(),
-      name: this.uniqueName(src.name),
-      x: src.x + 32,
-      y: src.y + 32,
-    };
-    this.mutate('Duplicar ' + src.name, (d) => {
-      const i = d.objects.findIndex((o) => o.id === id);
-      d.objects.splice(i + 1, 0, copy);
-    });
-    this.selectedId = copy.id;
-  }
-
-  update(id: string, patch: Partial<SceneObject>, label = 'Editar', coalesceKey?: string) {
-    this.mutate(
-      label,
-      (d) => {
-        const o = d.objects.find((o) => o.id === id);
-        if (o) Object.assign(o, patch);
-      },
-      coalesceKey,
-    );
-  }
-
-  move(id: string, dir: -1 | 1) {
-    const i = this.data.objects.findIndex((o) => o.id === id);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= this.data.objects.length) return;
-    this.mutate('Reordenar', (d) => {
-      const [o] = d.objects.splice(i, 1);
-      d.objects.splice(j, 0, o);
-    });
+  #pruneSelection() {
+    this.selection = this.selection.filter((u) => this.byUid.has(u));
   }
 }
 

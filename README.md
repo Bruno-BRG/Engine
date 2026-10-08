@@ -69,6 +69,7 @@ pnpm build      # desktop installer
 | [Architecture](docs/03-architecture.md) | Tauri, Rust, rendering, node tree, project format, export |
 | [Visual programming](docs/04-visual-programming.md) | Event sheets, node graphs, IR, VM, C# generation |
 | [Editor UI & UX](docs/05-editor-ui.md) | Unity-style design system and layout |
+| [UX & UI standard](docs/08-ux-ui-standard.md) | Colors, type, shapes, components, shortcuts and the decision log |
 | [Roadmap](docs/07-roadmap.md) | Phases and exit criteria |
 | [Backlog](docs/backlog/README.md) | Every task, grouped by topic |
 | [Decisions (ADRs)](docs/adr/) | Technical decisions and why |

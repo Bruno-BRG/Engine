@@ -40,7 +40,7 @@
     min-width: 260px;
     max-width: 380px;
     padding: 11px 10px 11px 12px;
-    border-radius: var(--r-panel);
+    border-radius: var(--r-dlg);
     background: var(--bg-2);
     box-shadow: var(--shadow-pop);
   }

@@ -6,29 +6,29 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 
 ## Core model (Rust)
 
-- [ ] **SCN-001** (P0) Node tree in `nexo-core`: type, name, UID, parent/children, ordered children, typed property bag. Migrate Phase 0 projects (`projeto.nexo`, `cenas/`) to `project.nexo`, `scenes/` automatically.
-- [ ] **SCN-002** (P0) Node type registry with inheritance and property metadata (type, default, range, hint, group) used by Inspector, serializer and visual scripting. *G: ClassDB + property hints.*
-- [ ] **SCN-003** (P0) Stable UIDs for nodes and resources so references survive renames and moves. *G 4.6: unique node IDs.*
-- [ ] **SCN-004** (P0) Scene serialization in RON with deterministic order; only non-default properties saved.
-- [ ] **SCN-005** (P0) Move the scene state of truth from the UI to Rust (editor commands through Tauri / WASM).
+- [x] **SCN-001** (P0) Node tree in `nexo-core`: type, name, UID, parent/children, ordered children, typed property bag. Migrate Phase 0 projects (`projeto.nexo`, `cenas/`) to `project.nexo`, `scenes/` automatically. *Status (Fase 1): migração automática do formato 1 verificada no desktop (pastas, backup .v1.bak).*
+- [x] **SCN-002** (P0) Node type registry with inheritance and property metadata (type, default, range, hint, group) used by Inspector, serializer and visual scripting. *G: ClassDB + property hints.* *Status (Fase 1): Inspector e menu de criação são gerados do registro de tipos.*
+- [x] **SCN-003** (P0) Stable UIDs for nodes and resources so references survive renames and moves. *G 4.6: unique node IDs.* *Status (Fase 1): UIDs de 16 dígitos estáveis; ramo salvo mantém os UIDs; referências de textura verificadas.*
+- [x] **SCN-004** (P0) Scene serialization in RON with deterministic order; only non-default properties saved. *Status (Fase 1): RON em pré-ordem, só propriedades não padrão; verificado no arquivo.*
+- [x] **SCN-005** (P0) Move the scene state of truth from the UI to Rust (editor commands through Tauri / WASM). *Status (Fase 1): estado da cena no nexo-core, acessado pelo WASM (ADR 0006).*
 
 ## Built-in node types (first set)
 
-- [ ] **SCN-010** (P0) `Node`, `Node2D` (position, rotation, scale, skew, z-index, visible, modulate).
-- [ ] **SCN-011** (P0) `Sprite2D` (texture, region, flip, offset, centered, pixel snap).
-- [ ] **SCN-012** (P0) `Camera2D` (zoom, limits, smoothing, current).
-- [ ] **SCN-013** (P0) Physics nodes: `StaticBody2D`, `RigidBody2D`, `CharacterBody2D`, `Area2D`, `CollisionShape2D`, `CollisionPolygon2D` (see [physics.md](physics.md)).
-- [ ] **SCN-014** (P0) `Timer`, `AudioStreamPlayer`, `AudioStreamPlayer2D`.
+- [x] **SCN-010** (P0) `Node`, `Node2D` (position, rotation, scale, skew, z-index, visible, modulate). *Status (Fase 1): Node e Node2D com posição, rotação, escala, ordem Z, visibilidade e modulação.*
+- [ ] **SCN-011** (P0) `Sprite2D` (texture, region, flip, offset, centered, pixel snap). *Status (Fase 1): parcial: textura, forma de teste, espelhamento, deslocamento e centralização. Faltam região e pixel snap.*
+- [ ] **SCN-012** (P0) `Camera2D` (zoom, limits, smoothing, current). *Status (Fase 1): parcial: zoom, câmera atual e suavização. Faltam limites da câmera.*
+- [ ] **SCN-013** (P0) Physics nodes: `StaticBody2D`, `RigidBody2D`, `CharacterBody2D`, `Area2D`, `CollisionShape2D`, `CollisionPolygon2D` (see [physics.md](physics.md)). *Status (Fase 2): parcial: StaticBody2D, RigidBody2D, CharacterBody2D, Area2D e CollisionShape2D existem e têm física (ver physics.md). Faltam CollisionPolygon2D e os nós de consulta.*
+- [ ] **SCN-014** (P0) `Timer`, `AudioStreamPlayer`, `AudioStreamPlayer2D`. *Status (Fase 2): pendente: Timer, AudioStreamPlayer e AudioStreamPlayer2D dependem do runtime de áudio.*
 - [ ] **SCN-015** (P1) `AnimatedSprite2D`, `AnimationPlayer`, `TileMapLayer`, `Marker2D`, `Path2D`/`PathFollow2D`, `Line2D`, `Polygon2D`, `GPUParticles2D`, `CanvasLayer`, `ParallaxBackground`.
 - [ ] **SCN-016** (P1) Control nodes for game UI (see [game-ui.md](game-ui.md)).
 
 ## Hierarchy panel
 
-- [ ] **SCN-020** (P0) Tree with expand/collapse arrows, indent guides, node-type icons, Unity-style row selection.
-- [ ] **SCN-021** (P0) Drag to reparent and reorder, with drop indicators (above / inside / below).
-- [ ] **SCN-022** (P0) Right-click menu: Create (by category, with search), Rename (F2), Duplicate (Ctrl+D), Delete, Copy/Paste, Change Type, Attach Script, Save Branch as Scene. *U: Hierarchy context menu; G: Scene dock.*
-- [ ] **SCN-023** (P0) Search/filter by name and by type (`t:Sprite2D`). *U: Hierarchy search.*
-- [ ] **SCN-024** (P0) Multi-select (Ctrl/Shift), visibility and lock toggles, script and signal badges.
+- [ ] **SCN-020** (P0) Tree with expand/collapse arrows, indent guides, node-type icons, Unity-style row selection. *Status (Fase 1): parcial: árvore com recolher/expandir, ícones e seleção verificados. Faltam as guias de indentação.*
+- [ ] **SCN-021** (P0) Drag to reparent and reorder, with drop indicators (above / inside / below). *Status (Fase 1): implementado (arrastar entre níveis com indicador antes/dentro/depois), ainda não testado no desktop.*
+- [ ] **SCN-022** (P0) Right-click menu: Create (by category, with search), Rename (F2), Duplicate (Ctrl+D), Delete, Copy/Paste, Change Type, Attach Script, Save Branch as Scene. *U: Hierarchy context menu; G: Scene dock.* *Status (Fase 1): parcial: criar, renomear, duplicar, excluir, copiar e colar, trocar tipo e salvar ramo como cena. Anexar script fica para a Fase 2.*
+- [ ] **SCN-023** (P0) Search/filter by name and by type (`t:Sprite2D`). *U: Hierarchy search.* *Status (Fase 1): implementado (busca por nome e t:Tipo), ainda não testado no desktop.*
+- [ ] **SCN-024** (P0) Multi-select (Ctrl/Shift), visibility and lock toggles, script and signal badges. *Status (Fase 1): parcial: seleção múltipla, visibilidade e trava verificadas. Faltam os distintivos de script e sinal (Fase 2).*
 - [ ] **SCN-025** (P1) Scene root header with scene name, unsaved dot, and scene-wide actions.
 
 ## Scene composition

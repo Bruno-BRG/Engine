@@ -122,12 +122,12 @@
   .nf {
     display: flex;
     align-items: center;
-    height: 28px;
+    height: 18px;
     border-radius: var(--r-ctl);
     background: var(--bg-2);
     border: 1px solid var(--line);
     overflow: hidden;
-    transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+    transition: border-color var(--t-fast) var(--ease);
   }
   .nf:hover {
     border-color: var(--text-faint);
@@ -135,26 +135,26 @@
   .nf:focus-within,
   .nf.scrubbing {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .lbl {
     flex: none;
-    min-width: 26px;
+    min-width: 22px;
     height: 100%;
-    padding: 0 7px;
+    padding: 0 6px;
     display: grid;
     place-items: center;
     font-size: var(--fs-11);
-    font-weight: 600;
-    color: var(--text-faint);
+    font-weight: 500;
+    color: var(--text-dim);
     cursor: ew-resize;
-    border-right: 1px solid var(--line-soft);
+    border-right: 1px solid var(--line);
+    background: var(--bg-toolbar);
     transition: color var(--t-fast), background var(--t-fast);
   }
   .lbl:hover,
   .scrubbing .lbl {
-    color: var(--accent-hi);
-    background: var(--accent-soft);
+    color: var(--text);
+    background: var(--selection);
   }
   input {
     flex: 1;

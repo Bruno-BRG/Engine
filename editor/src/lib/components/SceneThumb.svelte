@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { SceneData } from '$lib/state/scene.svelte';
-  let { data }: { data: SceneData } = $props();
+  import type { LegacyScene } from '$lib/templates';
+  let { data }: { data: LegacyScene } = $props();
   const [w, h] = $derived(data.screen);
 </script>
 
@@ -10,7 +10,7 @@
       <path d="M64 0H0V64" fill="none" stroke="white" stroke-opacity="0.05" stroke-width="2" />
     </pattern>
   </defs>
-  <rect width={w} height={h} fill="#12141a" />
+  <rect width={w} height={h} style="fill: var(--bg-0)" />
   <rect width={w} height={h} fill="url(#thumb-grid)" />
   {#each data.objects as o (o.id)}
     {#if o.visible}

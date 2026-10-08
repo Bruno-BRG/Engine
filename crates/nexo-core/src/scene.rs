@@ -1,0 +1,844 @@
+//! Árvore de nós da cena: UIDs estáveis, hierarquia, propriedades e desfazer/refazer (SCN-001, SCN-003).
+//! É a fonte da verdade da cena; o editor só lê e envia operações.
+
+use crate::registry::{self, PropDef, PropKind};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::str::FromStr;
+
+const MAX_HISTORY: usize = 200;
+/// Deslocamento aplicado a cópias e colagens, para não cobrirem o original.
+const PASTE_OFFSET: f64 = 32.0;
+
+/// Identificador estável de um nó. Vai para o arquivo como 16 dígitos hexadecimais,
+/// porque números de 64 bits perdem precisão em JavaScript.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Uid(pub u64);
+
+impl fmt::Display for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+impl FromStr for Uid {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        u64::from_str_radix(s, 16)
+            .map(Uid)
+            .map_err(|_| format!("UID inválido: {s}"))
+    }
+}
+
+impl Serialize for Uid {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Uid {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// Um nó da cena. `props` guarda só os valores que diferem do padrão do tipo.
+#[derive(Clone, Debug)]
+pub struct Node {
+    pub name: String,
+    pub kind: String,
+    pub parent: Option<Uid>,
+    pub children: Vec<Uid>,
+    pub props: BTreeMap<String, Value>,
+}
+
+#[derive(Clone)]
+struct Snapshot {
+    label: String,
+    nodes: BTreeMap<Uid, Node>,
+    roots: Vec<Uid>,
+}
+
+pub struct Scene {
+    pub name: String,
+    /// Resolução da tela do jogo, em pixels.
+    pub screen: [u32; 2],
+    pub(crate) nodes: BTreeMap<Uid, Node>,
+    pub(crate) roots: Vec<Uid>,
+    rng: u64,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// Chave de agrupamento ativa: operações com a mesma chave viram um só passo de desfazer.
+    group: Option<String>,
+    clipboard: Option<(Uid, BTreeMap<Uid, Node>)>,
+}
+
+impl Scene {
+    /// Cena vazia. `seed` alimenta a geração de UIDs; use valores diferentes para cenas diferentes.
+    pub fn new(name: &str, seed: u64) -> Scene {
+        Scene {
+            name: name.to_string(),
+            screen: [1280, 720],
+            nodes: BTreeMap::new(),
+            roots: Vec::new(),
+            rng: seed,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            group: None,
+            clipboard: None,
+        }
+    }
+
+    /// Cena nova com um nó raiz `Node2D` e uma `Camera2D` centralizada na tela do jogo.
+    pub fn new_default(name: &str, seed: u64) -> Scene {
+        let mut s = Scene::new(name, seed);
+        let root = s.add_raw(None, "Node2D", name);
+        let cam = s.add_raw(Some(root), "Camera2D", "Câmera principal");
+        let [w, h] = s.screen;
+        s.put_raw(cam, "position", json!([w as f64 / 2.0, h as f64 / 2.0]))
+            .expect("posição padrão é válida");
+        s
+    }
+
+    /// Cópia para a reprodução: mesma árvore, sem histórico nem área de transferência.
+    pub fn play_copy(&self) -> Scene {
+        Scene {
+            name: self.name.clone(),
+            screen: self.screen,
+            nodes: self.nodes.clone(),
+            roots: self.roots.clone(),
+            rng: self.rng,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            group: None,
+            clipboard: None,
+        }
+    }
+
+    // ---------- Consultas ----------
+
+    pub fn node(&self, uid: Uid) -> Option<&Node> {
+        self.nodes.get(&uid)
+    }
+
+    pub fn roots(&self) -> &[Uid] {
+        &self.roots
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Todos os nós em ordem de árvore (pai antes dos filhos, irmãos na ordem em que aparecem).
+    pub fn pre_order(&self) -> Vec<Uid> {
+        order_in(&self.nodes, &self.roots)
+    }
+
+    /// O nó e seus descendentes, em ordem de árvore.
+    pub fn subtree(&self, root: Uid) -> Vec<Uid> {
+        order_in(&self.nodes, &[root])
+    }
+
+    pub fn index_in_parent(&self, uid: Uid) -> Option<usize> {
+        let parent = self.nodes.get(&uid)?.parent;
+        self.siblings(parent).iter().position(|u| *u == uid)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|s| s.label.as_str())
+    }
+
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|s| s.label.as_str())
+    }
+
+    pub fn has_clipboard(&self) -> bool {
+        self.clipboard.is_some()
+    }
+
+    // ---------- Operações de edição (cada uma gera um passo de desfazer) ----------
+
+    /// Cria um nó do tipo `kind` como filho de `parent` (ou raiz), na posição `index`.
+    pub fn add_node(&mut self, parent: Option<Uid>, kind: &str, index: Option<usize>) -> Result<Uid, String> {
+        check_kind(kind)?;
+        check_parent(self, parent)?;
+        self.begin(&format!("Criar {kind}"), None);
+        let name = self.unique_name(parent, kind, None);
+        let uid = self.next_uid();
+        self.nodes.insert(
+            uid,
+            Node { name, kind: kind.to_string(), parent, children: Vec::new(), props: BTreeMap::new() },
+        );
+        self.attach(uid, parent, index);
+        Ok(uid)
+    }
+
+    /// Remove o nó e tudo abaixo dele.
+    pub fn remove_node(&mut self, uid: Uid) -> Result<(), String> {
+        let name = self.node_or_err(uid)?.name.clone();
+        self.begin(&format!("Excluir {name}"), None);
+        self.detach(uid);
+        for u in self.subtree(uid) {
+            self.nodes.remove(&u);
+        }
+        Ok(())
+    }
+
+    /// Renomeia o nó. Se o nome já existe entre os irmãos, recebe um número ("Sprite2D 2").
+    pub fn rename_node(&mut self, uid: Uid, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("O nome não pode ficar vazio".into());
+        }
+        let parent = self.node_or_err(uid)?.parent;
+        let unique = self.unique_name(parent, name, Some(uid));
+        if self.node_or_err(uid)?.name == unique {
+            return Ok(());
+        }
+        self.begin("Renomear", None);
+        if let Some(n) = self.nodes.get_mut(&uid) {
+            n.name = unique;
+        }
+        Ok(())
+    }
+
+    /// Define uma propriedade. Com `coalesce`, alterações seguidas com a mesma chave viram um passo só
+    /// (arrastar um gizmo, arrastar um número no Inspector) até `end_group`.
+    pub fn set_prop(&mut self, uid: Uid, key: &str, value: Value, coalesce: Option<&str>) -> Result<(), String> {
+        let kind = self.node_or_err(uid)?.kind.clone();
+        let def = registry::prop_def(&kind, key).ok_or_else(|| format!("Propriedade desconhecida: {key}"))?;
+        let value = coerce(def, &value)?;
+        if value_of(self.node_or_err(uid)?, key) == value {
+            return Ok(());
+        }
+        self.begin(&format!("Editar {}", def.label), coalesce);
+        self.store(uid, def, value);
+        Ok(())
+    }
+
+    /// Move o nó para `parent` (ou raiz), na posição final `index` entre os irmãos.
+    pub fn move_node(&mut self, uid: Uid, parent: Option<Uid>, index: usize) -> Result<(), String> {
+        let node = self.node_or_err(uid)?;
+        let (name, old_parent) = (node.name.clone(), node.parent);
+        check_parent(self, parent)?;
+        if let Some(p) = parent {
+            if self.subtree(uid).contains(&p) {
+                return Err("Não é possível mover um nó para dentro de si mesmo".into());
+            }
+        }
+        let old_index = self.index_in_parent(uid);
+        if old_parent == parent && old_index == Some(index) {
+            return Ok(());
+        }
+        let label = if old_parent == parent { format!("Reordenar {name}") } else { format!("Mover {name}") };
+        self.begin(&label, None);
+        self.detach(uid);
+        self.attach(uid, parent, Some(index));
+        Ok(())
+    }
+
+    /// Cria uma cópia do nó logo após ele, com novos UIDs. Retorna o UID da cópia.
+    pub fn duplicate_node(&mut self, uid: Uid) -> Result<Uid, String> {
+        let node = self.node_or_err(uid)?;
+        let (parent, name) = (node.parent, node.name.clone());
+        let index = self.index_in_parent(uid).map(|i| i + 1);
+        let frag = self.fragment(uid);
+        self.begin(&format!("Duplicar {name}"), None);
+        let new = self.instantiate(&frag, uid, parent, index);
+        self.nudge(new);
+        Ok(new)
+    }
+
+    /// Guarda o nó e seus descendentes na área de transferência. Não altera a cena.
+    pub fn copy_node(&mut self, uid: Uid) -> Result<(), String> {
+        self.node_or_err(uid)?;
+        self.clipboard = Some((uid, self.fragment(uid)));
+        Ok(())
+    }
+
+    /// Cola a área de transferência como filho de `parent` (ou raiz). Retorna o UID colado, se houver.
+    pub fn paste_node(&mut self, parent: Option<Uid>) -> Result<Option<Uid>, String> {
+        let Some((root, frag)) = self.clipboard.clone() else {
+            return Ok(None);
+        };
+        check_parent(self, parent)?;
+        let name = frag[&root].name.clone();
+        self.begin(&format!("Colar {name}"), None);
+        let new = self.instantiate(&frag, root, parent, None);
+        self.nudge(new);
+        Ok(Some(new))
+    }
+
+    /// Troca o tipo do nó. Propriedades que o novo tipo não tem são descartadas.
+    pub fn change_kind(&mut self, uid: Uid, kind: &str) -> Result<(), String> {
+        check_kind(kind)?;
+        if self.node_or_err(uid)?.kind == kind {
+            return Ok(());
+        }
+        self.begin(&format!("Trocar tipo para {kind}"), None);
+        let Some(n) = self.nodes.get_mut(&uid) else {
+            return Ok(());
+        };
+        n.kind = kind.to_string();
+        let kept: BTreeMap<String, Value> = n
+            .props
+            .iter()
+            .filter_map(|(k, v)| {
+                let def = registry::prop_def(kind, k)?;
+                Some((k.clone(), coerce(def, v).ok()?))
+            })
+            .collect();
+        n.props = kept;
+        Ok(())
+    }
+
+    /// Cena nova com a subárvore de `uid` como raiz (SCN-022: "Salvar ramo como cena").
+    /// Os UIDs são preservados, então referências dentro do ramo continuam válidas.
+    pub fn branch_as_scene(&self, uid: Uid, seed: u64) -> Result<Scene, String> {
+        let node = self.node_or_err(uid)?;
+        let mut scene = Scene::new(&node.name, seed);
+        scene.screen = self.screen;
+        for (u, n) in self.fragment(uid) {
+            let parent = if u == uid { None } else { n.parent };
+            scene.nodes.insert(u, Node { parent, ..n });
+        }
+        scene.roots.push(uid);
+        Ok(scene)
+    }
+
+    // ---------- Desfazer e refazer ----------
+
+    /// Fecha o agrupamento atual. Chame ao soltar o mouse ou sair de um campo numérico.
+    pub fn end_group(&mut self) {
+        self.group = None;
+    }
+
+    /// Desfaz o último passo. Retorna o nome do passo desfeito.
+    pub fn undo(&mut self) -> Option<String> {
+        let step = self.undo.pop()?;
+        let label = step.label.clone();
+        let current = Snapshot {
+            label: step.label,
+            nodes: std::mem::take(&mut self.nodes),
+            roots: std::mem::take(&mut self.roots),
+        };
+        self.redo.push(current);
+        self.nodes = step.nodes;
+        self.roots = step.roots;
+        self.group = None;
+        Some(label)
+    }
+
+    /// Refaz o último passo desfeito. Retorna o nome do passo refeito.
+    pub fn redo(&mut self) -> Option<String> {
+        let step = self.redo.pop()?;
+        let label = step.label.clone();
+        let current = Snapshot {
+            label: step.label,
+            nodes: std::mem::take(&mut self.nodes),
+            roots: std::mem::take(&mut self.roots),
+        };
+        self.undo.push(current);
+        self.nodes = step.nodes;
+        self.roots = step.roots;
+        self.group = None;
+        Some(label)
+    }
+
+    // ---------- Internos ----------
+
+    pub(crate) fn node_or_err(&self, uid: Uid) -> Result<&Node, String> {
+        self.nodes.get(&uid).ok_or_else(|| format!("Nó não encontrado: {uid}"))
+    }
+
+    pub(crate) fn siblings(&self, parent: Option<Uid>) -> &[Uid] {
+        match parent {
+            Some(p) => self.nodes.get(&p).map(|n| n.children.as_slice()).unwrap_or(&[]),
+            None => &self.roots,
+        }
+    }
+
+    /// Registra o estado atual antes de uma mudança, a menos que a mudança continue o agrupamento.
+    fn begin(&mut self, label: &str, coalesce: Option<&str>) {
+        let merge = matches!((coalesce, self.group.as_deref()), (Some(a), Some(b)) if a == b);
+        if !merge {
+            self.undo.push(Snapshot {
+                label: label.to_string(),
+                nodes: self.nodes.clone(),
+                roots: self.roots.clone(),
+            });
+            if self.undo.len() > MAX_HISTORY {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+        self.group = coalesce.map(str::to_string);
+    }
+
+    fn next_uid(&mut self) -> Uid {
+        loop {
+            // SplitMix64: sequência determinística a partir da semente, sem dependência de sistema.
+            self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.rng;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            let uid = Uid(z);
+            if z != 0 && !self.nodes.contains_key(&uid) {
+                return uid;
+            }
+        }
+    }
+
+    /// Nome livre entre os irmãos: `base`, ou `base 2`, `base 3`… se já houver.
+    fn unique_name(&self, parent: Option<Uid>, base: &str, except: Option<Uid>) -> String {
+        let taken: Vec<&str> = self
+            .siblings(parent)
+            .iter()
+            .filter(|u| Some(**u) != except)
+            .filter_map(|u| self.nodes.get(u))
+            .map(|n| n.name.as_str())
+            .collect();
+        if !taken.contains(&base) {
+            return base.to_string();
+        }
+        let mut i = 2;
+        loop {
+            let candidate = format!("{base} {i}");
+            if !taken.contains(&candidate.as_str()) {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    /// Tira o nó da lista de filhos do pai (ou das raízes). Não remove o nó do mapa.
+    fn detach(&mut self, uid: Uid) {
+        let parent = self.nodes.get(&uid).and_then(|n| n.parent);
+        let list: Option<&mut Vec<Uid>> = match parent {
+            Some(p) => self.nodes.get_mut(&p).map(|n| &mut n.children),
+            None => Some(&mut self.roots),
+        };
+        if let Some(list) = list {
+            list.retain(|u| *u != uid);
+        }
+    }
+
+    /// Insere o nó na lista de filhos do pai (ou das raízes), na posição `index` (fim por padrão).
+    fn attach(&mut self, uid: Uid, parent: Option<Uid>, index: Option<usize>) {
+        if let Some(n) = self.nodes.get_mut(&uid) {
+            n.parent = parent;
+        }
+        let list: Option<&mut Vec<Uid>> = match parent {
+            Some(p) => self.nodes.get_mut(&p).map(|n| &mut n.children),
+            None => Some(&mut self.roots),
+        };
+        if let Some(list) = list {
+            let i = index.unwrap_or(list.len()).min(list.len());
+            list.insert(i, uid);
+        }
+    }
+
+    fn store(&mut self, uid: Uid, def: &PropDef, value: Value) {
+        if let Some(n) = self.nodes.get_mut(&uid) {
+            if value == def.default {
+                n.props.remove(def.name);
+            } else {
+                n.props.insert(def.name.to_string(), value);
+            }
+        }
+    }
+
+    /// Cópia de um subconjunto da árvore, com os UIDs originais.
+    fn fragment(&self, root: Uid) -> BTreeMap<Uid, Node> {
+        self.subtree(root)
+            .into_iter()
+            .filter_map(|u| self.nodes.get(&u).map(|n| (u, n.clone())))
+            .collect()
+    }
+
+    /// Cria os nós de `frag` (a partir de `root`) com UIDs novos e os liga a `parent`.
+    fn instantiate(
+        &mut self,
+        frag: &BTreeMap<Uid, Node>,
+        root: Uid,
+        parent: Option<Uid>,
+        index: Option<usize>,
+    ) -> Uid {
+        let order = order_in(frag, &[root]);
+        let mut map: HashMap<Uid, Uid> = HashMap::new();
+        for old in &order {
+            let new = self.next_uid();
+            map.insert(*old, new);
+        }
+        let root_name = self.unique_name(parent, &frag[&root].name, None);
+        for old in &order {
+            let src = &frag[old];
+            let new_parent = if *old == root {
+                parent
+            } else {
+                src.parent.and_then(|p| map.get(&p).copied())
+            };
+            let children = src.children.iter().filter_map(|c| map.get(c).copied()).collect();
+            let name = if *old == root { root_name.clone() } else { src.name.clone() };
+            self.nodes.insert(
+                map[old],
+                Node { name, kind: src.kind.clone(), parent: new_parent, children, props: src.props.clone() },
+            );
+        }
+        let new_root = map[&root];
+        self.attach(new_root, parent, index);
+        new_root
+    }
+
+    /// Desloca um nó 2D colado ou duplicado, para que a cópia apareça ao lado do original.
+    fn nudge(&mut self, uid: Uid) {
+        let Some(n) = self.nodes.get(&uid) else {
+            return;
+        };
+        if !registry::is_2d(&n.kind) {
+            return;
+        }
+        let kind = n.kind.clone();
+        let [x, y] = as_vec2(&value_of(n, "position"));
+        if let Some(def) = registry::prop_def(&kind, "position") {
+            self.store(uid, def, json!([x + PASTE_OFFSET, y + PASTE_OFFSET]));
+        }
+    }
+
+    /// Adiciona um nó sem histórico. Usado pela migração e pela cena padrão.
+    pub(crate) fn add_raw(&mut self, parent: Option<Uid>, kind: &str, name: &str) -> Uid {
+        let uid = self.next_uid();
+        self.nodes.insert(
+            uid,
+            Node { name: name.to_string(), kind: kind.to_string(), parent, children: Vec::new(), props: BTreeMap::new() },
+        );
+        self.attach(uid, parent, None);
+        uid
+    }
+
+    /// Define uma propriedade sem histórico, validando o valor. Usado ao carregar arquivos.
+    pub(crate) fn put_raw(&mut self, uid: Uid, key: &str, value: Value) -> Result<(), String> {
+        let kind = self.node_or_err(uid)?.kind.clone();
+        let def = registry::prop_def(&kind, key).ok_or_else(|| format!("Propriedade desconhecida: {key}"))?;
+        let value = coerce(def, &value)?;
+        self.store(uid, def, value);
+        Ok(())
+    }
+
+    /// Define uma propriedade sem histórico. Só a cópia de reprodução usa isto: a física grava as
+    /// poses a cada quadro, e isso não deve encher a fila de desfazer.
+    pub fn set_runtime_prop(&mut self, uid: Uid, key: &str, value: Value) -> Result<(), String> {
+        self.put_raw(uid, key, value)
+    }
+}
+
+fn check_kind(kind: &str) -> Result<(), String> {
+    registry::find(kind).map(|_| ()).ok_or_else(|| format!("Tipo de nó desconhecido: {kind}"))
+}
+
+fn check_parent(scene: &Scene, parent: Option<Uid>) -> Result<(), String> {
+    match parent {
+        Some(p) => scene.node_or_err(p).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
+/// Pré-ordem a partir de uma lista de raízes.
+fn order_in(nodes: &BTreeMap<Uid, Node>, roots: &[Uid]) -> Vec<Uid> {
+    let mut out = Vec::new();
+    let mut stack: Vec<Uid> = roots.iter().rev().copied().collect();
+    while let Some(u) = stack.pop() {
+        out.push(u);
+        if let Some(n) = nodes.get(&u) {
+            stack.extend(n.children.iter().rev().copied());
+        }
+    }
+    out
+}
+
+/// Valor de uma propriedade: o valor guardado, ou o padrão do tipo.
+pub fn value_of(node: &Node, key: &str) -> Value {
+    node.props
+        .get(key)
+        .cloned()
+        .or_else(|| registry::default_value(&node.kind, key))
+        .unwrap_or(Value::Null)
+}
+
+/// Converte um valor [x, y] (ou nulo) em par de números.
+pub fn as_vec2(v: &Value) -> [f64; 2] {
+    match v.as_array() {
+        Some(a) if a.len() == 2 => [a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)],
+        _ => [0.0, 0.0],
+    }
+}
+
+/// Valida e normaliza um valor de acordo com o tipo da propriedade.
+pub(crate) fn coerce(def: &PropDef, v: &Value) -> Result<Value, String> {
+    let bad = || format!("Valor inválido para {}", def.name);
+    let out = match def.kind {
+        PropKind::Float => {
+            let mut n = v.as_f64().ok_or_else(bad)?;
+            if !n.is_finite() {
+                return Err(bad());
+            }
+            if let Some(min) = def.min {
+                n = n.max(min);
+            }
+            if let Some(max) = def.max {
+                n = n.min(max);
+            }
+            json!(n)
+        }
+        PropKind::Int => json!(v.as_f64().ok_or_else(bad)?.round() as i64),
+        PropKind::Bool => json!(v.as_bool().ok_or_else(bad)?),
+        PropKind::Str => json!(v.as_str().ok_or_else(bad)?),
+        PropKind::Vec2 => {
+            let a = v.as_array().filter(|a| a.len() == 2).ok_or_else(bad)?;
+            let x = a[0].as_f64().filter(|x| x.is_finite()).ok_or_else(bad)?;
+            let y = a[1].as_f64().filter(|y| y.is_finite()).ok_or_else(bad)?;
+            json!([x, y])
+        }
+        PropKind::Color => json!(normalize_hex(v.as_str().ok_or_else(bad)?).ok_or_else(bad)?),
+        PropKind::Enum => {
+            let s = v.as_str().ok_or_else(bad)?;
+            if !def.options.contains(&s) {
+                return Err(bad());
+            }
+            json!(s)
+        }
+        PropKind::Uid => {
+            let s = v.as_str().ok_or_else(bad)?;
+            if !s.is_empty() {
+                Uid::from_str(s)?;
+            }
+            json!(s)
+        }
+    };
+    Ok(out)
+}
+
+/// "#RRGGBB" ou "#RRGGBBAA", em minúsculas. Aceita também "#RGB".
+pub fn normalize_hex(s: &str) -> Option<String> {
+    let body = s.strip_prefix('#')?;
+    let expanded: String = match body.len() {
+        3 => body.chars().flat_map(|c| [c, c]).collect(),
+        6 | 8 => body.to_string(),
+        _ => return None,
+    };
+    if !expanded.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", expanded.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cena() -> Scene {
+        Scene::new_default("Principal", 42)
+    }
+
+    fn filhos_do_raiz(s: &Scene) -> Vec<String> {
+        s.roots()
+            .iter()
+            .flat_map(|r| s.node(*r).unwrap().children.clone())
+            .map(|u| s.node(u).unwrap().name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn cena_padrao_tem_raiz_e_camera() {
+        let s = cena();
+        assert_eq!(s.roots().len(), 1);
+        assert_eq!(s.len(), 2);
+        assert_eq!(filhos_do_raiz(&s), ["Câmera principal"]);
+    }
+
+    #[test]
+    fn nomes_irmaos_sao_unicos() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        let b = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        assert_eq!(s.node(a).unwrap().name, "Sprite2D");
+        assert_eq!(s.node(b).unwrap().name, "Sprite2D 2");
+        // "Sprite2D 2" já existe entre os irmãos, então o novo nome ganha outro número.
+        s.rename_node(a, "Sprite2D 2").unwrap();
+        assert_eq!(s.node(a).unwrap().name, "Sprite2D 2 2");
+    }
+
+    #[test]
+    fn desfazer_e_refazer_restauram_a_arvore() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let before = s.pre_order();
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.set_prop(a, "rotation", json!(45.0), None).unwrap();
+        assert_eq!(s.undo().as_deref(), Some("Editar Rotação"));
+        assert_eq!(s.undo().as_deref(), Some("Criar Sprite2D"));
+        assert_eq!(s.pre_order(), before);
+        assert!(s.redo().is_some());
+        assert!(s.redo().is_some());
+        assert_eq!(s.node(a).unwrap().props.get("rotation"), Some(&json!(45.0)));
+    }
+
+    #[test]
+    fn valores_iguais_ao_padrao_nao_sao_guardados() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.set_prop(a, "rotation", json!(10.0), None).unwrap();
+        s.set_prop(a, "rotation", json!(0.0), None).unwrap();
+        assert!(s.node(a).unwrap().props.is_empty());
+    }
+
+    #[test]
+    fn agrupamento_junta_alteracoes_seguidas() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        for x in 1..=5 {
+            s.set_prop(a, "position", json!([x as f64, 0.0]), Some("drag:a")).unwrap();
+        }
+        s.end_group();
+        // As cinco alterações viraram um único passo; o "Criar" continua separado.
+        assert_eq!(s.undo_label(), Some("Editar Posição"));
+        assert_eq!(s.undo().as_deref(), Some("Editar Posição"));
+        assert!(s.node(a).unwrap().props.get("position").is_none());
+        assert_eq!(s.undo().as_deref(), Some("Criar Sprite2D"));
+        assert!(s.node(a).is_none());
+    }
+
+    #[test]
+    fn nao_permite_ciclos() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        let b = s.add_node(Some(a), "Node2D", None).unwrap();
+        assert!(s.move_node(a, Some(b), 0).is_err());
+        assert!(s.move_node(a, Some(a), 0).is_err());
+    }
+
+    #[test]
+    fn mover_entre_irmaos_mantem_ordem() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let cam = s.node(root).unwrap().children[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        let b = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        let c = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.move_node(c, Some(root), 0).unwrap();
+        assert_eq!(s.node(root).unwrap().children, vec![c, cam, a, b]);
+        assert_eq!(s.node(b).unwrap().parent, Some(root));
+    }
+
+    #[test]
+    fn remover_apaga_a_subarvore() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        let b = s.add_node(Some(a), "Sprite2D", None).unwrap();
+        s.remove_node(a).unwrap();
+        assert!(s.node(a).is_none());
+        assert!(s.node(b).is_none());
+        assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn duplicar_cria_copia_deslocada_com_uids_novos() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.set_prop(a, "position", json!([100.0, 50.0]), None).unwrap();
+        let copia = s.duplicate_node(a).unwrap();
+        assert_ne!(copia, a);
+        let n = s.node(copia).unwrap();
+        assert_eq!(n.name, "Sprite2D 2");
+        assert_eq!(value_of(n, "position"), json!([132.0, 82.0]));
+        assert_eq!(s.index_in_parent(copia), Some(s.index_in_parent(a).unwrap() + 1));
+    }
+
+    #[test]
+    fn copiar_e_colar_leva_os_filhos() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        s.add_node(Some(a), "Sprite2D", None).unwrap();
+        s.copy_node(a).unwrap();
+        let colado = s.paste_node(None).unwrap().unwrap();
+        assert_eq!(s.subtree(colado).len(), 2);
+        assert_eq!(s.node(colado).unwrap().parent, None);
+        assert_eq!(s.roots().len(), 2);
+    }
+
+    #[test]
+    fn trocar_tipo_descarta_propriedades_que_nao_existem_mais() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        s.set_prop(a, "flip_h", json!(true), None).unwrap();
+        s.change_kind(a, "Node2D").unwrap();
+        assert!(!s.node(a).unwrap().props.contains_key("flip_h"));
+    }
+
+    #[test]
+    fn valida_valores() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Camera2D", None).unwrap();
+        s.set_prop(a, "zoom", json!(99.0), None).unwrap();
+        assert_eq!(value_of(s.node(a).unwrap(), "zoom"), json!(16.0));
+        assert!(s.set_prop(a, "zoom", json!("x"), None).is_err());
+        assert!(s.set_prop(a, "nao_existe", json!(1), None).is_err());
+        assert!(s.set_prop(a, "modulate", json!("azul"), None).is_err());
+        let sp = s.add_node(Some(root), "Sprite2D", None).unwrap();
+        assert!(s.set_prop(sp, "shape", json!("triangulo"), None).is_err());
+    }
+
+    #[test]
+    fn hex_normalizado() {
+        assert_eq!(normalize_hex("#FFF"), Some("#ffffff".into()));
+        assert_eq!(normalize_hex("#4F8FD6"), Some("#4f8fd6".into()));
+        assert_eq!(normalize_hex("4f8fd6"), None);
+        assert_eq!(normalize_hex("#zzzzzz"), None);
+    }
+
+    #[test]
+    fn ramo_vira_cena_com_os_mesmos_uids() {
+        let mut s = cena();
+        let root = s.roots()[0];
+        let a = s.add_node(Some(root), "Node2D", None).unwrap();
+        let b = s.add_node(Some(a), "Sprite2D", None).unwrap();
+        let ramo = s.branch_as_scene(a, 9).unwrap();
+        assert_eq!(ramo.name, s.node(a).unwrap().name);
+        assert_eq!(ramo.roots(), &[a]);
+        assert_eq!(ramo.len(), 2);
+        assert_eq!(ramo.node(b).unwrap().parent, Some(a));
+        assert_eq!(ramo.node(a).unwrap().parent, None);
+    }
+
+    #[test]
+    fn uid_ida_e_volta() {
+        let u = Uid(0x00ab_cdef_0123_4567);
+        assert_eq!(u.to_string(), "00abcdef01234567");
+        assert_eq!("00abcdef01234567".parse::<Uid>().unwrap(), u);
+    }
+}

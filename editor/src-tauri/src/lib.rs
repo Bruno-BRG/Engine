@@ -1,9 +1,11 @@
+mod assets;
 mod project;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(assets::Watch::default())
         .invoke_handler(tauri::generate_handler![
             project::default_projects_dir,
             project::list_recent_projects,
@@ -12,6 +14,18 @@ pub fn run() {
             project::open_project,
             project::load_scene,
             project::save_scene,
+            assets::list_dir,
+            assets::list_assets,
+            assets::read_file,
+            assets::write_text,
+            assets::create_folder,
+            assets::create_scene,
+            assets::rename_entry,
+            assets::trash_entry,
+            assets::import_files,
+            assets::ensure_imports,
+            assets::watch_project,
+            assets::stop_watch,
         ])
         .run(tauri::generate_context!())
         .expect("falha ao iniciar o editor Nexo");

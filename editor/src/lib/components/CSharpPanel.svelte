@@ -1,10 +1,10 @@
 <script lang="ts">
   import { scene } from '$lib/state/scene.svelte';
   import { log } from '$lib/state/log.svelte';
-  import { objectToCSharp, sceneToCSharp, highlight, className } from '$lib/csharp';
+  import { nodeToCSharp, sceneToCSharp, highlight, className } from '$lib/csharp';
   import { Copy, Braces } from '@lucide/svelte';
 
-  const code = $derived(scene.selected ? objectToCSharp(scene.selected) : sceneToCSharp(scene.data));
+  const code = $derived(scene.selected ? nodeToCSharp(scene.selected, scene.data.nodes) : sceneToCSharp(scene.data));
   const file = $derived((scene.selected ? className(scene.selected.name) : className(scene.data.name) + 'Scene') + '.cs');
   const lines = $derived(code.split('\n').map(highlight));
 
@@ -59,7 +59,7 @@
     margin: 0;
     overflow: auto;
     padding: 10px 0;
-    font-size: 12px;
+    font-size: var(--fs-12);
     line-height: 1.6;
     user-select: text;
     tab-size: 4;
@@ -74,19 +74,19 @@
     opacity: 0.6;
   }
   .kw {
-    color: #c792ff;
+    color: var(--code-keyword);
   }
   .type {
-    color: #5cc8ff;
+    color: var(--code-type);
   }
   .fn {
-    color: #ffd84d;
+    color: var(--code-fn);
   }
   .str {
-    color: #3ddc97;
+    color: var(--code-string);
   }
   .num {
-    color: #ff9e64;
+    color: var(--code-number);
   }
   .com {
     color: var(--text-faint);

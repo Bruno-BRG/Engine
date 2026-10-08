@@ -1,4 +1,5 @@
-/* Design system do Nexo: tokens. Ver docs/05-interface-ux.md */
+/* Design system do Nexo: tokens. Padrão completo em docs/08-ux-ui-standard.md.
+   Toda cor da interface sai daqui. Cores de objetos ficam em lib/palette.ts (manter as mesmas). */
 :root {
   --font-ui: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, Consolas, monospace;
@@ -10,49 +11,79 @@
   --fs-18: 18px;
   --fs-24: 24px;
 
-  --r-ctl: 6px;
-  --r-panel: 10px;
-  --r-dlg: 14px;
+  /* Controles com cantos de 3 px, painéis e abas quadrados, diálogos 4 px */
+  --r-ctl: 3px;
+  --r-panel: 0;
+  --r-dlg: 4px;
 
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 120ms;
   --t-med: 200ms;
 
-  --accent: #7c5cff;
-  --accent-hi: #9a82ff;
-  --accent-soft: rgb(124 92 255 / 0.16);
-  --accent-ring: rgb(124 92 255 / 0.45);
-  --success: #3ddc97;
-  --warning: #ffb84d;
-  --danger: #ff5c7a;
-  --info: #5cc8ff;
+  /* Destaque e foco */
+  --accent: #3a79bb;
+  --accent-hi: #4d8fd6;
+  --accent-soft: rgb(58 121 187 / 0.22);
+  --accent-ring: rgb(58 121 187 / 0.7);
 
-  /* Cores dos tipos de pino (programação visual) */
-  --type-exec: #ffffff;
-  --type-bool: #ff5c7a;
-  --type-int: #4fd6e8;
-  --type-float: #3ddc97;
-  --type-text: #ff7ad9;
-  --type-vec: #ffd84d;
-  --type-object: #5c9dff;
-  --type-color: #b07cff;
+  /* Estados (Console, salvamento, erros). Tons discretos, legíveis no tema escuro */
+  --success: #5fb36a;
+  --warning: #e0b04a;
+  --danger: #f28288;
+  --info: #70b8ee;
+
+  /* Famílias de nó (lógica visual): uma cor por família, como na tabela do docs/05-editor-ui.md */
+  --node-event: #c9606e;
+  --node-flow: #d2d2d2;
+  --node-data: #4fb0a5;
+  --node-object: #4f8fd6;
+  --node-physics: #e08a3c;
+  --node-ui: #6bbf59;
+  --node-audio: #e5c152;
+
+  /* Tipos de pino: cor do fio e do conector */
+  --type-exec: #d2d2d2;
+  --type-bool: #c9606e;
+  --type-int: #4fb0a5;
+  --type-float: #6bbf59;
+  --type-text: #c77dba;
+  --type-vec: #e5c152;
+  --type-object: #4f8fd6;
+  --type-color: #9a7fd1;
+
+  /* Cores de sintaxe do C# gerado (Depurador e aba C#) */
+  --code-keyword: #569cd6;
+  --code-type: #4ec9b0;
+  --code-fn: #dcdcaa;
+  --code-string: #ce9178;
+  --code-number: #b5cea8;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg-0: #0e0f13;
-  --bg-1: #15171d;
-  --bg-2: #1c1f27;
-  --bg-3: #242833;
-  --bg-hover: rgb(255 255 255 / 0.05);
-  --bg-active: rgb(255 255 255 / 0.08);
-  --line: #2a2e39;
-  --line-soft: #20232c;
-  --text: #e8eaf0;
-  --text-dim: #8a90a2;
-  --text-faint: #5c6274;
-  --shadow-pop: 0 16px 48px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.3), 0 0 0 1px #2a2e39;
-  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.25);
+  --bg-0: #191919; /* janela e frestas entre painéis */
+  --bg-1: #383838; /* corpo dos painéis */
+  --bg-2: #2a2a2a; /* campos, menus, nós */
+  --bg-3: #454545; /* botões */
+  --bg-toolbar: #282828; /* barras, cabeçalhos de painel e abas */
+  --bg-overlay: rgb(40 40 40 / 0.92); /* painéis flutuantes sobre o viewport */
+  --bg-hover: rgb(255 255 255 / 0.06);
+  --bg-active: rgb(255 255 255 / 0.1);
+  --selection: #2c5d87;
+  --selection-unfocused: #4d4d4d;
+  --sel-text: #ffffff;
+  --play-tint: #3b3b4a;
+  --line: #232323;
+  --line-soft: #1e1e1e;
+  --text: #d2d2d2;
+  --text-dim: #a6a6a6;
+  --text-faint: #a4a4a4;
+  --scrim: rgb(5 6 10 / 0.5);
+  --canvas-dot: rgb(255 255 255 / 0.05);
+  --texture-line: rgb(255 255 255 / 0.02);
+  --shadow-pop: 0 6px 18px rgb(0 0 0 / 0.45), 0 0 0 1px #232323;
+  --shadow-card: 0 0 0 1px #232323;
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.35);
 }
 
 [data-theme='light'] {
@@ -61,13 +92,23 @@
   --bg-1: #f6f7fa;
   --bg-2: #ffffff;
   --bg-3: #e6e8ee;
+  --bg-toolbar: #e2e5ec;
+  --bg-overlay: rgb(246 247 250 / 0.92);
   --bg-hover: rgb(15 18 30 / 0.05);
   --bg-active: rgb(15 18 30 / 0.08);
+  --selection: #c9dcf0;
+  --selection-unfocused: #dfe2e8;
+  --sel-text: #171923;
+  --play-tint: #e3e6f0;
   --line: #d9dce5;
   --line-soft: #e6e8ee;
   --text: #171923;
-  --text-dim: #5d6375;
-  --text-faint: #9097a8;
+  --text-dim: #4f5567;
+  --text-faint: #5a6073;
+  --scrim: rgb(20 24 40 / 0.3);
+  --canvas-dot: rgb(15 18 30 / 0.08);
+  --texture-line: rgb(15 18 30 / 0.03);
   --shadow-pop: 0 16px 48px rgb(20 24 40 / 0.16), 0 2px 8px rgb(20 24 40 / 0.08), 0 0 0 1px #d9dce5;
   --shadow-card: 0 8px 24px rgb(20 24 40 / 0.06);
+  --shadow-float: 0 8px 24px rgb(20 24 40 / 0.16);
 }

@@ -1,0 +1,11 @@
+[package]
+name = "nexo-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexo-core.workspace = true
+rapier2d = "0.36"
+serde.workspace = true
+serde_json.workspace = true

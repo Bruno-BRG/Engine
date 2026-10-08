@@ -112,7 +112,7 @@
     z-index: 120;
     display: grid;
     place-items: center;
-    background: rgb(5 6 10 / 0.5);
+    background: var(--scrim);
     backdrop-filter: blur(4px);
     animation: fade var(--t-med) var(--ease);
   }
@@ -177,7 +177,7 @@
     gap: 2px;
     padding: 10px 12px 10px 36px;
     text-align: left;
-    border-radius: 10px;
+    border-radius: var(--r-dlg);
     border: 1px solid var(--line);
     background: var(--bg-1);
     transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
@@ -216,9 +216,9 @@
   .error {
     margin: 0;
     padding: 9px 12px;
-    border-radius: 8px;
+    border-radius: var(--r-ctl);
     color: var(--danger);
-    background: rgb(255 92 122 / 0.1);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
     font-size: var(--fs-12);
   }
   footer {

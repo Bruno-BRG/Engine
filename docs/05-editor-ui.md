@@ -2,6 +2,8 @@
 
 Target: **Unity's visual language** (neutral grays, dense, square, organized) with **Godot's node workflow**. See [research/unity.md](research/unity.md) for the reference breakdown.
 
+> The full standard (every color, size, component, shortcut and decision, with measured contrast) lives in [08-ux-ui-standard.md](08-ux-ui-standard.md). The token table below is the first draft; where they differ, 08 and `editor/src/styles/tokens.css` win.
+
 ## Principles
 
 1. **Familiar.** Someone coming from Unity finds Hierarchy, Scene/Game, Inspector, Project and Console where they expect them.

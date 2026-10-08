@@ -14,18 +14,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 38px;
-    padding: 0 8px 0 14px;
-    border-bottom: 1px solid var(--line-soft);
+    height: 22px;
+    padding: 0 3px 0 8px;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--line);
   }
   span {
     font-size: var(--fs-12);
-    font-weight: 600;
-    color: var(--text-dim);
-    letter-spacing: 0.01em;
+    color: var(--text);
   }
   .tools {
     display: flex;
-    gap: 2px;
+    gap: 1px;
+  }
+  .tools :global(.icon-btn) {
+    width: 18px;
+    height: 18px;
   }
 </style>

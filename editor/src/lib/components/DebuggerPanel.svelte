@@ -3,7 +3,7 @@
   import { runtime } from '$lib/state/runtime.svelte';
   import { scene } from '$lib/state/scene.svelte';
   import * as act from '$lib/actions';
-  import ShapeIcon from './ShapeIcon.svelte';
+  import NodeIcon from './NodeIcon.svelte';
   import { Play } from '@lucide/svelte';
   const n = (v: number, p = 1) => v.toFixed(p).replace('.', ',');
 </script>
@@ -12,17 +12,17 @@
   {#if app.playing}
     <table class="mono">
       <thead>
-        <tr><th>Objeto</th><th>X</th><th>Y</th><th>Rotação</th><th>Tamanho</th><th>Behaviors</th></tr>
+        <tr><th>Nó</th><th>X</th><th>Y</th><th>Rotação</th><th>Escala</th><th>Visível</th></tr>
       </thead>
       <tbody>
-        {#each runtime.live as o (o.id)}
-          <tr class:sel={o.id === scene.selectedId} onclick={() => (scene.selectedId = o.id)}>
-            <td class="name"><ShapeIcon shape={o.shape} color={o.color} size={11} /> {o.name}</td>
-            <td>{n(o.x)}</td>
-            <td>{n(o.y)}</td>
-            <td>{n(o.rotation)}°</td>
-            <td>{n(o.w, 0)}×{n(o.h, 0)}</td>
-            <td class="beh">{o.behaviors.map((b) => b.kind).join(', ') || '—'}</td>
+        {#each runtime.live as o (o.uid)}
+          <tr class:sel={scene.isSelected(o.uid)} onclick={(e) => scene.select(o.uid, e.ctrlKey || e.shiftKey)}>
+            <td class="name"><NodeIcon kind={o.kind} size={12} /> {o.name}</td>
+            <td>{n(o.world.x)}</td>
+            <td>{n(o.world.y)}</td>
+            <td>{n(o.world.rot)}°</td>
+            <td>{n(o.world.sx, 2)}×{n(o.world.sy, 2)}</td>
+            <td class="beh">{o.visible ? 'sim' : 'não'}</td>
           </tr>
         {/each}
       </tbody>
@@ -45,7 +45,7 @@
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 11.5px;
+    font-size: var(--fs-11);
   }
   th {
     position: sticky;

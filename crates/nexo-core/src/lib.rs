@@ -1,6 +1,33 @@
 //! Tipos base compartilhados entre o runtime, o renderizador e o editor.
+//! A cena (árvore de nós, registro de tipos, arquivo RON e consultas) também vive aqui.
+
+pub mod input;
+pub mod io;
+pub mod query;
+pub mod registry;
+pub mod scene;
+
+pub use input::{Input, InputMap};
+pub use io::FORMAT as SCENE_FORMAT;
+pub use scene::{Node, Scene, Uid};
 
 use bytemuck::{Pod, Zeroable};
+
+/// Semente para os UIDs de cenas novas, a partir do relógio do sistema.
+/// No WebAssembly o relógio não está disponível: quem chama passa a própria semente.
+pub fn seed_now() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        0x5EED_0000_0000_0001
+    }
+}
 
 /// Câmera 2D do mundo. Coordenadas com Y para baixo, em unidades de mundo (pixels do jogo).
 #[repr(C)]
@@ -39,9 +66,12 @@ pub enum Shape {
     Diamond = 2,
 }
 
+/// Bits do campo `flags` de `SpriteInstance`.
 pub mod flags {
     pub const SELECTED: f32 = 1.0;
     pub const HOVERED: f32 = 2.0;
+    pub const FLIP_X: f32 = 4.0;
+    pub const FLIP_Y: f32 = 8.0;
 }
 
 /// Uma instância de sprite enviada para a GPU. Ocupa 12 floats (48 bytes).

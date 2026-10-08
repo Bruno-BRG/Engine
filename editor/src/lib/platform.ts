@@ -1,6 +1,5 @@
 // Ponte com o backend Tauri. No navegador comum (sem Tauri) usa localStorage,
 // o que permite desenvolver e testar a interface sem abrir o app desktop.
-import type { SceneData } from './state/scene.svelte';
 
 export interface ProjectInfo {
   name: string;
@@ -25,7 +24,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // ---------- Implementação de navegador ----------
 const LS_PROJECTS = 'nexo.web.projects';
-type WebProject = ProjectInfo & { scene: SceneData; openedAt: number };
+type WebProject = ProjectInfo & { scene: unknown; openedAt: number };
 const readWeb = (): Record<string, WebProject> => JSON.parse(localStorage.getItem(LS_PROJECTS) ?? '{}');
 const writeWeb = (v: Record<string, WebProject>) => localStorage.setItem(LS_PROJECTS, JSON.stringify(v));
 const now = () => Math.floor(Date.now() / 1000);
@@ -49,7 +48,8 @@ export const platform = {
     writeWeb(all);
   },
 
-  async createProject(name: string, parent: string, template: string, scene: SceneData): Promise<ProjectInfo> {
+  /** `scene` é o formato 1 do template; o Rust converte para a árvore de nós ao criar. */
+  async createProject(name: string, parent: string, template: string, scene: unknown): Promise<ProjectInfo> {
     if (isTauri) return invoke('create_project', { name, parent, template, scene });
     if (!name.trim()) throw new Error('Dê um nome ao projeto');
     const path = parent + ' / ' + name.trim();
@@ -71,16 +71,24 @@ export const platform = {
     return { name: p.name, path: p.path, template: p.template, engineVersion: p.engineVersion };
   },
 
-  async loadScene(path: string): Promise<SceneData> {
+  /** Texto da cena (RON no formato atual, ou o formato 1 ainda não migrado). */
+  async loadScene(path: string): Promise<string> {
     if (isTauri) return invoke('load_scene', { path });
-    return readWeb()[path].scene;
+    const saved = readWeb()[path].scene;
+    return typeof saved === 'string' ? saved : JSON.stringify(saved);
   },
 
-  async saveScene(path: string, scene: SceneData): Promise<void> {
-    if (isTauri) return invoke('save_scene', { path, scene });
+  async saveScene(path: string, text: string): Promise<void> {
+    if (isTauri) return invoke('save_scene', { path, text });
     const all = readWeb();
-    all[path].scene = scene;
+    all[path].scene = text;
     writeWeb(all);
+  },
+
+  /** Grava texto num arquivo relativo ao projeto. Sobrescreve: quem chama confere o nome antes. */
+  async writeProjectText(project: string, rel: string, text: string): Promise<void> {
+    if (isTauri) return invoke('write_text', { project, rel, text });
+    throw new Error('Disponível no app desktop');
   },
 
   async pickFolder(): Promise<string | null> {

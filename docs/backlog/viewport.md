@@ -4,11 +4,11 @@ Editing scenes in the Scene tab.
 
 Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: **U** Unity, **G** Godot, **GM** GameMaker.
 
-- [ ] **VPT-001** (P0) Transform tools: Hand (Q), Move (W), Rotate (E), Scale (R), Rect (T) with Unity-style gizmos. *U: transform tools.*
-- [ ] **VPT-002** (P0) Snapping: grid snap, rotation snap, configurable increments; hold Ctrl to toggle. 
-- [ ] **VPT-003** (P0) Box selection, multi-select, Alt-drag duplicate.
-- [ ] **VPT-004** (P0) Right-click context menu in the viewport (create node here, paste, frame).
-- [ ] **VPT-005** (P0) Gizmos for colliders, cameras (game frame), audio radius, paths. *U: Gizmos; G: editor plugins.*
+- [ ] **VPT-001** (P0) Transform tools: Hand (Q), Move (W), Rotate (E), Scale (R), Rect (T) with Unity-style gizmos. *U: transform tools.* *Status (Fase 1): implementado: Mão Q, Mover W, Girar E, Escala R, Retângulo T. Mover e girar verificados no desktop; escala e retângulo não.*
+- [ ] **VPT-002** (P0) Snapping: grid snap, rotation snap, configurable increments; hold Ctrl to toggle.  *Status (Fase 1): implementado: snap de grade (16 px) e de rotação (15°), Ctrl inverte. Ainda não testado no desktop.*
+- [ ] **VPT-003** (P0) Box selection, multi-select, Alt-drag duplicate. *Status (Fase 1): implementado: caixa de seleção, Shift/Ctrl para somar, Alt-arrastar duplica. Ainda não testado no desktop.*
+- [ ] **VPT-004** (P0) Right-click context menu in the viewport (create node here, paste, frame). *Status (Fase 1): implementado: menu de contexto no viewport. Ainda não testado no desktop.*
+- [ ] **VPT-005** (P0) Gizmos for colliders, cameras (game frame), audio radius, paths. *U: Gizmos; G: editor plugins.* *Status (Fase 2): parcial: moldura da câmera, contorno de seleção e contornos verdes dos colisores na edição. Faltam áudio e caminhos.*
 - [ ] **VPT-006** (P1) Scene view overlay: grid size, gizmo toggles, 2D/3D later. *U: Overlays.*
 - [ ] **VPT-007** (P1) Rulers and guides; smart guides when aligning nodes.
 - [ ] **VPT-008** (P1) Pixel-perfect preview and pixel grid at high zoom.

@@ -1,6 +1,8 @@
 import { app, type Workspace } from './state/app.svelte';
-import { scene, type ShapeKind } from './state/scene.svelte';
+import { scene } from './state/scene.svelte';
 import { runtime } from './state/runtime.svelte';
+import { assets } from './state/assets.svelte';
+import { textures } from './state/textures.svelte';
 import { log } from './state/log.svelte';
 import { viewApi } from './state/view';
 import { platform, type ProjectInfo } from './platform';
@@ -10,8 +12,10 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function openProject(info: ProjectInfo) {
   try {
-    const data = await platform.loadScene(info.path);
-    scene.load(data);
+    const text = await platform.loadScene(info.path);
+    await scene.load(text);
+    textures.reset();
+    await assets.setProject(info.path);
     app.project = info;
     app.workspace = 'cena';
     app.dirty = false;
@@ -45,6 +49,7 @@ export async function closeProject() {
   if (app.playing) togglePlay();
   if (app.dirty) await save(true);
   app.project = null;
+  textures.reset();
 }
 
 export async function save(silent = false) {
@@ -62,19 +67,52 @@ export async function save(silent = false) {
   }
 }
 
+/** Duração de um quadro no Passo a passo (60 quadros por segundo). */
+export const STEP_SECONDS = 1 / 60;
+
 export function togglePlay() {
   if (!app.project) return;
   if (app.playing) {
     runtime.stop();
     app.playing = false;
+    app.paused = false;
+    app.stepRequested = false;
     app.fps = 0;
     log.info('Jogo parado. A cena voltou ao estado de edição.');
   } else {
     app.workspace = 'cena';
-    runtime.start(scene.snapshot().objects);
+    runtime.start();
+    log.onPlayStart();
     app.playing = true;
     log.info('Jogo iniciado no viewport.');
   }
+}
+
+export function togglePause() {
+  if (!app.playing) return;
+  app.paused = !app.paused;
+  log.info(app.paused ? 'Jogo pausado.' : 'Jogo retomado.');
+}
+
+/** Avança um quadro. Fora do modo de jogo, inicia o jogo já pausado, como o Unity. */
+export function stepFrame() {
+  if (!app.project) return;
+  if (!app.playing) togglePlay();
+  app.paused = true;
+  app.stepRequested = true;
+}
+
+export function copySelected() {
+  if (scene.selectedId) scene.copy(scene.selectedId);
+}
+
+export function cutSelected() {
+  if (scene.selectedId) scene.cut(scene.selectedId);
+}
+
+/** Cola ao lado da seleção (mesmo pai), ou na raiz quando nada está selecionado. */
+export function pasteClipboard() {
+  scene.paste(scene.selected?.parent ?? null);
 }
 
 export function undo() {
@@ -87,17 +125,28 @@ export function redo() {
   if (label) log.info('Refeito: ' + label);
 }
 
-export function addShape(shape: ShapeKind) {
+/** Cria um nó 2D na raiz, no centro da vista (como o Unity faz com GameObjects). */
+export function addNode(kind: string, shape?: 'rect' | 'circle' | 'diamond') {
   const c = viewApi.center();
-  scene.add(shape, c.x, c.y);
+  const uid = scene.add(kind, null);
+  if (!uid) return;
+  scene.setProp(uid, 'position', [Math.round(c.x), Math.round(c.y)]);
+  if (shape) scene.setProp(uid, 'shape', shape);
+}
+
+const SHAPE_IDS = ['rect', 'circle', 'diamond'] as const;
+
+/** Atalho para criar um sprite de forma de teste (0 retângulo, 1 círculo, 2 losango). */
+export function addShape(shape: 0 | 1 | 2) {
+  addNode('Sprite2D', SHAPE_IDS[shape]);
 }
 
 export function deleteSelected() {
-  if (scene.selectedId) scene.remove(scene.selectedId);
+  scene.removeSelected();
 }
 
 export function duplicateSelected() {
-  if (scene.selectedId) scene.duplicate(scene.selectedId);
+  scene.duplicateSelected();
 }
 
 export function setWorkspace(w: Workspace) {
@@ -106,6 +155,24 @@ export function setWorkspace(w: Workspace) {
 
 export function togglePanel(p: 'left' | 'right' | 'bottom') {
   app.panels[p] = !app.panels[p];
+  app.persistUi();
+}
+
+/** Predefinições de layout (EDT-011, EDT-015). Salvar layouts próprios fica para a P1. */
+export const LAYOUTS = {
+  padrao: { label: 'Padrão', panels: { left: true, right: true, bottom: true }, bottom: 230 },
+  cena: { label: 'Cena', panels: { left: true, right: true, bottom: false }, bottom: 230 },
+  programacao: { label: 'Programação', panels: { left: true, right: true, bottom: true }, bottom: 360 },
+  viewport: { label: 'Só viewport', panels: { left: false, right: false, bottom: false }, bottom: 230 },
+} as const;
+
+export type LayoutId = keyof typeof LAYOUTS;
+
+export function applyLayout(id: LayoutId) {
+  const l = LAYOUTS[id];
+  app.panels = { ...l.panels };
+  app.sizes = { ...app.sizes, bottom: l.bottom };
+  app.layout = id;
   app.persistUi();
 }
 

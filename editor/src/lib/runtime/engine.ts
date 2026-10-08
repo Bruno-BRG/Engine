@@ -1,0 +1,37 @@
+// Carregamento único do runtime WASM: o viewport (desenho) e o editor de cena (árvore de nós)
+// compartilham o mesmo módulo.
+import init, { SceneEditor, Viewport } from './pkg/nexo_runtime_web.js';
+
+export type { Viewport, SceneEditor };
+
+let ready: Promise<unknown> | null = null;
+
+/** Carrega o módulo WASM uma vez. Chamadas seguintes reaproveitam a mesma promessa. */
+export function loadRuntime(): Promise<unknown> {
+  ready ??= init();
+  return ready;
+}
+
+/** Cria o viewport sobre um canvas. Usa WebGPU quando disponível e WebGL2 como reserva. */
+export async function createViewport(canvas: HTMLCanvasElement): Promise<Viewport> {
+  await loadRuntime();
+  return Viewport.create(canvas);
+}
+
+/** Editor de cena vazio. `seed` alimenta a geração de UIDs. */
+export async function createSceneEditor(): Promise<SceneEditor> {
+  await loadRuntime();
+  return new SceneEditor(randomSeed());
+}
+
+/** Registro de tipos de nó em JSON (método estático do WASM, sem instância). */
+export function readNodeRegistry(): string {
+  return SceneEditor.registry();
+}
+
+/** Semente de 52 bits para os UIDs (cabe em um número de JavaScript sem perda). */
+export function randomSeed(): number {
+  const b = new Uint32Array(2);
+  crypto.getRandomValues(b);
+  return (b[0] * 0x100000) + (b[1] >>> 12);
+}

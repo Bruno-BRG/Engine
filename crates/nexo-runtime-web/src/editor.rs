@@ -1,0 +1,308 @@
+//! Editor de cena no WebAssembly. A árvore de nós fica aqui (SCN-005): o TypeScript consulta
+//! o estado e envia operações de forma síncrona, sem ida e volta pelo Tauri a cada movimento.
+//! A reprodução guarda uma cópia da cena e um relógio; a edição fica intacta enquanto joga.
+
+use nexo_core::query::{self, Draw};
+use nexo_core::{Input, InputMap, Scene, Uid, registry};
+use nexo_physics::Physics;
+use serde::Serialize;
+use serde_json::Value;
+use wasm_bindgen::prelude::*;
+
+/// Reprodução: cópia da cena, relógio e mundo de física montado a partir dela.
+struct Play {
+    scene: Scene,
+    time: f64,
+    physics: Physics,
+}
+
+#[wasm_bindgen]
+pub struct SceneEditor {
+    scene: Scene,
+    play: Option<Play>,
+    input_map: InputMap,
+    input: Input,
+}
+
+fn js_err(e: impl std::fmt::Display) -> JsError {
+    JsError::new(&e.to_string())
+}
+
+fn parse_uid(s: &str) -> Result<Uid, JsError> {
+    s.parse::<Uid>().map_err(js_err)
+}
+
+fn opt_uid(s: Option<String>) -> Result<Option<Uid>, JsError> {
+    s.filter(|s| !s.is_empty()).map(|s| parse_uid(&s)).transpose()
+}
+
+fn to_json(v: &impl Serialize) -> Result<String, JsError> {
+    serde_json::to_string(v).map_err(js_err)
+}
+
+#[wasm_bindgen]
+impl SceneEditor {
+    /// Editor com uma cena vazia. `seed` alimenta a geração de UIDs (use um número aleatório).
+    #[wasm_bindgen(constructor)]
+    pub fn new(seed: f64) -> SceneEditor {
+        SceneEditor {
+            scene: Scene::new("Principal", seed as u64),
+            play: None,
+            input_map: InputMap::defaults(),
+            input: Input::default(),
+        }
+    }
+
+    /// Registro de tipos de nó em JSON (propriedades, grupos, faixas e herança).
+    pub fn registry() -> Result<String, JsError> {
+        to_json(&registry::node_types())
+    }
+
+    /// Substitui a cena por uma nova com raiz `Node2D` e `Camera2D`.
+    pub fn new_default(&mut self, name: &str, seed: f64) {
+        self.scene = Scene::new_default(name, seed as u64);
+        self.play = None;
+    }
+
+    /// Carrega o texto de uma cena. Aceita o formato atual e migra o formato 1 da Fase 0.
+    pub fn load_text(&mut self, text: &str, seed: f64) -> Result<(), JsError> {
+        self.scene = Scene::from_text(text, seed as u64).map_err(js_err)?;
+        self.play = None;
+        Ok(())
+    }
+
+    /// Texto RON da cena no formato atual, pronto para salvar.
+    pub fn to_ron(&self) -> Result<String, JsError> {
+        self.scene.to_ron().map_err(js_err)
+    }
+
+    /// Texto RON de uma cena feita só com a subárvore de `uid` (Salvar ramo como cena).
+    pub fn branch_to_ron(&self, uid: &str, seed: f64) -> Result<String, JsError> {
+        self.scene
+            .branch_as_scene(parse_uid(uid)?, seed as u64)
+            .and_then(|s| s.to_ron())
+            .map_err(js_err)
+    }
+
+    // ---------- Operações de edição (sempre sobre a cena de edição) ----------
+
+    pub fn add_node(&mut self, parent: Option<String>, kind: &str, index: Option<u32>) -> Result<String, JsError> {
+        let parent = opt_uid(parent)?;
+        let uid = self.scene.add_node(parent, kind, index.map(|i| i as usize)).map_err(js_err)?;
+        Ok(uid.to_string())
+    }
+
+    pub fn remove_node(&mut self, uid: &str) -> Result<(), JsError> {
+        self.scene.remove_node(parse_uid(uid)?).map_err(js_err)
+    }
+
+    pub fn rename_node(&mut self, uid: &str, name: &str) -> Result<(), JsError> {
+        self.scene.rename_node(parse_uid(uid)?, name).map_err(js_err)
+    }
+
+    /// Define uma propriedade. `value_json` é o valor em JSON. Com `coalesce`, alterações com a
+    /// mesma chave viram um passo de desfazer só até `end_group`.
+    pub fn set_prop(&mut self, uid: &str, key: &str, value_json: &str, coalesce: Option<String>) -> Result<(), JsError> {
+        let value: Value = serde_json::from_str(value_json).map_err(js_err)?;
+        self.scene
+            .set_prop(parse_uid(uid)?, key, value, coalesce.as_deref())
+            .map_err(js_err)
+    }
+
+    /// Move o nó para `parent` (ou raiz) na posição final `index` entre os irmãos.
+    pub fn move_node(&mut self, uid: &str, parent: Option<String>, index: u32) -> Result<(), JsError> {
+        self.scene
+            .move_node(parse_uid(uid)?, opt_uid(parent)?, index as usize)
+            .map_err(js_err)
+    }
+
+    pub fn duplicate_node(&mut self, uid: &str) -> Result<String, JsError> {
+        Ok(self.scene.duplicate_node(parse_uid(uid)?).map_err(js_err)?.to_string())
+    }
+
+    pub fn copy_node(&mut self, uid: &str) -> Result<(), JsError> {
+        self.scene.copy_node(parse_uid(uid)?).map_err(js_err)
+    }
+
+    pub fn paste_node(&mut self, parent: Option<String>) -> Result<Option<String>, JsError> {
+        Ok(self.scene.paste_node(opt_uid(parent)?).map_err(js_err)?.map(|u| u.to_string()))
+    }
+
+    pub fn has_clipboard(&self) -> bool {
+        self.scene.has_clipboard()
+    }
+
+    pub fn change_kind(&mut self, uid: &str, kind: &str) -> Result<(), JsError> {
+        self.scene.change_kind(parse_uid(uid)?, kind).map_err(js_err)
+    }
+
+    /// Fecha o agrupamento de alterações (soltar o mouse, sair de um campo numérico).
+    pub fn end_group(&mut self) {
+        self.scene.end_group();
+    }
+
+    pub fn undo(&mut self) -> Option<String> {
+        self.scene.undo()
+    }
+
+    pub fn redo(&mut self) -> Option<String> {
+        self.scene.redo()
+    }
+
+    // ---------- Reprodução ----------
+
+    /// Inicia a reprodução a partir de uma cópia da cena de edição, no tempo zero.
+    /// A física é montada com as posições atuais dos nós.
+    pub fn play_start(&mut self) {
+        let scene = self.scene.play_copy();
+        let physics = Physics::build(&scene);
+        self.play = Some(Play { scene, time: 0.0, physics });
+    }
+
+    pub fn play_stop(&mut self) {
+        self.play = None;
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.play.is_some()
+    }
+
+    /// Avança a reprodução em `dt` segundos: o relógio e a simulação de física (passos fixos).
+    pub fn play_tick(&mut self, dt: f64) {
+        if let Some(p) = &mut self.play {
+            p.time += dt;
+            p.physics.advance(&mut p.scene, dt);
+        }
+    }
+
+    pub fn play_time(&self) -> f64 {
+        self.play.as_ref().map_or(0.0, |p| p.time)
+    }
+
+    /// Eventos de física desde a última chamada, em JSON: [{kind, node, other}]. A fila é esvaziada.
+    pub fn physics_events(&mut self) -> Result<String, JsError> {
+        let events = match &mut self.play {
+            Some(p) => p.physics.take_events(),
+            None => Vec::new(),
+        };
+        to_json(&events)
+    }
+
+    /// Velocidade de um CharacterBody2D durante a reprodução: [x, y] em pixels por segundo.
+    pub fn character_velocity(&self, uid: &str) -> Result<Vec<f64>, JsError> {
+        let uid = parse_uid(uid)?;
+        Ok(self.play.as_ref().and_then(|p| p.physics.velocity(uid)).map(|v| v.to_vec()).unwrap_or_default())
+    }
+
+    /// Define a velocidade de um CharacterBody2D durante a reprodução. Retorna false se não há.
+    pub fn set_character_velocity(&mut self, uid: &str, x: f64, y: f64) -> Result<bool, JsError> {
+        let uid = parse_uid(uid)?;
+        Ok(self.play.as_mut().is_some_and(|p| p.physics.set_velocity(uid, [x, y])))
+    }
+
+    /// True se o personagem está no chão no último passo da física.
+    pub fn is_grounded(&self, uid: &str) -> Result<bool, JsError> {
+        let uid = parse_uid(uid)?;
+        Ok(self.play.as_ref().is_some_and(|p| p.physics.grounded(uid)))
+    }
+
+    // ---------- Entrada (INP-001, INP-002) ----------
+
+    /// Registra uma tecla (código de `KeyboardEvent.code`) pressionada ou solta.
+    pub fn key_event(&mut self, code: &str, down: bool) {
+        self.input.set_key(code, down);
+    }
+
+    /// Solta todas as teclas. Chamado quando a janela perde o foco.
+    pub fn release_keys(&mut self) {
+        self.input.release_all();
+    }
+
+    /// True se alguma tecla da ação está pressionada.
+    pub fn action_pressed(&self, action: &str) -> bool {
+        self.input.action_pressed(&self.input_map, action)
+    }
+
+    /// -1, 0 ou 1: negativo com `neg` pressionada, positivo com `pos`.
+    pub fn axis(&self, neg: &str, pos: &str) -> f64 {
+        self.input.axis(&self.input_map, neg, pos)
+    }
+
+    /// Vetor [x, y] das quatro ações, com comprimento no máximo 1.
+    pub fn input_vector(&self, left: &str, right: &str, up: &str, down: &str) -> Vec<f64> {
+        self.input.vector(&self.input_map, left, right, up, down).to_vec()
+    }
+
+    /// Mapa de ações em RON, para salvar no projeto.
+    pub fn input_map_ron(&self) -> Result<String, JsError> {
+        self.input_map.to_ron().map_err(js_err)
+    }
+
+    /// Substitui o mapa de ações por um texto RON.
+    pub fn set_input_map_ron(&mut self, text: &str) -> Result<(), JsError> {
+        self.input_map = InputMap::from_ron(text).map_err(js_err)?;
+        Ok(())
+    }
+
+    // ---------- Consultas (seguem o modo atual: edição ou reprodução) ----------
+
+    fn view(&self) -> (&Scene, Option<f64>) {
+        match &self.play {
+            Some(p) => (&p.scene, Some(p.time)),
+            None => (&self.scene, None),
+        }
+    }
+
+    /// Árvore inteira em JSON: nós em ordem, transformações mundiais, propriedades completas,
+    /// e o estado do histórico (desfazer e refazer).
+    pub fn outline(&self) -> Result<String, JsError> {
+        let (s, t) = self.view();
+        to_json(&query::outline(s, t))
+    }
+
+    /// UID do sprite de cima sob o ponto do mundo, ou undefined.
+    pub fn pick(&self, x: f64, y: f64) -> Option<String> {
+        let (s, t) = self.view();
+        query::pick(s, x, y, t).map(|u| u.to_string())
+    }
+
+    /// Limites alinhados aos eixos [minx, miny, maxx, maxy] do nó. Vazio se o nó não existe.
+    pub fn bounds(&self, uid: &str) -> Result<Vec<f64>, JsError> {
+        let (s, t) = self.view();
+        Ok(query::bounds(s, parse_uid(uid)?, t).map(|b| b.to_vec()).unwrap_or_default())
+    }
+
+    /// Câmera atual: [x, y, zoom]. Vazio se a cena não tem câmera.
+    pub fn camera(&self) -> Vec<f64> {
+        let (s, t) = self.view();
+        query::current_camera(s, t).map(|(x, y, z)| vec![x, y, z]).unwrap_or_default()
+    }
+
+    /// Sprites para o viewport: 12 floats por sprite, na ordem de desenho.
+    /// `selected_json` é uma lista JSON de UIDs; `hovered` é o UID sob o mouse.
+    /// O campo `_pad` vem zerado: o TypeScript preenche com o slot da textura.
+    pub fn sprites(&self, selected_json: &str, hovered: Option<String>) -> Result<Vec<f32>, JsError> {
+        let selected: Vec<String> = serde_json::from_str(selected_json).map_err(js_err)?;
+        let selected: Vec<Uid> = selected.iter().map(|s| parse_uid(s)).collect::<Result<_, _>>()?;
+        let hovered = opt_uid(hovered)?;
+        let (s, t) = self.view();
+        let draws: Vec<Draw> = query::draws(s, t, &selected, hovered);
+        Ok(query::floats(&draws))
+    }
+
+    /// Contornos das formas de colisão, em JSON: [{uid, owner, points: [[x, y], ...]}] (VPT-005).
+    pub fn shape_outlines(&self) -> Result<String, JsError> {
+        let (s, t) = self.view();
+        to_json(&query::shape_outlines(s, t))
+    }
+
+    /// Textura de cada sprite, na mesma ordem de `sprites()` (JSON: UID ou "" sem textura).
+    pub fn sprite_textures(&self) -> Result<String, JsError> {
+        let (s, t) = self.view();
+        let names: Vec<String> = query::draws(s, t, &[], None)
+            .iter()
+            .map(|d| d.texture.map(|u| u.to_string()).unwrap_or_default())
+            .collect();
+        to_json(&names)
+    }
+}

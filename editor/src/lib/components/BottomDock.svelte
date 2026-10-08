@@ -45,22 +45,20 @@
   .tabs {
     flex: none;
     display: flex;
-    align-items: center;
-    gap: 2px;
-    height: 36px;
-    padding: 0 6px;
-    border-bottom: 1px solid var(--line-soft);
+    align-items: stretch;
+    gap: 0;
+    height: 22px;
+    padding: 0 2px;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--line);
   }
   .tabs > button:not(.hide) {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 7px;
-    height: 28px;
+    gap: 6px;
     padding: 0 10px;
-    border-radius: 6px;
     font-size: var(--fs-12);
-    font-weight: 500;
     color: var(--text-dim);
     transition: color var(--t-fast), background var(--t-fast);
   }
@@ -70,7 +68,7 @@
   }
   .tabs > button.active {
     color: var(--text);
-    background: var(--bg-active);
+    background: var(--bg-1);
   }
   .tabs > button.active :global(svg) {
     color: var(--accent-hi);
@@ -79,10 +77,10 @@
     margin-left: auto;
   }
   .count {
-    font-size: 10px;
+    font-size: var(--fs-11);
     font-weight: 700;
     padding: 0 5px;
-    border-radius: 99px;
+    border-radius: var(--r-ctl);
     line-height: 15px;
   }
   .count.err {

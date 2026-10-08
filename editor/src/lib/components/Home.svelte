@@ -174,7 +174,7 @@
     gap: 10px;
     height: 34px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--r-ctl);
     color: var(--text-dim);
     font-weight: 500;
   }
@@ -192,11 +192,11 @@
   nav em {
     margin-left: auto;
     font-style: normal;
-    font-size: 10px;
+    font-size: var(--fs-11);
     color: var(--text-faint);
     border: 1px solid var(--line);
     padding: 1px 6px;
-    border-radius: 99px;
+    border-radius: var(--r-ctl);
   }
   .aside-foot {
     margin-top: auto;
@@ -218,7 +218,7 @@
     left: -120px;
     width: 720px;
     height: 520px;
-    background: radial-gradient(closest-side, rgb(124 92 255 / 0.18), transparent);
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 10%, transparent), transparent);
     pointer-events: none;
   }
   header {
@@ -231,7 +231,7 @@
   }
   h1 {
     margin: 0 0 6px;
-    font-size: 28px;
+    font-size: var(--fs-24);
     font-weight: 650;
     letter-spacing: -0.025em;
   }
@@ -270,7 +270,7 @@
     display: flex;
     flex-direction: column;
     text-align: left;
-    border-radius: 12px;
+    border-radius: var(--r-dlg);
     background: var(--bg-1);
     border: 1px solid var(--line-soft);
     overflow: hidden;
@@ -284,7 +284,7 @@
   }
   .tthumb {
     aspect-ratio: 16 / 9;
-    background: #12141a;
+    background: var(--bg-0);
     border-bottom: 1px solid var(--line-soft);
     overflow: hidden;
   }
@@ -299,7 +299,7 @@
     display: grid;
     place-items: center;
     color: var(--text-faint);
-    background: repeating-linear-gradient(45deg, transparent 0 10px, rgb(255 255 255 / 0.015) 10px 20px);
+    background: repeating-linear-gradient(45deg, transparent 0 10px, var(--texture-line) 10px 20px);
   }
   .tmeta {
     display: flex;
@@ -326,7 +326,7 @@
     align-items: center;
     gap: 14px;
     padding: 10px;
-    border-radius: 12px;
+    border-radius: var(--r-dlg);
     background: var(--bg-1);
     border: 1px solid var(--line-soft);
     cursor: pointer;
@@ -340,7 +340,7 @@
     flex: none;
     width: 96px;
     aspect-ratio: 16/9;
-    border-radius: 7px;
+    border-radius: var(--r-ctl);
     overflow: hidden;
     border: 1px solid var(--line-soft);
   }
@@ -369,7 +369,7 @@
     top: 8px;
     right: 8px;
     padding: 3px;
-    border-radius: 5px;
+    border-radius: var(--r-ctl);
     color: var(--text-faint);
     opacity: 0;
     transition: opacity var(--t-fast);
@@ -386,7 +386,7 @@
     align-items: center;
     gap: 14px;
     padding: 18px 20px;
-    border-radius: 12px;
+    border-radius: var(--r-dlg);
     border: 1px dashed var(--line);
     color: var(--text-faint);
   }

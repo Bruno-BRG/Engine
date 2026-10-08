@@ -62,9 +62,9 @@
     transition-delay: 80ms;
   }
   .x {
-    width: 1px;
+    width: 2px;
     cursor: col-resize;
-    background: var(--line-soft);
+    background: var(--bg-0);
   }
   .x::after {
     inset: 0 -2px;
@@ -75,9 +75,9 @@
     inset: 0 -4px;
   }
   .y {
-    height: 1px;
+    height: 2px;
     cursor: row-resize;
-    background: var(--line-soft);
+    background: var(--bg-0);
   }
   .y::after {
     inset: -2px 0;

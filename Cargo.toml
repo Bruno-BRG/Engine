@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 nexo-core = { path = "crates/nexo-core" }
+nexo-physics = { path = "crates/nexo-physics" }
 nexo-render = { path = "crates/nexo-render" }
 wgpu = "30"
 bytemuck = { version = "1.25", features = ["derive"] }

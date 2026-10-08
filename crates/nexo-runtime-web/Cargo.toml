@@ -9,9 +9,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 nexo-core.workspace = true
+nexo-physics.workspace = true
 nexo-render.workspace = true
 wgpu = { workspace = true, features = ["webgl"] }
 bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = ["HtmlCanvasElement"] }

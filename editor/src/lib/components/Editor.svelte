@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { app } from '$lib/state/app.svelte';
   import { scene } from '$lib/state/scene.svelte';
+  import { shortcutsOpen } from '$lib/state/keymap.svelte';
   import * as act from '$lib/actions';
+  import ContextMenu from './ContextMenu.svelte';
+  import ShortcutsDialog from './ShortcutsDialog.svelte';
   import Splitter from './Splitter.svelte';
   import Hierarchy from './Hierarchy.svelte';
   import Inspector from './Inspector.svelte';
@@ -9,6 +13,7 @@
   import BottomDock from './BottomDock.svelte';
   import StatusBar from './StatusBar.svelte';
   import WorkspacePreview from './WorkspacePreview.svelte';
+  import WorkspaceTabs from './WorkspaceTabs.svelte';
 
   // Salvamento automático 1,5 s depois da última alteração.
   let first = true;
@@ -24,9 +29,12 @@
   });
 
   const persist = () => app.persistUi();
+
+  // Fechar o projeto desmonta o editor: o diálogo Atalhos não deve reaparecer no próximo projeto.
+  onDestroy(() => (shortcutsOpen.open = false));
 </script>
 
-<div class="editor">
+<div class="editor" class:playing={app.playing}>
   <div class="body">
     {#if app.panels.left}
       <div class="side" style="width: {app.sizes.left}px">
@@ -36,11 +44,15 @@
     {/if}
 
     <div class="center">
+      <WorkspaceTabs />
       <div class="stage">
         <div class="layer" class:hidden={app.workspace !== 'cena'}>
-          <Viewport />
+          <Viewport mode="cena" active={app.workspace === 'cena'} />
         </div>
-        {#if app.workspace !== 'cena'}
+        <div class="layer" class:hidden={app.workspace !== 'jogo'}>
+          <Viewport mode="jogo" active={app.workspace === 'jogo'} />
+        </div>
+        {#if app.workspace !== 'cena' && app.workspace !== 'jogo'}
           <WorkspacePreview workspace={app.workspace} />
         {/if}
       </div>
@@ -60,6 +72,10 @@
     {/if}
   </div>
   <StatusBar />
+  <ContextMenu />
+  {#if shortcutsOpen.open}
+    <ShortcutsDialog />
+  {/if}
 </div>
 
 <style>
@@ -67,7 +83,13 @@
     position: absolute;
     inset: 0;
     display: grid;
-    grid-template-rows: 1fr 26px;
+    grid-template-rows: 1fr 22px;
+    background: var(--bg-0);
+  }
+  /* Unity tinge os painéis enquanto o jogo roda */
+  .editor.playing .side,
+  .editor.playing .bottom {
+    background: var(--play-tint);
   }
   .body {
     display: flex;

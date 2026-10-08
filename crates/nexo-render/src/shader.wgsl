@@ -1,4 +1,4 @@
-// Shader 2D do Nexo: grade do editor e sprites procedurais.
+// Shader 2D do Nexo: grade do editor, sprites procedurais e sprites com textura.
 
 struct Camera {
     center: vec2f,
@@ -85,6 +85,8 @@ struct SpriteOut {
     @location(4) @interpolate(flat) flags: u32,
 };
 
+// Vértice comum aos dois pipelines de sprite. Os espelhamentos (flags 4 e 8)
+// ficam no espaço local, por isso são aplicados no fragment, antes da rotação.
 @vertex
 fn vs_sprite(@builtin(vertex_index) vi: u32, s: SpriteIn) -> SpriteOut {
     var corners = array<vec2f, 6>(
@@ -126,6 +128,28 @@ fn sd_shape(p: vec2f, b: vec2f, shape: u32) -> f32 {
     }
 }
 
+// Retângulo sem cantos arredondados: forma dos sprites com textura.
+fn sd_box(p: vec2f, b: vec2f) -> f32 {
+    let q = abs(p) - b;
+    return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+// Contorno de seleção (roxo, forte) e hover (roxo, suave), por cima de `base` pré-multiplicado.
+fn outline(base: vec4f, d: f32, aa: f32, flags: u32) -> vec4f {
+    let selected = (flags & 1u) != 0u;
+    let hovered = (flags & 2u) != 0u;
+    if (!(selected || hovered)) {
+        return base;
+    }
+    let px = 1.0 / cam.zoom; // 1 pixel de tela em unidades de mundo
+    let gap = 3.0 * px;
+    let w = select(1.0, 2.0, selected) * px;
+    let ring = 1.0 - smoothstep(w - aa, w + aa, abs(d - gap - w));
+    let rc = select(vec3f(1.0), vec3f(0.486, 0.361, 1.0), selected);
+    let ra = ring * select(0.45, 1.0, selected);
+    return vec4f(rc * ra, ra) + base * (1.0 - ra);
+}
+
 @fragment
 fn fs_sprite(in: SpriteOut) -> @location(0) vec4f {
     let px = 1.0 / cam.zoom; // 1 pixel de tela em unidades de mundo
@@ -145,16 +169,41 @@ fn fs_sprite(in: SpriteOut) -> @location(0) vec4f {
     let a_fill = (1.0 - smoothstep(-aa, aa, d)) * in.color.a;
     out = vec4f(fill * a_fill, a_fill) + out * (1.0 - a_fill);
 
-    // Contorno de seleção e hover, em pixels de tela.
-    let selected = (in.flags & 1u) != 0u;
-    let hovered = (in.flags & 2u) != 0u;
-    if (selected || hovered) {
-        let gap = 3.0 * px;
-        let w = select(1.0, 2.0, selected) * px;
-        let ring = 1.0 - smoothstep(w - aa, w + aa, abs(d - gap - w));
-        let rc = select(vec3f(1.0), vec3f(0.486, 0.361, 1.0), selected);
-        let ra = ring * select(0.45, 1.0, selected);
-        out = vec4f(rc * ra, ra) + out * (1.0 - ra);
+    return outline(out, d, aa, in.flags);
+}
+
+// ---------- Sprites com textura ----------
+
+@group(1) @binding(0) var sprite_tex: texture_2d<f32>;
+@group(1) @binding(1) var sprite_samp: sampler;
+
+// Mesmo vértice e mesma sombra/contorno dos procedurais; a forma é o retângulo.
+// A UV começa no canto superior esquerdo da imagem.
+@fragment
+fn fs_tex(in: SpriteOut) -> @location(0) vec4f {
+    let d = sd_box(in.local, in.half);
+    let aa = max(fwidth(d), 0.0001);
+
+    // Sombra suave deslocada para baixo, igual à dos procedurais.
+    let ds = sd_box(in.local - vec2f(0.0, 6.0), in.half);
+    let shadow = (1.0 - smoothstep(-2.0, 10.0, ds)) * 0.35;
+    let base = vec4f(0.0, 0.0, 0.0, shadow);
+
+    // UV no espaço local, com espelhamento (FLIP_X = 4, FLIP_Y = 8).
+    var uv = in.local / max(in.half * 2.0, vec2f(0.0001)) + vec2f(0.5);
+    if ((in.flags & 4u) != 0u) {
+        uv.x = 1.0 - uv.x;
     }
-    return out;
+    if ((in.flags & 8u) != 0u) {
+        uv.y = 1.0 - uv.y;
+    }
+
+    // A textura chega pré-multiplicada (a CPU faz isso no upload).
+    // A cor do sprite tinge o texel; branco não altera nada.
+    let texel = textureSample(sprite_tex, sprite_samp, uv);
+    let cover = 1.0 - smoothstep(-aa, aa, d);
+    let a = texel.a * in.color.a * cover;
+    let img = vec4f(texel.rgb * in.color.rgb * in.color.a * cover, a);
+
+    return outline(img + base * (1.0 - a), d, aa, in.flags);
 }

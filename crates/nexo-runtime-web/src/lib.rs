@@ -5,6 +5,9 @@ use nexo_render::Renderer;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+mod editor;
+pub use editor::SceneEditor;
+
 #[wasm_bindgen]
 pub struct Viewport {
     renderer: Renderer,
@@ -55,6 +58,19 @@ impl Viewport {
         self.sprites
             .extend_from_slice(bytemuck::cast_slice(&data[..n * SPRITE_FLOATS]));
         self.renderer.set_sprites(&self.sprites);
+    }
+
+    /// Envia uma textura RGBA (não pré-multiplicada, linha de cima primeiro) para o slot.
+    /// Troca a textura se o slot já existe. O slot 0 é reservado.
+    pub fn upload_texture(&mut self, slot: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), JsError> {
+        self.renderer
+            .upload_texture(slot, width, height, rgba)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Libera a textura do slot. Não faz nada se o slot não existe.
+    pub fn remove_texture(&mut self, slot: u32) {
+        self.renderer.remove_texture(slot);
     }
 
     pub fn render(&mut self) -> Result<(), JsError> {
