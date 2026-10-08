@@ -198,7 +198,7 @@
     return null;
   }
 
-  /** Com grade, uma dimensão com sinal (em mundo) vai para o múltiplo mais próximo, com pelo menos uma célula. */
+  /** With a grid, a signed world length snaps to the nearest grid multiple, at least one cell long (PHY-012). */
   function signedSnap(v: number, grid: number | null): number {
     if (!grid) return v;
     const mag = Math.max(grid, snapTo(Math.abs(v), grid));
@@ -206,11 +206,12 @@
   }
 
   /**
-   * Arrasta a alça `key` da forma `n` até o ponto `w` do mundo e grava com set_prop (PHY-012).
-   * `anchor` é a ancoragem de `anchorOf`, medida no início do arrasto. Tamanho em unidades do nó.
-   * Com `grid` (snap ligado), as dimensões medidas em mundo caem em múltiplos da grade: raio, largura,
-   * altura e comprimento. O colisor usa tamanho × escala, então o valor gravado é a medida em mundo
-   * dividida pela escala.
+   * Drags handle `key` of shape `n` to world point `w` and writes it with set_prop (PHY-012).
+   * `anchor` is the anchor from `anchorOf`, taken when the drag starts. Sizes are in node units.
+   * With `grid` (snap on), the sizes measured in world units land on grid multiples: radius, width,
+   * height and length. The collider uses size × scale, so the stored value is the world length divided
+   * by the scale. Snapped sizes are stored without rounding: rounding to two decimals would take them
+   * off the grid whenever the scale is not 1 (16 / 3 = 5.333...). Positions keep the two-decimal rounding.
    */
   function dragShape(n: NodeView, key: string, w: Pt, anchor: Pt | null, coalesce: string, grid: number | null) {
     const wp = world(n);
@@ -224,41 +225,49 @@
     }
     const sx = Math.abs(wp.sx) || 1;
     const sy = Math.abs(wp.sy) || 1;
-    /** Medida em mundo `worldLen` na unidade da propriedade; com grade, cai num múltiplo da grade. */
+    // Sizes are rounded to two decimals only when not snapping (see the doc above).
+    const storeSize = (v: number) => (grid ? v : round2(v));
+    /** World length `worldLen` in node units; with a grid it is already a grid multiple. */
     const sized = (worldLen: number, scale: number, min: number) =>
       grid ? Math.max(grid, snapTo(worldLen, grid)) / scale : Math.max(min, worldLen / scale);
+    /** One side from a world length: without a grid it is at least 1 node unit; with a grid, one cell. */
+    const side = (worldLen: number, scale: number) => (grid ? worldLen / scale : Math.max(1, worldLen / scale));
     const [w0, h0] = (n.props.size as [number, number]) ?? [32, 32];
-    // Círculo: o centro não se move; o raio é a distância do centro ao mouse.
+    // Circle: the centre does not move; the radius is the distance from the centre to the pointer.
     if (n.props.shape === 'circle') {
       const r = sized(Math.hypot(w.x - wp.x, w.y - wp.y), sx, 0.5);
-      scene.setProp(n.uid, 'size', [round2(2 * r), round2(2 * r)], coalesce);
+      scene.setProp(n.uid, 'size', [storeSize(2 * r), storeSize(2 * r)], coalesce);
       return;
     }
-    // Cápsula: o centro não se move; a largura é o diâmetro e a altura é o total.
+    // Capsule: the centre does not move; the width is the diameter and the height is the total height.
     if (n.props.shape === 'capsule_y') {
       const d = rotateBy(w.x - wp.x, w.y - wp.y, -wp.rot * RAD);
       if (key === 'x') {
         const width = sized(2 * Math.abs(d.x), sx, 1);
-        scene.setProp(n.uid, 'size', [round2(width), round2(Math.max(h0, width))], coalesce);
+        scene.setProp(n.uid, 'size', [storeSize(width), storeSize(Math.max(h0, width))], coalesce);
       } else {
         const height = sized(2 * Math.abs(d.y), sy, 1);
-        scene.setProp(n.uid, 'size', [w0, round2(Math.max(w0, height))], coalesce);
+        scene.setProp(n.uid, 'size', [w0, storeSize(Math.max(w0, height))], coalesce);
       }
       return;
     }
     if (!anchor) return;
-    // Retângulo e segmento: a ancoragem fica no mundo e o centro vai para o meio dos dois pontos.
-    // `da` é a distância da ancoragem ao mouse, nos eixos do nó.
+    // Rectangle and segment: the anchor stays put in the world and the centre moves to the midpoint
+    // of the two points. `da` is the offset from the anchor to the pointer, along the node's axes.
     const da = rotateBy(w.x - anchor.x, w.y - anchor.y, -wp.rot * RAD);
     const dx = signedSnap(da.x, grid);
-    // Segmento: só o comprimento no eixo do nó; a ponta acompanha o eixo, não o mouse fora dele.
+    // Segment: only its length along the node's axis; the end follows the axis, not the pointer off it.
     const segment = n.props.shape === 'segment';
     const dy = segment ? 0 : signedSnap(da.y, grid);
     const half = rotateBy(dx / 2, dy / 2, wp.rot * RAD);
     const pos = toLocal(parentWorld(n), anchor.x + half.x, anchor.y + half.y);
-    const width = Math.max(1, Math.abs(dx) / sx);
-    const height = segment ? h0 : Math.max(1, Math.abs(dy) / sy);
-    scene.setProps(n.uid, { size: [round2(width), round2(height)], position: [round2(pos.x), round2(pos.y)] }, coalesce);
+    const width = side(Math.abs(dx), sx);
+    const height = segment ? h0 : side(Math.abs(dy), sy);
+    scene.setProps(
+      n.uid,
+      { size: [storeSize(width), storeSize(height)], position: [round2(pos.x), round2(pos.y)] },
+      coalesce,
+    );
   }
 
   /** Geometria de um sprite no mundo, igual à do núcleo Rust (centro, tamanho e rotação). */
@@ -745,7 +754,7 @@
       if (!n) return;
       const grid = snapOn(e) ? app.gridSize : null;
       let w = toWorld(p.x, p.y);
-      // Vértice de polígono vai para a grade; as demais formas snapam as dimensões em dragShape (PHY-012).
+      // Polygon vertices go to the grid; the other shapes snap their sizes in dragShape (PHY-012).
       if (grid && n.kind === 'CollisionPolygon2D') w = { x: snapTo(w.x, grid), y: snapTo(w.y, grid) };
       dragShape(n, drag.handle, w, drag.anchor, drag.key, grid);
       dirtyDrag();

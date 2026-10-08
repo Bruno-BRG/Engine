@@ -16,7 +16,7 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 
 - [x] **PHY-010** (P0) `CollisionShape2D` with Rectangle, Circle, Capsule, Segment shape resources; offset; disabled; one-way collision.
 - [x] **PHY-011** (P0) `CollisionPolygon2D` (convex decomposition).
-- [ ] **PHY-012** (P0) Editable shape gizmos in the viewport (drag handles). *Status (Fase 2): parcial: alças para arrastar retângulo, círculo, cápsula e segmento no viewport, e clicar numa forma sem sprite a seleciona; validado no navegador. Snap de grade (botão # ou Ctrl): raio, largura, altura e comprimento caem em múltiplos da grade, validado no navegador com o snap ligado e desligado. Falta validar no navegador a inversão com Ctrl durante o arrasto (a ferramenta de teste não envia Ctrl nos eventos de movimento).*
+- [x] **PHY-012** (P0) Editable shape gizmos in the viewport (drag handles). *Status (Fase 2): feito: alças para arrastar retângulo, círculo, cápsula e segmento no viewport; clicar numa forma sem sprite a seleciona; snap de grade (botão # ou Ctrl) faz raio, largura, altura e comprimento caírem em múltiplos da grade, em unidades de mundo. Contorno e clique usam o mesmo tamanho do colisor. Validado no navegador; a inversão com Ctrl foi checada com `ctrlKey` injetado nos eventos reais de ponteiro, porque a ferramenta de teste não envia Ctrl durante o arrasto.*
 - [ ] **PHY-013** (P1) Tilemap collision generated from tile data.
 
 ## Filtering and settings

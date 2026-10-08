@@ -294,22 +294,33 @@ pub struct ShapeOutline {
     pub points: Vec<[f64; 2]>,
 }
 
-/// Ponto `(px, py)` expresso no espaço local de `xf`, em coordenadas do mundo.
-fn apply(xf: Xf, px: f64, py: f64) -> [f64; 2] {
+/// Moves a point of a collider frame to world coordinates: rotation and position only. The sizes are
+/// already scaled by `local_outline`, as the collider is built.
+fn place(xf: Xf, px: f64, py: f64) -> [f64; 2] {
     let (s, c) = xf.rot.to_radians().sin_cos();
-    let (lx, ly) = (px * xf.sx, py * xf.sy);
-    [xf.x + c * lx - s * ly, xf.y + s * lx + c * ly]
+    [xf.x + c * px - s * py, xf.y + s * px + c * py]
 }
 
-/// Pontos do contorno de uma forma no espaço local do nó, antes da transformação do mundo.
-fn local_outline(n: &Node) -> Vec<[f64; 2]> {
+/// Outline points in the collider frame of a shape. They follow `nexo-physics::shapes::build`: the sides
+/// scale by |sx| and |sy| (a polygon by its signed scale), and each size is clamped to at least 0.5.
+/// A circle and a capsule therefore use only the x scale for their radius.
+fn local_outline(n: &Node, xf: Xf) -> Vec<[f64; 2]> {
     if n.kind == "CollisionPolygon2D" {
         return value_of(n, "points")
             .as_array()
-            .map(|a| a.iter().map(as_vec2).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|p| {
+                        let [x, y] = as_vec2(p);
+                        [x * xf.sx, y * xf.sy]
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
     }
     let [w, h] = as_vec2(&value_of(n, "size"));
+    let w = (w * xf.sx.abs()).max(0.5);
+    let h = (h * xf.sy.abs()).max(0.5);
     let (hw, hh) = (w / 2.0, h / 2.0);
     match text(n, "shape").as_str() {
         "circle" => (0..24)
@@ -341,7 +352,10 @@ fn local_outline(n: &Node) -> Vec<[f64; 2]> {
 /// Contornos das formas de colisão ativas (`CollisionShape2D` e `CollisionPolygon2D` com `disabled`
 /// falso) filhas de um corpo ou área. Formas fora de um corpo não aparecem: o Rapier também as ignora.
 pub fn shape_outlines(scene: &Scene, time: Option<f64>) -> Vec<ShapeOutline> {
-    world_map(scene, time).into_iter().filter_map(|(uid, xf, _)| shape_outline(scene, uid, xf)).collect()
+    world_map(scene, time)
+        .into_iter()
+        .filter_map(|(uid, xf, _)| shape_outline(scene, uid, xf))
+        .collect()
 }
 
 /// Outline of one node in world space, if it is an active collision shape inside a body or area.
@@ -352,8 +366,13 @@ fn shape_outline(scene: &Scene, uid: Uid, xf: Xf) -> Option<ShapeOutline> {
     if !is_shape || value_of(n, "disabled").as_bool().unwrap_or(false) {
         return None;
     }
-    let owner = n.parent.filter(|p| scene.node(*p).is_some_and(|b| BODIES.contains(&b.kind.as_str())))?;
-    let points = local_outline(n).into_iter().map(|[px, py]| apply(xf, px, py)).collect();
+    let owner = n
+        .parent
+        .filter(|p| scene.node(*p).is_some_and(|b| BODIES.contains(&b.kind.as_str())))?;
+    let points = local_outline(n, xf)
+        .into_iter()
+        .map(|[px, py]| place(xf, px, py))
+        .collect();
     Some(ShapeOutline { uid, owner, points })
 }
 
@@ -653,6 +672,49 @@ mod tests {
         let (mut s, corpo, _) = body_with_shape("circle", json!([20.0, 20.0]));
         s.set_prop(corpo, "visible", json!(false), None).unwrap();
         assert_eq!(pick(&s, 100.0, 50.0, None), None);
+    }
+
+    /// A body at the origin with one shape child, as `(scene, shape)`.
+    fn shape_at_origin(seed: u64, shape: &str, size: Value, scale: Value) -> (Scene, Uid) {
+        let mut s = Scene::new("t", seed);
+        let corpo = s.add_node(None, "StaticBody2D", None).unwrap();
+        let forma = s.add_node(Some(corpo), "CollisionShape2D", None).unwrap();
+        s.set_prop(forma, "shape", json!(shape), None).unwrap();
+        s.set_prop(forma, "size", size, None).unwrap();
+        s.set_prop(forma, "scale", scale, None).unwrap();
+        (s, forma)
+    }
+
+    #[test]
+    fn circle_outline_uses_collider_radius_on_non_uniform_scale() {
+        // The collider radius is size.x * |scale.x| / 2 = 20, whatever scale.y is.
+        let (s, _) = shape_at_origin(8, "circle", json!([20.0, 20.0]), json!([2.0, 1.0]));
+        for q in &shape_outlines(&s, None)[0].points {
+            assert!((q[0].hypot(q[1]) - 20.0).abs() < 1e-9, "{:?}", q);
+        }
+    }
+
+    #[test]
+    fn pick_uses_collider_radius_on_non_uniform_scale() {
+        let (s, forma) = shape_at_origin(8, "circle", json!([20.0, 20.0]), json!([2.0, 1.0]));
+        assert_eq!(pick(&s, 0.0, 15.0, None), Some(forma), "inside the radius of 20");
+        assert_eq!(pick(&s, 0.0, 25.0, None), None, "outside the radius of 20");
+    }
+
+    #[test]
+    fn capsule_outline_arcs_have_collider_radius() {
+        // Width 20 and height 60 with scale (1, 2): radius 10, straight part (120 - 20) / 2 = 50.
+        let (s, _) = shape_at_origin(9, "capsule_y", json!([20.0, 60.0]), json!([1.0, 2.0]));
+        let p = &shape_outlines(&s, None)[0].points;
+        for q in p {
+            if q[1] >= 50.0 - 1e-9 {
+                assert!((q[0].hypot(q[1] - 50.0) - 10.0).abs() < 1e-9, "top arc {:?}", q);
+            } else if q[1] <= -50.0 + 1e-9 {
+                assert!((q[0].hypot(q[1] + 50.0) - 10.0).abs() < 1e-9, "bottom arc {:?}", q);
+            }
+        }
+        let top = p.iter().map(|q| q[1]).fold(f64::MIN, f64::max);
+        assert!((top - 60.0).abs() < 1e-9, "total height is 60, got {top}");
     }
 
     #[test]
