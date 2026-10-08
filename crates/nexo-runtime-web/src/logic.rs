@@ -107,8 +107,8 @@ impl GraphEditor {
         }))
     }
 
-    /// Erros de validação em JSON: [{node, message, suggestion}]. `node` é null quando o erro não é de um nó, e
-    /// `suggestion` é null quando não há um jeito claro de corrigir (VIS-013).
+    /// Validation errors as JSON: [{node, message, suggestion}]. `node` is null when the error is not about a node,
+    /// and `suggestion` is null when there is no clear fix (VIS-013).
     pub fn validate(&self) -> Result<String, JsError> {
         let erros: Vec<_> = self
             .graph
@@ -145,15 +145,15 @@ impl GraphEditor {
         self.edita(|g| g.connect((from_node as u64, from_pin), (to_node as u64, to_pin)))
     }
 
-    /// Diz se a ligação seria aceita, sem mudar nada: `undefined` se sim. Se não, devolve JSON
-    /// {message, suggestion} com o motivo da recusa e como corrigir (VIS-013). O editor usa para destacar os
-    /// pinos que aceitam o fio arrastado e para mostrar o motivo.
+    /// Whether the link would be accepted, without changing anything: `undefined` if so. Otherwise returns JSON
+    /// {message, suggestion} with the refusal and how to fix it (VIS-013). The editor uses it to highlight the pins
+    /// that accept the dragged wire and to show the refusal.
     pub fn check_connection(&self, from_node: f64, from_pin: &str, to_node: f64, to_pin: &str) -> Option<String> {
-        let motivo = self
+        let refusal = self
             .graph
             .can_connect((from_node as u64, from_pin), (to_node as u64, to_pin))
             .err()?;
-        Some(json!({ "message": motivo.message(), "suggestion": motivo.suggestion() }).to_string())
+        Some(json!({ "message": refusal.message(), "suggestion": refusal.suggestion() }).to_string())
     }
 
     pub fn disconnect(&mut self, from_node: f64, from_pin: &str, to_node: f64, to_pin: &str) -> Result<(), JsError> {

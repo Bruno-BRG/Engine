@@ -24,12 +24,12 @@
     TIPO_NOME,
     pinKey,
     pinStyle,
+    refusalText,
     textOf,
-    textoRecusa,
     type GraphNode,
     type PinRef,
     type PinType,
-    type Recusa,
+    type Refusal,
     type Value,
     type Wire,
   } from '$lib/logic/model';
@@ -97,8 +97,8 @@
   let drag = $state.raw<Drag | null>(null);
   let busca = $state<Busca | null>(null);
   let espaco = $state(false);
-  /** Para cada pino do lado oposto ao do fio arrastado: o motivo da recusa, ou null se a ligação vale (VIS-013). */
-  let alvos = $state.raw<Map<string, Recusa | null>>(new Map());
+  /** For each pin: the refusal of the dragged wire there, or null when the link is valid (VIS-013). */
+  let targets = $state.raw<Map<string, Refusal | null>>(new Map());
 
   const cam = $derived(logic.camera);
   const nodes = $derived(logic.snap.nodes);
@@ -113,7 +113,7 @@
     const out = new Map<number, string>();
     for (const e of logic.errors) {
       if (e.node === null) continue;
-      const texto = textoRecusa(e);
+      const texto = refusalText(e);
       out.set(e.node, out.has(e.node) ? `${out.get(e.node)}\n${texto}` : texto);
     }
     return out;
@@ -170,36 +170,50 @@
     };
   });
 
-  /** Realce de um pino durante um arrasto: 'aceita' se a ligação vale, 'recusa' se não, '' fora do arrasto. */
+  /** Highlight of a pin during a drag: 'aceita' if the link is valid, 'recusa' if not, '' outside a drag. */
   function alvoDoArrasto(node: number, pin: string, saida: boolean): 'aceita' | 'recusa' | '' {
-    const motivo = alvos.get(pinKey(node, (saida ? 'o:' : 'i:') + pin));
-    if (motivo === undefined) return '';
-    return motivo === null ? 'aceita' : 'recusa';
+    const refusal = targets.get(pinKey(node, (saida ? 'o:' : 'i:') + pin));
+    if (refusal === undefined) return '';
+    return refusal === null ? 'aceita' : 'recusa';
   }
 
-  /** Título de um pino recusado durante o arrasto: o motivo e a sugestão (VIS-013). */
-  function motivoNoPino(node: number, pin: string, saida: boolean): string | undefined {
-    const motivo = alvos.get(pinKey(node, (saida ? 'o:' : 'i:') + pin));
-    return motivo ? textoRecusa(motivo) : undefined;
+  /** Title of a refused pin during a drag: the refusal and its suggestion (VIS-013). */
+  function refusalOnPin(node: number, pin: string, output: boolean): string | undefined {
+    const refusal = targets.get(pinKey(node, (output ? 'o:' : 'i:') + pin));
+    return refusal ? refusalText(refusal) : undefined;
+  }
+
+  /** Refusal for a link between two pins on the same side: output to output, or input to input (VIS-013). */
+  function sameSideRefusal(fromOutput: boolean): Refusal {
+    return fromOutput
+      ? { message: 'Uma saída só liga a uma entrada', suggestion: 'Solte numa entrada' }
+      : { message: 'Uma entrada só liga a uma saída', suggestion: 'Solte numa saída' };
   }
 
   /**
-   * Testa o fio arrastado contra cada pino do lado oposto, com as mesmas regras da ligação (tipos, entrada ocupada,
-   * ciclo). Feito uma vez por arrasto: o grafo não muda enquanto o fio é arrastado.
+   * Tests the dragged wire against every pin with the rules of the link: the opposite side is checked for types,
+   * occupied inputs and cycles; the same side is refused by direction. Done once per drag: the graph does not change
+   * while the wire is dragged.
    */
-  function avaliaAlvos(d: Extract<Drag, { kind: 'fio' }>): Map<string, Recusa | null> {
-    const out = new Map<string, Recusa | null>();
+  function evaluateTargets(d: Extract<Drag, { kind: 'fio' }>): Map<string, Refusal | null> {
+    const out = new Map<string, Refusal | null>();
     for (const p of logic.snap.pins) {
-      if (p.output === d.saida) continue;
+      const key = pinKey(p.node, (p.output ? 'o:' : 'i:') + p.pin);
+      // The pin the wire starts from is not a target.
+      if (p.output === d.saida && p.node === d.de.node && p.pin === d.de.pin) continue;
+      if (p.output === d.saida) {
+        out.set(key, sameSideRefusal(d.saida));
+        continue;
+      }
       const outro: PinRef = { node: p.node, pin: p.pin };
-      // Soltar o fio de volta na entrada que ele já ocupa não muda nada, então ela não conta como ocupada.
+      // Dropping the wire back on the input it already fills changes nothing, so that input is not occupied.
       const volta = d.existente?.node === p.node && d.existente.pin === p.pin;
-      const motivo = volta
+      const refusal = volta
         ? undefined
         : d.saida
           ? logic.checkConnection(d.de, outro)
           : logic.checkConnection(outro, d.de);
-      out.set(pinKey(p.node, (p.output ? 'o:' : 'i:') + p.pin), motivo ?? null);
+      out.set(key, refusal ?? null);
     }
     return out;
   }
@@ -362,7 +376,7 @@
       }
     } else if (d.kind === 'fio') {
       if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 3) return;
-      if (!d.moved) alvos = avaliaAlvos(d);
+      if (!d.moved) targets = evaluateTargets(d);
       const [wx, wy] = toWorld(logic.camera, sx, sy);
       drag = { ...d, moved: true, wx, wy };
     } else if (d.kind === 'caixa') {
@@ -393,7 +407,7 @@
   function solta(e: PointerEvent) {
     const d = drag;
     drag = null;
-    alvos = new Map();
+    targets = new Map();
     if (!d) return;
     if (d.kind === 'pan' && !d.moved) logic.clearSelection();
     if ((d.kind === 'mover' || d.kind === 'redim') && d.moved) logic.endGroup();
@@ -406,7 +420,7 @@
     if (d.existente && !d.moved) return;
     const pinoAlvo = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-pin]');
     if (!pinoAlvo) {
-      // No espaço vazio, o fio que chegava na entrada sai e a busca abre filtrada pelo tipo.
+      // On empty space, the wire that reached the input is removed and the search opens filtered by its type.
       if (d.existente) logic.disconnectInput(d.existente.node, d.existente.pin);
       const [sx, sy] = localDe(e);
       busca = { x: sx, y: sy, wx: d.wx, wy: d.wy, de: d.de, saida: d.saida, tipo: d.tipo };
@@ -414,17 +428,15 @@
     }
     const outro: PinRef = { node: Number(pinoAlvo.dataset.node), pin: pinoAlvo.dataset.pin ?? '' };
     const outroSaida = pinoAlvo.dataset.dir === 'out';
+    // Dropped back on the pin the wire starts from: nothing to do.
+    if (outro.node === d.de.node && outro.pin === d.de.pin && outroSaida === d.saida) return;
     if (outroSaida === d.saida) {
-      log.toast(
-        'warn',
-        'Ligação recusada',
-        d.saida ? 'Uma saída só liga a uma entrada.' : 'Uma entrada só liga a uma saída.',
-      );
+      log.toast('warn', 'Ligação recusada', refusalText(sameSideRefusal(d.saida)));
       return;
     }
-    // O fio antigo da entrada só sai depois que a nova ligação é aceita: recusada, ele fica como estava (VIS-013).
-    const [de, para] = d.saida ? [d.de, outro] : [outro, d.de];
-    logic.connect(de, para, d.existente);
+    // The old wire into the input leaves only after the new link is accepted: if it is refused, the old wire stays.
+    const [from, to] = d.saida ? [d.de, outro] : [outro, d.de];
+    logic.connect(from, to, d.existente);
   }
 
   function roda(e: WheelEvent) {
@@ -594,7 +606,7 @@
             data-pin="in"
             data-dir="in"
             data-node={n.id}
-            title={motivoNoPino(n.id, 'in', false)}
+            title={refusalOnPin(n.id, 'in', false)}
           ></span>
           <span
             class="pino saida"
@@ -603,7 +615,7 @@
             data-pin="out"
             data-dir="out"
             data-node={n.id}
-            title={motivoNoPino(n.id, 'out', true) ?? dicaDoPino(n.id, true)}
+            title={refusalOnPin(n.id, 'out', true) ?? dicaDoPino(n.id, true)}
           ></span>
         </div>
       {:else if def}
@@ -634,7 +646,7 @@
                   data-pin={pi.name}
                   data-dir="in"
                   data-node={n.id}
-                  title={motivoNoPino(n.id, pi.name, false) ?? pi.label}
+                  title={refusalOnPin(n.id, pi.name, false) ?? pi.label}
                 >
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'i:' + pi.name)) ?? pi.ty} />
                 </span>
@@ -656,7 +668,7 @@
                   data-pin={po.name}
                   data-dir="out"
                   data-node={n.id}
-                  title={motivoNoPino(n.id, po.name, true) ?? dicaDoPino(n.id, true) ?? po.label}
+                  title={refusalOnPin(n.id, po.name, true) ?? dicaDoPino(n.id, true) ?? po.label}
                 >
                   <PinShape ty={tipoDe.get(pinKey(n.id, 'o:' + po.name)) ?? po.ty} />
                 </span>

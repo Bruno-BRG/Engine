@@ -17,7 +17,7 @@ pub mod vm;
 
 pub use csharp::generate_csharp;
 pub use graph::{
-    Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Recusa, Wire,
+    Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Refusal, Wire,
 };
 pub use ir::{Compiled, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};

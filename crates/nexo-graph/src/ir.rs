@@ -3,7 +3,7 @@
 //! saltos. Nós latentes (Wait, Tween, Move To, Await Signal, Timer) viram ops que a VM suspende e retoma. Os
 //! erros são reunidos pela validação do grafo e devolvidos ao editor, cada um com o id do nó onde foi achado.
 
-use crate::graph::{Graph, GraphNode, REROUTE, def_of, erro_de};
+use crate::graph::{Graph, GraphNode, REROUTE, def_of, error_from_refusal};
 use crate::library;
 use crate::types::{LogLevel, Value, Variable};
 use crate::vm::Context;
@@ -752,8 +752,8 @@ impl<'g> Emitter<'g> {
         }
         let expected = graph
             .input_type(node, pin)
-            .map_err(|m| erro_de(node.id, &m))?;
-        let def = def_of(node).map_err(|m| erro_de(node.id, &m))?;
+            .map_err(|m| error_from_refusal(node.id, &m))?;
+        let def = def_of(node).map_err(|m| error_from_refusal(node.id, &m))?;
         let default = def
             .inputs
             .iter()

@@ -26,11 +26,11 @@ import {
   type NodeDef,
   type PinRef,
   type PinType,
-  type Recusa,
+  type Refusal,
   type Value,
   type Variable,
   type Wire,
-  textoRecusa,
+  refusalText,
 } from './model';
 
 /** Eventos que só podem aparecer uma vez por script. Os de estado podem repetir, com nomes diferentes. */
@@ -384,26 +384,26 @@ class LogicState {
     return ok;
   }
 
-  /** Motivo (e sugestão) pelo qual a ligação seria recusada, ou undefined se ela é válida. Não muda o grafo. */
-  checkConnection(from: PinRef, to: PinRef): Recusa | undefined {
-    const texto = this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin);
-    return texto ? (JSON.parse(texto) as Recusa) : undefined;
+  /** Refusal and suggestion for linking `from` to `to`, or undefined when the link is valid. Changes nothing. */
+  checkConnection(from: PinRef, to: PinRef): Refusal | undefined {
+    const json = this.#ed()?.check_connection(from.node, from.pin, to.node, to.pin);
+    return json ? (JSON.parse(json) as Refusal) : undefined;
   }
 
   /**
-   * Liga duas pontas (VIS-013). Recusada, mostra o motivo e a sugestão, e o grafo fica como estava. Com `substitui`
-   * (a entrada que já tinha um fio), esse fio sai só depois que a nova ligação foi aceita: se ela for recusada, o
-   * fio antigo continua. Soltar o fio de volta na mesma entrada não muda nada.
+   * Links two pins (VIS-013). A refused link shows the refusal and its suggestion, and the graph stays as it was. With
+   * `replaces` (the input that already had a wire), that old wire leaves only after the new link is accepted: if the
+   * new link is refused, the old wire stays. Dropping the wire back on the same input changes nothing.
    */
-  connect(from: PinRef, to: PinRef, substitui: PinRef | null = null): boolean {
-    if (substitui && substitui.node === to.node && substitui.pin === to.pin) return true;
-    const motivo = this.checkConnection(from, to);
-    if (motivo) {
-      log.toast('warn', 'Ligação recusada', textoRecusa(motivo));
+  connect(from: PinRef, to: PinRef, replaces: PinRef | null = null): boolean {
+    if (replaces && replaces.node === to.node && replaces.pin === to.pin) return true;
+    const refusal = this.checkConnection(from, to);
+    if (refusal) {
+      log.toast('warn', 'Ligação recusada', refusalText(refusal));
       return false;
     }
     const ok = this.#run('Ligação recusada', (ed) => ed.connect(from.node, from.pin, to.node, to.pin));
-    if (ok && substitui) this.disconnectInput(substitui.node, substitui.pin);
+    if (ok && replaces) this.disconnectInput(replaces.node, replaces.pin);
     return ok;
   }
 
