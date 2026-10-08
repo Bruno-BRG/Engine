@@ -6,13 +6,15 @@
   import ConsolePanel from './ConsolePanel.svelte';
   import DebuggerPanel from './DebuggerPanel.svelte';
   import CSharpPanel from './CSharpPanel.svelte';
-  import { Shapes, Terminal, Bug, Braces, ChevronDown } from '@lucide/svelte';
+  import AudioMixer from './AudioMixer.svelte';
+  import { Shapes, Terminal, Bug, Braces, ChevronDown, SlidersHorizontal } from '@lucide/svelte';
 
   const tabs: { id: BottomTab; label: string; icon: typeof Shapes }[] = [
     { id: 'assets', label: 'Assets', icon: Shapes },
     { id: 'console', label: 'Console', icon: Terminal },
     { id: 'depurador', label: 'Depurador', icon: Bug },
     { id: 'csharp', label: 'C#', icon: Braces },
+    { id: 'mixer', label: 'Mixer', icon: SlidersHorizontal },
   ];
   const errors = $derived(log.entries.filter((e) => e.level === 'error').length);
 </script>
@@ -36,6 +38,8 @@
     <ConsolePanel />
   {:else if app.bottomTab === 'depurador'}
     <DebuggerPanel />
+  {:else if app.bottomTab === 'mixer'}
+    <AudioMixer />
   {:else}
     <CSharpPanel />
   {/if}

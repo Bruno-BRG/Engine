@@ -1,3 +1,4 @@
+import type { BusEffects } from './audio/types';
 // Configurações do projeto (settings.ron) no lado do TypeScript. Espelha `ProjectSettings` de
 // crates/nexo-core/src/settings.rs. Os nomes de campo são os do serde (snake_case): o JSON vai e
 // volta sem conversão. Se mudar um lado, mude o outro.
@@ -13,6 +14,8 @@ export interface Bus {
   /** Decibéis: 0 é o volume original, -80 é silêncio. */
   volume_db: number;
   mute: boolean;
+  /** Efeitos (AUD-003). Preenchidos com `defaultBusEffects()` quando o arquivo não os traz. */
+  effects: BusEffects;
 }
 
 /** Material de física (PHY-023). */

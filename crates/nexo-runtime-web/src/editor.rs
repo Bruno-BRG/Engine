@@ -3,17 +3,20 @@
 //! A reprodução guarda uma cópia da cena e um relógio; a edição fica intacta enquanto joga.
 
 use nexo_core::query::{self, Draw};
-use nexo_core::{Input, InputMap, ProjectSettings, Scene, Uid, registry};
+use nexo_core::timer::{TimerEvent, Timers};
+use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, registry};
 use nexo_physics::Physics;
 use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
-/// Reprodução: cópia da cena, relógio e mundo de física montado a partir dela.
+/// Reprodução: cópia da cena, relógio, mundo de física, áudio e temporizadores montados a partir dela.
 struct Play {
     scene: Scene,
     time: f64,
     physics: Physics,
+    audio: AudioPlayback,
+    timers: Timers,
 }
 
 #[wasm_bindgen]
@@ -154,10 +157,15 @@ impl SceneEditor {
 
     /// Inicia a reprodução a partir de uma cópia da cena de edição, no tempo zero.
     /// A física é montada com as posições atuais dos nós.
+    /// Os players com autoplay e os timers com autostart começam aqui.
     pub fn play_start(&mut self) {
         let scene = self.scene.play_copy();
         let physics = Physics::build(&scene);
-        self.play = Some(Play { scene, time: 0.0, physics });
+        let mut audio = AudioPlayback::default();
+        audio.autoplay(&scene);
+        let mut timers = Timers::default();
+        timers.autostart(&scene);
+        self.play = Some(Play { scene, time: 0.0, physics, audio, timers });
     }
 
     pub fn play_stop(&mut self) {
@@ -168,12 +176,44 @@ impl SceneEditor {
         self.play.is_some()
     }
 
-    /// Avança a reprodução em `dt` segundos: o relógio e a simulação de física (passos fixos).
+    /// Avança a reprodução em `dt` segundos: o relógio, a física (passos fixos), os temporizadores e a
+    /// atenuação dos sons 2D pela posição da câmera.
     pub fn play_tick(&mut self, dt: f64) {
         if let Some(p) = &mut self.play {
             p.time += dt;
             p.physics.advance(&mut p.scene, dt);
+            p.timers.advance(&p.scene, dt);
+            p.audio.update(&p.scene, p.time);
         }
+    }
+
+    /// Comandos para o motor de áudio desde a última chamada, em JSON (contrato em `nexo_core::audio`).
+    /// A fila é esvaziada. Fora da reprodução devolve uma lista vazia.
+    pub fn audio_commands(&mut self) -> Result<String, JsError> {
+        let commands = match &mut self.play {
+            Some(p) => p.audio.drain(),
+            None => Vec::new(),
+        };
+        to_json(&commands)
+    }
+
+    /// O motor avisa que o som do nó terminou (ou não pôde tocar). Sem isso, um Play sem reinício não tocaria
+    /// o som de novo (ver `AudioPlayback::finished`).
+    pub fn audio_finished(&mut self, node: &str) -> Result<(), JsError> {
+        let uid = parse_uid(node)?;
+        if let Some(p) = &mut self.play {
+            p.audio.finished(uid);
+        }
+        Ok(())
+    }
+
+    /// Sinais dos temporizadores desde a última chamada, em JSON: [{node, kind}] (SCN-014). A fila é esvaziada.
+    pub fn timer_events(&mut self) -> Result<String, JsError> {
+        let events: Vec<TimerEvent> = match &mut self.play {
+            Some(p) => p.timers.take_events(),
+            None => Vec::new(),
+        };
+        to_json(&events)
     }
 
     pub fn play_time(&self) -> f64 {

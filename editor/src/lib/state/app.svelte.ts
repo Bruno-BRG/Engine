@@ -1,7 +1,7 @@
 import type { ProjectInfo } from '../platform';
 
 export type Workspace = 'cena' | 'jogo' | 'logica' | 'animacao' | 'sprite';
-export type BottomTab = 'assets' | 'console' | 'depurador' | 'csharp';
+export type BottomTab = 'assets' | 'console' | 'depurador' | 'csharp' | 'mixer';
 /** Ferramentas de transformação, como no Unity (VPT-001). */
 export type Tool = 'hand' | 'move' | 'rotate' | 'scale' | 'rect';
 

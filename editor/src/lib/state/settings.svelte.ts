@@ -4,6 +4,7 @@
 // chama `markSettingsDirty`.
 import { platform } from '$lib/platform';
 import { emptySettings, type ProjectSettings } from '$lib/settings';
+import { defaultBusEffects } from '$lib/audio/types';
 import type { SceneEditor } from '$lib/runtime/engine';
 import { log } from './log.svelte';
 import { scene } from './scene.svelte';
@@ -44,6 +45,8 @@ let blockedNotified = false;
 /** Copia o estado do editor WASM para `projectSettings` (depois de uma operação feita no WASM). */
 function pullFrom(ed: SceneEditor) {
   Object.assign(projectSettings, JSON.parse(ed.settings_json()));
+  // O Rust omite os efeitos quando estão nos padrões: o editor sempre trabalha com a forma completa.
+  for (const bus of projectSettings.buses) bus.effects ??= defaultBusEffects();
 }
 
 export function openProjectSettings(tab?: SettingsTab) {

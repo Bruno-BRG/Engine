@@ -2,6 +2,7 @@
 //! colisão, matriz de colisão, mapa de entrada e barramentos de áudio. Ficam em `settings.ron` na
 //! raiz do projeto. Um projeto sem o arquivo usa os padrões.
 
+use crate::audio::BusEffects;
 use crate::input::InputMap;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,9 @@ pub struct Bus {
     /// Volume em decibéis. 0 é o volume original, -80 é silêncio.
     pub volume_db: f64,
     pub mute: bool,
+    /// Efeitos do barramento (AUD-003). Quando estão nos padrões, não entram no arquivo.
+    #[serde(default, skip_serializing_if = "BusEffects::is_default")]
+    pub effects: BusEffects,
 }
 
 /// `serde(default)`: um settings.ron de versão anterior, sem os campos novos, ainda abre.
@@ -64,7 +68,7 @@ impl Default for ProjectSettings {
             layers,
             layer_matrix: vec![u32::MAX; LAYER_COUNT],
             input: InputMap::defaults(),
-            buses: vec![Bus { name: "Master".into(), volume_db: 0.0, mute: false }],
+            buses: vec![Bus { name: "Master".into(), volume_db: 0.0, mute: false, effects: BusEffects::default() }],
             tags: DEFAULT_TAGS.iter().map(|s| s.to_string()).collect(),
             physics_materials: Vec::new(),
         }
@@ -88,6 +92,9 @@ impl ProjectSettings {
         self.layers.resize(LAYER_COUNT, String::new());
         self.layer_matrix.truncate(LAYER_COUNT);
         self.layer_matrix.resize(LAYER_COUNT, u32::MAX);
+        for bus in &mut self.buses {
+            bus.effects.normalize();
+        }
     }
 
     pub fn to_ron(&self) -> Result<String, String> {
@@ -145,7 +152,10 @@ mod tests {
         s.gravity = [0.0, 1200.0];
         s.layers[5] = "coin".into();
         s.layer_matrix[0] = 0b11;
-        s.buses.push(Bus { name: "Música".into(), volume_db: -6.0, mute: false });
+        let mut efeitos = BusEffects::default();
+        efeitos.reverb.enabled = true;
+        efeitos.low_pass.cutoff_hz = 900.0;
+        s.buses.push(Bus { name: "Música".into(), volume_db: -6.0, mute: false, effects: efeitos });
         s.tags.push("boss".into());
         s.physics_materials.push(PhysicsMaterial {
             name: "Gelo".into(),
@@ -156,6 +166,15 @@ mod tests {
         });
         let text = s.to_ron().unwrap();
         assert_eq!(ProjectSettings::from_ron(&text).unwrap(), s);
+    }
+
+    #[test]
+    fn barramento_sem_efeitos_nao_grava_o_bloco_de_efeitos() {
+        let text = ProjectSettings::default().to_ron().unwrap();
+        assert!(!text.contains("reverb"), "efeitos nos padrões não vão para o arquivo");
+        let mut s = ProjectSettings::default();
+        s.buses[0].effects.delay.enabled = true;
+        assert!(s.to_ron().unwrap().contains("delay"));
     }
 
     #[test]

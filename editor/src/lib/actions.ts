@@ -2,6 +2,7 @@ import { app, type Workspace } from './state/app.svelte';
 import { scene } from './state/scene.svelte';
 import { loadProjectSettings, unloadProjectSettings } from './state/settings.svelte';
 import { runtime } from './state/runtime.svelte';
+import { audio } from './state/audio.svelte';
 import { assets } from './state/assets.svelte';
 import { textures } from './state/textures.svelte';
 import { log } from './state/log.svelte';
@@ -94,6 +95,8 @@ export function togglePlay() {
 export function togglePause() {
   if (!app.playing) return;
   app.paused = !app.paused;
+  // Pausar suspende o contexto de áudio: os sons param no ponto em que estão.
+  audio.setPaused(app.paused);
   log.info(app.paused ? 'Jogo pausado.' : 'Jogo retomado.');
 }
 

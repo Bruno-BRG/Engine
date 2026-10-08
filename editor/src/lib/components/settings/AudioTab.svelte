@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { defaultBusEffects } from '$lib/audio/types';
   import { projectSettings, editSettings, nameError } from '$lib/state/settings.svelte';
   import NumberField from '../NumberField.svelte';
   import { Plus, X } from '@lucide/svelte';
@@ -11,7 +12,7 @@
     while (names.includes(`Barramento ${n}`)) n++;
     error = null;
     editSettings((s) => {
-      s.buses.push({ name: `Barramento ${n}`, volume_db: 0, mute: false });
+      s.buses.push({ name: `Barramento ${n}`, volume_db: 0, mute: false, effects: defaultBusEffects() });
     });
   }
 
