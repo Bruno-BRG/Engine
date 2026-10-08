@@ -16,19 +16,21 @@ flowchart LR
     CS[nexo-csharp<br/>IR → C#]
     R[nexo-render<br/>wgpu]
     P[nexo-physics<br/>Rapier 2D]
-    A[nexo-audio<br/>kira]
+    A[áudio: comandos no core<br/>WebAudio no editor, ADR 0008]
   end
   UI <--> BE
   UI <--> VP
   BE --> C & G & CS
-  VP --> C & VM & R & P & A
+  VP --> C & VM & R & P
+  C --> A
+  A --> UI
 ```
 
 ## Why these choices
 
 **Tauri 2 for the editor.** Web tech gives the richest UI toolkit with the least effort; the installer stays small because it uses the system WebView.
 
-**Rust for core and runtime.** Memory safety, C++-class performance, strong game ecosystem (wgpu, Rapier, kira) and WebAssembly support. C/C++ only through bindings when there is no Rust equivalent.
+**Rust for core and runtime.** Memory safety, C++-class performance, strong game ecosystem (wgpu, Rapier) and WebAssembly support. Audio plays through WebAudio in the editor, driven by commands from the core (ADR 0008). C/C++ only through bindings when there is no Rust equivalent.
 
 **Same runtime in editor and game.** The viewport runs `nexo-runtime` compiled to WASM on a `<canvas>` with WebGPU (WebGL2 fallback). What you see in the editor is what the exported game does, and web export comes for free. Validated in WebView2 at 144 fps (see ADR 0002).
 

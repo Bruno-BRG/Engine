@@ -13,10 +13,10 @@ Options considered for the engine: a hand-written solver (too much to get right 
 - `crates/nexo-physics` wraps `rapier2d` 0.36. It builds the world from the scene nodes: `StaticBody2D` and `Area2D` as fixed bodies, `RigidBody2D` as dynamic, `CharacterBody2D` as kinematic position-based. `CollisionShape2D` children become colliders relative to their body.
 - The world is built when play starts, from the play copy (`Scene::play_copy`). Each frame, `play_tick` advances it in fixed 1/60 s steps (at most 8 per frame). Poses are written back into the play copy with `Scene::set_runtime_prop`, which skips the undo history. The edit scene never changes while playing.
 - Poses are interpolated between the last two steps, so the display follows the monitor's rate.
-- Layers and masks: the node's `layer` (a fixed list in the registry) becomes one bit, and `collision_mask` (a number of bits, -1 for all) says which layers the node detects. Rapier's interaction groups do the filtering.
+- Layers and masks: the node's `layer` names one of the 32 layers in Project Settings, and each layer is one bit. `collision_mask` is a 32-bit mask (-1 for all) saying which layers the node detects. Rapier's interaction groups do the filtering, and the collision matrix from Project Settings decides which layer pairs collide.
 - Areas are sensors. Their colliders use all active collision types, so area against area and area against fixed bodies also report. The events are `body_entered`, `body_exited`, `area_entered`, `area_exited`, plus `collision_started` and `collision_ended` for solid pairs. The events queue up and the editor reads them after each frame.
 - Characters move with Rapier's `KinematicCharacterController`, with `up` pointing up the screen (`-Y`). Velocity on a blocked axis is zeroed, as in `move_and_slide`.
-- Gravity is fixed at 980 px/s² downwards. The gravity vector and the layer names belong to Project Settings (PHY-021), which is not built yet.
+- Gravity, layer names, the collision matrix and the physics materials come from Project Settings (`settings.ron`, PHY-021 and PHY-023). The world reads them when play starts, so a change in the settings window applies to the next Play.
 
 ## Consequences
 
