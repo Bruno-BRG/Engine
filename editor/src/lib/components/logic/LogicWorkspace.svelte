@@ -8,9 +8,12 @@
   import EventsPanel from './EventsPanel.svelte';
   import UsedByPanel from './UsedByPanel.svelte';
   import VariablesPanel from './VariablesPanel.svelte';
-  import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare } from '@lucide/svelte';
+  import CSharpLogicPanel from './CSharpLogicPanel.svelte';
+  import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare, Braces } from '@lucide/svelte';
 
   let nomeFuncao = $state('');
+  /** Side panel with the C# generated from the script (VIS-024). Opened by the toolbar button. */
+  let csharpOpen = $state(false);
   const erros = $derived(logic.errors.length);
 
   /** Colapsa a seleção em função (VIS-015). Só o que funções expressam; macros ficam pendentes. */
@@ -50,6 +53,10 @@
         <MessageSquare size={12} />
       </button>
       <span class="sep"></span>
+      <button class="icon-btn" class:active={csharpOpen} title="Mostrar o C# gerado do script" aria-label="Mostrar o C# gerado do script" aria-pressed={csharpOpen} onclick={() => (csharpOpen = !csharpOpen)}>
+        <Braces size={13} />
+      </button>
+      <span class="sep"></span>
       <input
         class="campo"
         placeholder="Nome da função"
@@ -76,6 +83,12 @@
       </div>
     {/if}
   </section>
+
+  {#if csharpOpen}
+    <aside class="csharp">
+      <CSharpLogicPanel onclose={() => (csharpOpen = false)} />
+    </aside>
+  {/if}
 
   <aside class="direita">
     <EventsPanel />
@@ -105,6 +118,15 @@
     position: relative;
     display: flex;
     flex-direction: column;
+  }
+  .csharp {
+    flex: none;
+    width: 360px;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid var(--line);
+    background: var(--bg-1);
   }
   .direita {
     flex: none;

@@ -55,6 +55,12 @@ export interface ShapeOutline {
   points: [number, number][];
 }
 
+/** Path2D in world space: an open polyline, in path order (VPT-005). */
+export interface PathOutline {
+  uid: string;
+  points: [number, number][];
+}
+
 export interface NodeView {
   uid: string;
   name: string;
@@ -249,6 +255,12 @@ class SceneState {
   shapeOutlines(): ShapeOutline[] {
     if (!this.#ed) return [];
     return JSON.parse(this.#ed.shape_outlines() as unknown as string) as ShapeOutline[];
+  }
+
+  /** Path2D polylines in world space (VPT-005). */
+  pathOutlines(): PathOutline[] {
+    if (!this.#ed) return [];
+    return JSON.parse(this.#ed.path_outlines() as unknown as string) as PathOutline[];
   }
 
   /** Câmera atual [x, y, zoom] ou null. */

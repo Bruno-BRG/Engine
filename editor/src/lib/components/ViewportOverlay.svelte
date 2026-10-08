@@ -10,6 +10,8 @@
   export type ShapeGizmo = { pts: Pt[]; handles: Pt[] } | null;
   /** Raio de atenuação de um AudioStreamPlayer2D, em pixels de tela (VPT-005). */
   export type AudioRadius = { c: Pt; r: number; sel: boolean };
+  /** Path2D in screen pixels: an open polyline; `sel` highlights it (VPT-005). */
+  export type PathLine = { pts: Pt[]; sel: boolean };
   /** Desenho de depuração da física, em pixels de tela (DBG-004). */
   export type DebugOverlay = {
     shapes: { role: string; pts: Pt[]; closed: boolean }[];
@@ -24,6 +26,7 @@
     box = null,
     frame = null,
     colliders = [],
+    paths = [],
     shape = null,
     audio = [],
     debug = null,
@@ -35,6 +38,8 @@
     frame?: Pt[] | null;
     /** Contornos das formas de colisão, já em pixels de tela (VPT-005). */
     colliders?: Pt[][];
+    /** Caminhos Path2D, já em pixels de tela (VPT-005). */
+    paths?: PathLine[];
     shape?: ShapeGizmo;
     audio?: AudioRadius[];
     debug?: DebugOverlay;
@@ -76,6 +81,12 @@
 
   {#each colliders as c}
     <polygon points={pts(c)} class="collider" />
+  {/each}
+
+  {#each paths as p}
+    {#if p.pts.length > 1}
+      <polyline points={pts(p.pts)} class="path-line" class:sel={p.sel} />
+    {/if}
   {/each}
 
   {#each audio as a}
@@ -166,6 +177,16 @@
     fill: rgba(107, 191, 89, 0.08);
     stroke: var(--node-ui);
     stroke-width: 1;
+  }
+  /* Path2D (VPT-005): linha aberta na cor da família 2D; mais forte quando selecionada. */
+  .path-line {
+    fill: none;
+    stroke: var(--node-object);
+    stroke-width: 1.5;
+  }
+  .path-line.sel {
+    stroke: var(--accent-hi);
+    stroke-width: 2;
   }
   /* Forma selecionada: contorno em destaque e alças para arrastar (PHY-012). */
   .shape-outline {

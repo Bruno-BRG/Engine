@@ -11,7 +11,14 @@
   import { createViewport, type Viewport } from '$lib/runtime/engine';
   import { showContextMenu, type MenuItem } from '$lib/state/contextmenu.svelte';
   import { focusPanel, focus } from '$lib/state/focus.svelte';
-  import ViewportOverlay, { type Gizmo, type Box, type ShapeGizmo, type AudioRadius, type DebugOverlay } from './ViewportOverlay.svelte';
+  import ViewportOverlay, {
+    type Gizmo,
+    type Box,
+    type ShapeGizmo,
+    type AudioRadius,
+    type DebugOverlay,
+    type PathLine,
+  } from './ViewportOverlay.svelte';
   import VirtualJoysticks from './VirtualJoysticks.svelte';
   import { Hand, Move, RotateCw, Maximize, Square, Scan, Monitor, TriangleAlert, LoaderCircle, Bug } from '@lucide/svelte';
   import type { SceneEditor } from '$lib/runtime/engine';
@@ -547,6 +554,16 @@
     return scene.shapeOutlines().map((o) => o.points.map(([x, y]) => toScreen(x, y)));
   });
 
+  /** Path2D lines in edit mode, in screen pixels; the selected one is highlighted (VPT-005). */
+  const pathLines = $derived.by<PathLine[]>(() => {
+    if (mode !== 'cena' || app.playing) return [];
+    scene.revision;
+    return scene.pathOutlines().map((o) => ({
+      pts: o.points.map(([x, y]) => toScreen(x, y)),
+      sel: scene.isSelected(o.uid),
+    }));
+  });
+
   /** Raio de atenuação de cada som 2D, em pixels de tela: `max_distance` no zoom atual (VPT-005). */
   const audioRadii = $derived.by<AudioRadius[]>(() => {
     if (mode !== 'cena' || app.playing) return [];
@@ -988,6 +1005,7 @@
     box={box}
     frame={gameFramePts}
     colliders={colliderPts}
+    paths={pathLines}
     shape={shapeGizmo}
     audio={audioRadii}
     debug={debugOverlay}

@@ -301,22 +301,28 @@ fn place(xf: Xf, px: f64, py: f64) -> [f64; 2] {
     [xf.x + c * px - s * py, xf.y + s * px + c * py]
 }
 
+/// The `points` of a polygon or a path, scaled by the node's world scale (the same scale as its collider).
+/// A missing or malformed list gives an empty result.
+fn scaled_points(n: &Node, xf: Xf) -> Vec<[f64; 2]> {
+    value_of(n, "points")
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|p| {
+                    let [x, y] = as_vec2(p);
+                    [x * xf.sx, y * xf.sy]
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Outline points in the collider frame of a shape. They follow `nexo-physics::shapes::build`: the sides
 /// scale by |sx| and |sy| (a polygon by its signed scale), and each size is clamped to at least 0.5.
 /// A circle and a capsule therefore use only the x scale for their radius.
 fn local_outline(n: &Node, xf: Xf) -> Vec<[f64; 2]> {
     if n.kind == "CollisionPolygon2D" {
-        return value_of(n, "points")
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|p| {
-                        let [x, y] = as_vec2(p);
-                        [x * xf.sx, y * xf.sy]
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        return scaled_points(n, xf);
     }
     let [w, h] = as_vec2(&value_of(n, "size"));
     let w = (w * xf.sx.abs()).max(0.5);
@@ -374,6 +380,34 @@ fn shape_outline(scene: &Scene, uid: Uid, xf: Xf) -> Option<ShapeOutline> {
         .map(|[px, py]| place(xf, px, py))
         .collect();
     Some(ShapeOutline { uid, owner, points })
+}
+
+/// A `Path2D` in world space, for the viewport (VPT-005). It is an open polyline: the last point does not
+/// connect back to the first one, unlike a collision polygon.
+#[derive(Clone, Debug, Serialize)]
+pub struct PathOutline {
+    /// The `Path2D` node.
+    pub uid: Uid,
+    /// The points in world coordinates, in path order.
+    pub points: Vec<[f64; 2]>,
+}
+
+/// All `Path2D` nodes of the scene, in world coordinates. Each one follows its own position, rotation and scale.
+pub fn path_outlines(scene: &Scene, time: Option<f64>) -> Vec<PathOutline> {
+    world_map(scene, time)
+        .into_iter()
+        .filter_map(|(uid, xf, _)| path_outline(scene, uid, xf))
+        .collect()
+}
+
+/// The world polyline of one node, if it is a `Path2D`.
+fn path_outline(scene: &Scene, uid: Uid, xf: Xf) -> Option<PathOutline> {
+    let n = scene.node(uid)?;
+    if n.kind != "Path2D" {
+        return None;
+    }
+    let points = scaled_points(n, xf).into_iter().map(|[px, py]| place(xf, px, py)).collect();
+    Some(PathOutline { uid, points })
 }
 
 /// Câmera atual: posição mundial e zoom. `None` se a cena não tem uma `Camera2D` atual.
@@ -643,6 +677,39 @@ mod tests {
         assert_eq!(p.points, vec![[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]);
         let g = outlines.iter().find(|o| o.uid == segmento).unwrap();
         assert_eq!(g.points, vec![[-20.0, 0.0], [20.0, 0.0]]);
+    }
+
+    #[test]
+    fn path_outline_follows_node_transform_and_is_open() {
+        // Path2D at (100, 50), rotated 90 degrees, scaled (2, 1). Scaled local points: (0,0), (20,0), (20,5).
+        // With Y down, a 90 degree turn maps (x, y) to (-y, x) before the translation.
+        let mut s = Scene::new("t", 10);
+        let root = s.add_node(None, "Node2D", None).unwrap();
+        let caminho = s.add_node(Some(root), "Path2D", None).unwrap();
+        s.set_prop(caminho, "position", json!([100.0, 50.0]), None).unwrap();
+        s.set_prop(caminho, "rotation", json!(90.0), None).unwrap();
+        s.set_prop(caminho, "scale", json!([2.0, 1.0]), None).unwrap();
+        s.set_prop(caminho, "points", json!([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0]]), None).unwrap();
+
+        let paths = path_outlines(&s, None);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].uid, caminho);
+        let p = &paths[0].points;
+        assert_eq!(p.len(), 3, "open polyline: no closing point");
+        let expected = [[100.0, 50.0], [100.0, 70.0], [95.0, 70.0]];
+        for (got, want) in p.iter().zip(expected) {
+            assert!((got[0] - want[0]).abs() < 1e-9 && (got[1] - want[1]).abs() < 1e-9, "{got:?} != {want:?}");
+        }
+    }
+
+    #[test]
+    fn path_is_not_a_collision_outline() {
+        // A path inside a body is not a collider: only CollisionShape2D and CollisionPolygon2D give outlines.
+        let mut s = Scene::new("t", 11);
+        let corpo = s.add_node(None, "StaticBody2D", None).unwrap();
+        s.add_node(Some(corpo), "Path2D", None).unwrap();
+        assert!(shape_outlines(&s, None).is_empty());
+        assert_eq!(path_outlines(&s, None).len(), 1);
     }
 
     /// A body at `(100, 50)` with one shape child, for the picking tests.

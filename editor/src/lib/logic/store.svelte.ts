@@ -5,7 +5,7 @@
 import { app } from '$lib/state/app.svelte';
 import { scene, type NodeType, type NodeView } from '$lib/state/scene.svelte';
 import { log } from '$lib/state/log.svelte';
-import { createGraphEditor, readNodeLibrary, readNodeRegistry, type GraphEditor } from '$lib/runtime/engine';
+import { createGraphEditor, csharpClassName, readNodeLibrary, readNodeRegistry, type GraphEditor } from '$lib/runtime/engine';
 import { isTauri } from '$lib/platform';
 import { logicDebug } from './debug.svelte';
 import { isPropertyNode } from './properties';
@@ -42,6 +42,11 @@ const ATRASO_SALVAR = 600;
 
 const VAZIO: GraphSnapshot = { nodes: [], wires: [], comments: [], variables: [], pins: [] };
 
+/** C# of the open script (VIS-024): the generated text, or the graph message that blocks the generation. */
+export type CSharpOutput =
+  | { ok: true; className: string; code: string }
+  | { ok: false; className: string; error: string };
+
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Chama um comando do Tauri. Sem o app desktop, scripts não existem. */
@@ -71,6 +76,22 @@ class LogicState {
   snap = $state.raw<GraphSnapshot>(VAZIO);
   /** Erros de validação do grafo aberto. */
   errors = $state.raw<GraphError[]>([]);
+  /**
+   * C# generated from the IR of the open script (VIS-024). It is derived state: it is only computed when the panel
+   * reads it, and it is recomputed after every graph operation, which replaces `snap`.
+   */
+  csharp = $derived.by<CSharpOutput | null>(() => {
+    void this.snap;
+    const script = this.active;
+    const ed = this.#ed();
+    if (!script || !ed) return null;
+    const className = csharpClassName(script);
+    try {
+      return { ok: true, className, code: ed.to_csharp(script) };
+    } catch (e) {
+      return { ok: false, className, error: msg(e) };
+    }
+  });
   /** Seleção do grafo aberto (ids de nós, de caixas e um fio). */
   selNodes = $state<number[]>([]);
   selComments = $state<number[]>([]);

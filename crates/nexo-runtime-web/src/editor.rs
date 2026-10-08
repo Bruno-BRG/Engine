@@ -480,6 +480,12 @@ impl SceneEditor {
         to_json(&query::shape_outlines(s, t))
     }
 
+    /// Paths (`Path2D`) in world space, as JSON: [{uid, points: [[x, y], ...]}] (VPT-005). The line is open.
+    pub fn path_outlines(&self) -> Result<String, JsError> {
+        let (s, t) = self.view();
+        to_json(&query::path_outlines(s, t))
+    }
+
     /// Textura de cada sprite, na mesma ordem de `sprites()` (JSON: UID ou "" sem textura).
     pub fn sprite_textures(&self) -> Result<String, JsError> {
         let (s, t) = self.view();
