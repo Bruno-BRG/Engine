@@ -7,9 +7,10 @@ use crate::types::{PinType, Value};
 use serde::Serialize;
 use std::sync::OnceLock;
 
-/// Pino de um nó. `ty` vazio quer dizer "o tipo que o próprio nó decide": o da variável nomeada (GetVariable e
-/// SetVariable) ou o do fio que chega (Reroute). `default` vazio torna a entrada obrigatória: sem fio e sem
-/// valor embutido, a validação falha.
+/// A pin of a node. An empty `ty` means "the type the node decides itself": the named variable's (GetVariable and
+/// SetVariable), the named property's (GetProperty and SetProperty), or the incoming wire's (Reroute). An empty
+/// `default` makes the input required: with no wire and no embedded value, validation fails. On property pins the
+/// default comes from the registry (see `graph::input_default`).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinDef {
@@ -46,6 +47,17 @@ impl PinDef {
 
     /// Pino cujo tipo segue a variável nomeada pelo próprio nó.
     fn of_variable(name: &'static str, label: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            ty: None,
+            default: None,
+        }
+    }
+
+    /// Pin whose type follows the property named by the node itself (VIS-021): its type in the registry. Like a
+    /// variable, it has no fixed `ty` or default; the resolution is in `graph::property_pin_type`.
+    fn of_property(name: &'static str, label: &'static str) -> Self {
         Self {
             name,
             label,
@@ -406,25 +418,31 @@ fn build() -> Vec<NodeDef> {
             vec![exec(), texto("msg", "Texto", "")],
             vec![exec()],
         ),
-        // Nós da cena.
+        // Scene nodes. The property's type and name are embedded values: the compiler does not see the scene, so the
+        // value pin's type comes from the registry (VIS-021). No declared type: the value is decimal, as before.
         def(
             "GetProperty",
             "Propriedades",
             "Ler propriedade",
-            "Lê uma propriedade numérica de qualquer nó.",
-            vec![no("node", "Nó"), texto("name", "Propriedade", "")],
-            vec![PinDef::new("value", "Valor", PinType::Float)],
+            "Lê uma propriedade de qualquer nó. O tipo do Valor segue a propriedade escolhida; sem tipo, é decimal.",
+            vec![
+                no("node", "Nó"),
+                texto("type", "Tipo do nó", ""),
+                texto("name", "Propriedade", ""),
+            ],
+            vec![PinDef::of_property("value", "Valor")],
         ),
         def(
             "SetProperty",
             "Propriedades",
             "Definir propriedade",
-            "Grava uma propriedade numérica de qualquer nó.",
+            "Grava uma propriedade de qualquer nó. O tipo do Valor segue a propriedade escolhida; sem tipo, é decimal.",
             vec![
                 exec(),
                 no("node", "Nó"),
+                texto("type", "Tipo do nó", ""),
                 texto("name", "Propriedade", ""),
-                decimal("value", "Valor", 0.0),
+                PinDef::of_property("value", "Valor"),
             ],
             vec![exec()],
         ),
@@ -729,5 +747,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn property_nodes_embed_type_and_registry_value_type() {
+        // The node type is embedded text with an empty default (= no type, decimal). The value follows the registry.
+        for kind in ["GetProperty", "SetProperty"] {
+            let def = find(kind).unwrap();
+            let type_pin = def.inputs.iter().find(|p| p.name == "type").unwrap();
+            assert_eq!(type_pin.ty, Some(PinType::String), "{kind}");
+            assert_eq!(type_pin.default, Some(Value::String(String::new())), "{kind}");
+        }
+        let get = find("GetProperty").unwrap();
+        assert!(get.outputs.iter().any(|p| p.name == "value" && p.ty.is_none()));
+        let set = find("SetProperty").unwrap();
+        assert!(set.inputs.iter().any(|p| p.name == "value" && p.ty.is_none() && p.default.is_none()));
     }
 }

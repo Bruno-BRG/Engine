@@ -208,18 +208,18 @@ impl GraphEditor {
         self.edita(|g| Ok(g.disconnect_input((to_node as u64, to_pin))))
     }
 
-    /// Grava o valor embutido de uma entrada. `value_json` é o `Value` em JSON, por exemplo {"Float": 2.5}.
-    pub fn set_value(&mut self, node: f64, pin: &str, value_json: &str) -> Result<(), JsError> {
+    /// Writes the embedded value of an input. `value_json` is the `Value` as JSON, for example {"Float": 2.5}. Returns, as
+    /// JSON, the wires the change dropped: changing the type or name of a property node can leave wires without a valid type.
+    pub fn set_value(&mut self, node: f64, pin: &str, value_json: &str) -> Result<String, JsError> {
         let value: Value = serde_json::from_str(value_json).map_err(js_err)?;
-        self.edita(|g| g.set_value(node as u64, pin, value))
+        let removed = self.edita(|g| g.set_value(node as u64, pin, value))?;
+        to_json(&removed)
     }
 
-    /// Tira o valor embutido: a entrada volta ao padrão da biblioteca.
-    pub fn remove_value(&mut self, node: f64, pin: &str) -> Result<(), JsError> {
-        self.edita(|g| {
-            g.remove_value(node as u64, pin);
-            Ok(())
-        })
+    /// Removes the embedded value: the input goes back to the library default. Returns, as JSON, the wires the change dropped.
+    pub fn remove_value(&mut self, node: f64, pin: &str) -> Result<String, JsError> {
+        let removed = self.edita(|g| Ok(g.remove_value(node as u64, pin)))?;
+        to_json(&removed)
     }
 
     // ---------- Variáveis (VIS-022) ----------

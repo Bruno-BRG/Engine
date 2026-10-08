@@ -4,6 +4,7 @@
 
 use crate::library::{self, NodeDef, PinDef};
 use crate::types::{PinType, Value, Variable};
+use nexo_core::registry::{self, PropKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -165,11 +166,39 @@ pub enum Refusal {
         pin: String,
         field: bool,
     },
+    /// Property node whose declared type is not in the registry.
+    UnknownNodeType { label: String, node_type: String },
+    /// Property node whose property is not in its declared type, nor in the ancestors of that type.
+    UnknownProperty {
+        label: String,
+        node_type: String,
+        name: String,
+    },
+    /// Property node whose property has no pin: a list of points or a map, which property nodes do not read yet.
+    UnsupportedProperty {
+        label: String,
+        name: String,
+        kind: PropKind,
+    },
+    /// Property node with a declared type and no embedded property name.
+    PropertyWithoutName { label: String },
+    /// Type or name of a property node comes from a wire. The compiler needs them as embedded values.
+    WiredPropertyPin { label: String, pin: String },
 }
 
 /// Name of a cycle class, as it appears in the messages.
 fn cycle_class(flow: bool) -> &'static str {
     if flow { "de fluxo" } else { "de dados" }
+}
+
+/// Name of a property kind that has no pin, as it appears in the messages. Only lists of points and maps lack a pin
+/// (`PinType::of_prop`).
+fn kind_without_pin(kind: PropKind) -> &'static str {
+    match kind {
+        PropKind::Map => "um mapa",
+        PropKind::Points => "uma lista de pontos",
+        _ => "um valor sem pino",
+    }
 }
 
 impl Refusal {
@@ -222,6 +251,24 @@ impl Refusal {
             Refusal::RequiredInputMissing { label, pin, .. } => {
                 format!("entrada obrigatória '{pin}' de {label} não está conectada")
             }
+            Refusal::UnknownNodeType { label, node_type } => {
+                format!("{label}: o tipo de nó '{node_type}' não existe")
+            }
+            Refusal::UnknownProperty {
+                label,
+                node_type,
+                name,
+            } => format!("{label}: {node_type} não tem a propriedade '{name}'"),
+            Refusal::UnsupportedProperty { label, name, kind } => format!(
+                "{label}: '{name}' é {}, que os nós de propriedade ainda não leem",
+                kind_without_pin(*kind)
+            ),
+            Refusal::PropertyWithoutName { label } => {
+                format!("{label} precisa do nome da propriedade embutido")
+            }
+            Refusal::WiredPropertyPin { label, pin } => {
+                format!("{label}: '{pin}' precisa ser um valor embutido, não pode vir de fio")
+            }
         }
     }
 
@@ -252,6 +299,15 @@ impl Refusal {
                 "Ligue um fio ou escreva o valor no campo do nó"
             }
             Refusal::RequiredInputMissing { field: false, .. } => "Ligue um fio a essa entrada",
+            Refusal::UnknownNodeType { .. } => "Escolha um tipo da lista do nó",
+            Refusal::UnknownProperty { .. } => "Escolha uma propriedade da lista do nó",
+            Refusal::UnsupportedProperty { .. } => {
+                "Escolha uma propriedade de número, texto, booleano ou vetor"
+            }
+            Refusal::PropertyWithoutName { .. } => "Escolha a propriedade no campo do nó",
+            Refusal::WiredPropertyPin { .. } => {
+                "Escreva o valor no campo do nó, em vez de ligar um fio"
+            }
         }
     }
 }
@@ -297,6 +353,91 @@ pub(crate) fn def_of(node: &GraphNode) -> Result<&'static NodeDef, Refusal> {
     library::find(&node.kind).ok_or_else(|| Refusal::UnknownKind {
         kind: node.kind.clone(),
     })
+}
+
+/// Nodes that read or write a registry property (VIS-021). Their value pin follows the property's type.
+pub(crate) fn is_property_node(kind: &str) -> bool {
+    matches!(kind, "GetProperty" | "SetProperty")
+}
+
+/// What a property node declares (VIS-021): the type of its value pin, and the value that pin uses without a wire.
+struct DeclaredProperty {
+    ty: PinType,
+    default: Option<Value>,
+}
+
+/// The property a property node declares. Refuses when the type is not in the registry, when the property is not in
+/// that type or its ancestors, when no name is embedded, and when the property is a list of points. A vector
+/// component ("position_x") is decimal, and its default is that component of the vector's default.
+fn declared_property(node: &GraphNode) -> Result<DeclaredProperty, Refusal> {
+    let node_type = texto_do(node, "type");
+    let name = texto_do(node, "name");
+    let label = node.etiqueta();
+    if registry::find(&node_type).is_none() {
+        return Err(Refusal::UnknownNodeType { label, node_type });
+    }
+    if name.is_empty() {
+        return Err(Refusal::PropertyWithoutName { label });
+    }
+    if let Some((vector, index)) = registry::component(&name) {
+        let def = registry::prop_def(&node_type, vector)
+            .filter(|d| d.kind == PropKind::Vec2)
+            .ok_or(Refusal::UnknownProperty {
+                label,
+                node_type,
+                name,
+            })?;
+        let default = match Value::from_json(PropKind::Vec2, &def.default) {
+            Some(Value::Vec2(pair)) => pair.get(index).copied().unwrap_or(0.0),
+            _ => 0.0,
+        };
+        return Ok(DeclaredProperty {
+            ty: PinType::Float,
+            default: Some(Value::Float(default)),
+        });
+    }
+    let def = registry::prop_def(&node_type, &name).ok_or_else(|| Refusal::UnknownProperty {
+        label: label.clone(),
+        node_type: node_type.clone(),
+        name: name.clone(),
+    })?;
+    let ty = PinType::of_prop(def.kind).ok_or(Refusal::UnsupportedProperty {
+        label,
+        name,
+        kind: def.kind,
+    })?;
+    Ok(DeclaredProperty {
+        ty,
+        default: Value::from_json(def.kind, &def.default),
+    })
+}
+
+/// Type of the value pin of a property node (VIS-021). Without a declared type it is decimal, as before typed
+/// properties, so old graphs keep working. With a declared type, it is the type of the property in the registry.
+pub(crate) fn property_pin_type(node: &GraphNode) -> Result<PinType, Refusal> {
+    if texto_do(node, "type").is_empty() {
+        return Ok(PinType::Float);
+    }
+    declared_property(node).map(|declared| declared.ty)
+}
+
+/// Value an input uses when it has no wire and no embedded value (VIS-021). The value pin of a property node uses
+/// the default of the declared property, or decimal zero without a declared type. Other pins use the library default.
+pub(crate) fn input_default(node: &GraphNode, pin: &PinDef) -> Option<Value> {
+    if is_property_node(&node.kind) && pin.name == "value" {
+        if texto_do(node, "type").is_empty() {
+            return Some(Value::Float(0.0));
+        }
+        return declared_property(node).ok().and_then(|declared| declared.default);
+    }
+    pin.default.clone()
+}
+
+/// Changing the type or the name of a property node drops its embedded value, which may be of another type (VIS-021).
+fn clear_property_value(node: &mut GraphNode, pin: &str) {
+    if is_property_node(&node.kind) && (pin == "type" || pin == "name") {
+        node.values.remove("value");
+    }
 }
 
 impl Graph {
@@ -410,8 +551,9 @@ impl Graph {
         self.wires.len() != antes
     }
 
-    /// Grava o valor embutido de uma entrada de dados. O tipo do valor tem de ser o do pino.
-    pub fn set_value(&mut self, node: u64, pin: &str, value: Value) -> Result<(), String> {
+    /// Writes the embedded value of a data input; the value must have the pin's type. Changing the type or name
+    /// of a property node drops the wires of its value pin that no longer match, and returns them (VIS-021).
+    pub fn set_value(&mut self, node: u64, pin: &str, value: Value) -> Result<Vec<Wire>, String> {
         let (ty, etiqueta) = {
             let n = self
                 .node(node)
@@ -428,10 +570,21 @@ impl Graph {
                 value.ty().nome()
             ));
         }
-        if let Some(n) = self.nodes.iter_mut().find(|n| n.id == node) {
-            n.values.insert(pin.to_string(), value);
+        let changed = match self.nodes.iter_mut().find(|n| n.id == node) {
+            Some(n) => {
+                let changed = n.values.get(pin) != Some(&value);
+                n.values.insert(pin.to_string(), value);
+                if changed {
+                    clear_property_value(n, pin);
+                }
+                changed
+            }
+            None => false,
+        };
+        if changed && (pin == "type" || pin == "name") {
+            return Ok(self.drop_stale_value_wires(node));
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     /// Declara uma variável do script. O padrão tem de ser do mesmo tipo da variável.
@@ -535,12 +688,75 @@ impl Graph {
         Ok(())
     }
 
-    /// Tira o valor embutido de uma entrada: ela volta ao padrão da biblioteca. Devolve se havia valor.
-    pub fn remove_value(&mut self, node: u64, pin: &str) -> bool {
-        self.nodes
-            .iter_mut()
-            .find(|n| n.id == node)
-            .is_some_and(|n| n.values.remove(pin).is_some())
+    /// Removes the embedded value of an input, so it goes back to the library default. Returns the wires that no
+    /// longer type-check when the type or the name of a property node is removed (VIS-021); otherwise, an empty list.
+    pub fn remove_value(&mut self, node: u64, pin: &str) -> Vec<Wire> {
+        let existed = match self.nodes.iter_mut().find(|n| n.id == node) {
+            Some(n) => {
+                let existed = n.values.remove(pin).is_some();
+                if existed {
+                    clear_property_value(n, pin);
+                }
+                existed
+            }
+            None => false,
+        };
+        if existed && (pin == "type" || pin == "name") {
+            return self.drop_stale_value_wires(node);
+        }
+        Vec::new()
+    }
+
+    /// Removes the wires of a property node's value pin that no longer type-check after its type or name changed
+    /// (VIS-021), and returns them, in their order. Does nothing for other nodes. The stale wires are found on the
+    /// graph as it is and removed together, so the order in which the wires were made does not change the result.
+    fn drop_stale_value_wires(&mut self, node: u64) -> Vec<Wire> {
+        let mut removed = Vec::new();
+        if !self.node(node).is_some_and(|n| is_property_node(&n.kind)) {
+            return removed;
+        }
+        loop {
+            let stale = self.stale_value_wires(node);
+            if stale.is_empty() {
+                return removed;
+            }
+            let mut kept = Vec::with_capacity(self.wires.len());
+            for (i, wire) in std::mem::take(&mut self.wires).into_iter().enumerate() {
+                if stale.contains(&i) {
+                    removed.push(wire);
+                } else {
+                    kept.push(wire);
+                }
+            }
+            self.wires = kept;
+        }
+    }
+
+    /// Indexes of the wires tied to the value of `node` that no longer type-check. Tied wires are the input wire into
+    /// `value`, the output wires from `value`, and the wires that leave the reroutes it feeds (VIS-021).
+    fn stale_value_wires(&self, node: u64) -> Vec<usize> {
+        // (node, pin) pairs that carry the value of `node`: its `value` output, and the outputs of the reroutes it feeds.
+        let mut carriers: HashSet<(u64, String)> = HashSet::from([(node, "value".to_string())]);
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for w in &self.wires {
+                let feeds_reroute = self.node(w.to.node).is_some_and(|n| n.kind == REROUTE);
+                if feeds_reroute && carriers.contains(&(w.from.node, w.from.pin.clone())) {
+                    grew |= carriers.insert((w.to.node, "out".to_string()));
+                }
+            }
+        }
+        self.wires
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| {
+                let into_value = w.to.node == node && w.to.pin == "value";
+                let from_value = carriers.contains(&(w.from.node, w.from.pin.clone()));
+                (into_value || from_value) && self.endpoint_type(&w.from, &w.to).is_err()
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Declara ou troca uma variável (VIS-022). Se o nome já existe, a variável é trocada no mesmo lugar, para a
@@ -921,6 +1137,7 @@ impl Graph {
         }
         match pin.ty {
             Some(ty) => Ok(ty),
+            None if is_property_node(&node.kind) => property_pin_type(node),
             None => Ok(self.variable_of(node)?.ty),
         }
     }
@@ -1066,12 +1283,19 @@ impl Graph {
                     Err(refusal) => erros.push(error_from_refusal(node.id, &refusal)),
                 }
             }
+            // On a property node, an invalid type or name is reported below, once. It is not repeated as a missing value.
+            let invalid_property = is_property_node(&node.kind) && property_pin_type(node).is_err();
             for p in &def.inputs {
-                let ligada = self
+                let wired = self
                     .wires
                     .iter()
                     .any(|w| w.to.node == node.id && w.to.pin == p.name);
-                if !ligada && !node.values.contains_key(p.name) && p.default.is_none() {
+                let invalid_property_value = invalid_property && p.name == "value";
+                if !wired
+                    && !node.values.contains_key(p.name)
+                    && input_default(node, p).is_none()
+                    && !invalid_property_value
+                {
                     // Value inputs show an inline field on the node; flow and node inputs do not.
                     let field =
                         matches!(p.ty, Some(ty) if !matches!(ty, PinType::Flow | PinType::Node));
@@ -1087,6 +1311,29 @@ impl Graph {
                 && let Err(refusal) = self.variable_of(node)
             {
                 erros.push(error_from_refusal(node.id, &refusal));
+            }
+            if is_property_node(&node.kind) {
+                // The compiler does not see the scene, so the type must be an embedded value. The name must be one too,
+                // but only once a type is declared: a graph from before typed properties may read the name from a wire.
+                let typed = !texto_do(node, "type").is_empty();
+                let mut wired_pin_refused = false;
+                for pin in ["type", "name"] {
+                    let wired = self
+                        .wires
+                        .iter()
+                        .any(|w| w.to.node == node.id && w.to.pin == pin);
+                    if wired && (pin == "type" || typed) {
+                        wired_pin_refused = true;
+                        let refusal = Refusal::WiredPropertyPin {
+                            label: node.etiqueta(),
+                            pin: pin.to_string(),
+                        };
+                        erros.push(error_from_refusal(node.id, &refusal));
+                    }
+                }
+                if !wired_pin_refused && let Err(refusal) = property_pin_type(node) {
+                    erros.push(error_from_refusal(node.id, &refusal));
+                }
             }
         }
 
@@ -1916,8 +2163,8 @@ mod tests {
         let mut g = Graph::default();
         let soma = adiciona(&mut g, "Add");
         g.set_value(soma, "a", Value::Float(4.0)).unwrap();
-        assert!(g.remove_value(soma, "a"));
-        assert!(!g.remove_value(soma, "a"));
+        assert!(g.remove_value(soma, "a").is_empty());
+        assert!(!g.node(soma).unwrap().values.contains_key("a"));
         g.set_position(soma, [7.0, 8.0]).unwrap();
         assert_eq!(g.node(soma).unwrap().position, [7.0, 8.0]);
         let c = g.add_comment("oi", [0.0, 0.0], [10.0, 10.0]);
@@ -1964,5 +2211,260 @@ mod tests {
             erros.iter().any(|e| e.message.contains("padrão de 'vida'")),
             "{erros:?}"
         );
+    }
+
+    /// Property node with its type and name embedded, ready to wire.
+    fn property_node(g: &mut Graph, kind: &str, node_type: &str, name: &str) -> u64 {
+        let id = adiciona(g, kind);
+        g.set_value(id, "type", Value::String(node_type.into())).unwrap();
+        g.set_value(id, "name", Value::String(name.into())).unwrap();
+        id
+    }
+
+    #[test]
+    fn property_pin_follows_registry() {
+        let mut g = Graph::default();
+        let cases = [
+            ("modulate", PinType::String),
+            ("position", PinType::Vec2),
+            ("centered", PinType::Bool),
+            ("z_index", PinType::Int),
+            ("rotation", PinType::Float),
+            ("shape", PinType::String),
+        ];
+        for (name, expected) in cases {
+            let id = property_node(&mut g, "GetProperty", "Sprite2D", name);
+            let node = g.node(id).unwrap();
+            assert_eq!(g.output_type(node, "value"), Ok(expected), "{name}");
+        }
+        // No declared type: the node reads decimal, as graphs from before typing did.
+        let legacy = adiciona(&mut g, "GetProperty");
+        g.set_value(legacy, "name", Value::String("position_x".into()))
+            .unwrap();
+        assert_eq!(
+            g.output_type(g.node(legacy).unwrap(), "value"),
+            Ok(PinType::Float)
+        );
+        // The pin shows with its resolved type for the editor.
+        let pin = g.pins().into_iter().find(|p| p.node == legacy && p.pin == "value");
+        assert_eq!(pin.and_then(|p| p.ty), Some(PinType::Float));
+    }
+
+    #[test]
+    fn vector_component_is_decimal_with_the_vector_default() {
+        let mut g = Graph::default();
+        // position_x and scale_y are decimal components of the vector properties of Sprite2D.
+        let read = property_node(&mut g, "GetProperty", "Sprite2D", "position_x");
+        let write = property_node(&mut g, "SetProperty", "Sprite2D", "scale_y");
+        assert_eq!(g.output_type(g.node(read).unwrap(), "value"), Ok(PinType::Float));
+        // The value pin without a wire starts at the component of the vector default: scale is [1, 1].
+        let node = g.node(write).unwrap();
+        let pin = def_of(node).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
+        assert_eq!(input_default(node, pin), Some(Value::Float(1.0)));
+        let errors = g.validate();
+        assert!(
+            !errors.iter().any(|e| e.message.contains("scale_y") || e.message.contains("position_x")),
+            "{errors:?}"
+        );
+        // A type without the vector property refuses the component, as it refuses any unknown name.
+        property_node(&mut g, "GetProperty", "VirtualJoystick", "position_x");
+        let errors = g.validate();
+        assert!(errors.iter().any(|e| e.message.contains("'position_x'")), "{errors:?}");
+    }
+
+    #[test]
+    fn validate_refuses_unknown_type_name_and_points() {
+        let mut g = Graph::default();
+        property_node(&mut g, "GetProperty", "Tipo9", "x");
+        property_node(&mut g, "GetProperty", "Sprite2D", "nao_existe");
+        property_node(&mut g, "SetProperty", "CollisionPolygon2D", "points");
+        let errors = g.validate();
+        assert!(
+            errors.iter().any(|e| e.message.contains("'Tipo9' não existe")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("não tem a propriedade 'nao_existe'")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("lista de pontos")),
+            "{errors:?}"
+        );
+        // Only the node's own error shows: an invalid property's value is not reported as "required".
+        assert!(
+            !errors.iter().any(|e| e.message.contains("obrigatória 'value'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn map_property_is_refused_with_its_own_message() {
+        // script_vars is the map of exported values that every node has (VIS-022). It has no pin, and it is not a
+        // list of points, so the message must not say so.
+        let mut g = Graph::default();
+        let id = property_node(&mut g, "GetProperty", "Sprite2D", "script_vars");
+        let errors = g.validate();
+        assert!(
+            errors.iter().any(|e| e.message.contains("é um mapa, que os nós de propriedade")),
+            "{errors:?}"
+        );
+        assert!(!errors.iter().any(|e| e.message.contains("lista de pontos")), "{errors:?}");
+        assert!(g.output_type(g.node(id).unwrap(), "value").is_err());
+    }
+
+    #[test]
+    fn wired_type_and_name_are_refused() {
+        let mut g = Graph::default();
+        let concat = adiciona(&mut g, "Concat");
+        let gp = property_node(&mut g, "GetProperty", "Sprite2D", "modulate");
+        g.connect((concat, "result"), (gp, "type")).unwrap();
+        g.connect((concat, "result"), (gp, "name")).unwrap();
+        let errors = g.validate();
+        assert!(
+            errors.iter().any(|e| e.message.contains("'type' precisa ser um valor embutido")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.message.contains("'name' precisa ser um valor embutido")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn changing_type_or_name_clears_embedded_value() {
+        let mut g = Graph::default();
+        let sp = property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
+        g.set_value(sp, "value", Value::String("#ff0000".into())).unwrap();
+        // Same name: nothing changes, the value stays.
+        g.set_value(sp, "name", Value::String("modulate".into())).unwrap();
+        assert!(g.node(sp).unwrap().values.contains_key("value"));
+        // Other type: the value goes, because it may be of another type.
+        g.set_value(sp, "type", Value::String("Node2D".into())).unwrap();
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+        g.set_value(sp, "value", Value::String("#00ff00".into())).unwrap();
+        g.set_value(sp, "name", Value::String("tag".into())).unwrap();
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+        // Removing the type also removes the value: it goes back to decimal with node value.
+        g.set_value(sp, "value", Value::String("gato".into())).unwrap();
+        g.remove_value(sp, "type");
+        assert!(!g.node(sp).unwrap().values.contains_key("value"));
+    }
+
+    #[test]
+    fn value_without_wire_uses_property_default() {
+        let mut g = Graph::default();
+        // Colour property with node embedded value: the default comes from the registry, and the input is not required.
+        property_node(&mut g, "SetProperty", "Sprite2D", "modulate");
+        // No declared type: the default is decimal zero, as before.
+        let legacy = adiciona(&mut g, "SetProperty");
+        g.set_value(legacy, "name", Value::String("position_x".into()))
+            .unwrap();
+        let errors = g.validate();
+        assert!(!errors.iter().any(|e| e.message.contains("'value'")), "{errors:?}");
+        let default_node = g.node(legacy).unwrap();
+        let input = def_of(default_node).unwrap().inputs.iter().find(|p| p.name == "value").unwrap();
+        assert_eq!(input_default(default_node, input), Some(Value::Float(0.0)));
+    }
+
+    #[test]
+    fn changing_name_drops_mismatched_value_wire() {
+        let mut g = Graph::default();
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let writer = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((reader, "value"), (writer, "value")).unwrap();
+        // Another property of the same type: the wire stays.
+        let dropped = g
+            .set_value(writer, "name", Value::String("centered".into()))
+            .unwrap();
+        assert!(dropped.is_empty());
+        assert_eq!(g.wires.len(), 1);
+        // Vec2 in place of Bool: the wire goes, and it comes back in the response so the editor can warn.
+        let dropped = g
+            .set_value(writer, "name", Value::String("position".into()))
+            .unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].to, PinRef { node: writer, pin: "value".into() });
+        assert!(g.wires.is_empty());
+    }
+
+    #[test]
+    fn changing_read_type_drops_wire_behind_reroute() {
+        let mut g = Graph::default();
+        let reader = property_node(&mut g, "GetProperty", "Node2D", "position");
+        let reroute = g.add_reroute([0.0, 0.0]);
+        let writer = property_node(&mut g, "SetProperty", "Node2D", "position");
+        g.connect((reader, "value"), (reroute, "in")).unwrap();
+        g.connect((reroute, "out"), (writer, "value")).unwrap();
+        // Node2D.visible is Bool: the read now gives Bool, and the writer's Vec2 pin node longer accepts it.
+        let dropped = g
+            .set_value(reader, "name", Value::String("visible".into()))
+            .unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].to.node, writer);
+        // The wire into the reroute stays: the read still gives a value.
+        assert_eq!(g.wires.len(), 1);
+        assert_eq!(g.wires[0].to.node, reroute);
+    }
+
+    #[test]
+    fn removing_type_returns_wires_that_turn_decimal() {
+        let mut g = Graph::default();
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "visible");
+        let writer = property_node(&mut g, "SetProperty", "Sprite2D", "visible");
+        g.connect((reader, "value"), (writer, "value")).unwrap();
+        // No declared type: the value pin becomes decimal, and the read's Bool node longer fits.
+        let dropped = g.remove_value(writer, "type");
+        assert_eq!(dropped.len(), 1);
+        assert!(g.wires.is_empty());
+    }
+
+    /// Reader of Sprite2D "modulate" (text), wired through a reroute into the text input of a Print node. The wire
+    /// into the reroute is the first one made, or the last one when `last` is true (it is made again after the other).
+    fn reroute_to_print(last: bool) -> (Graph, u64, u64, u64) {
+        let mut g = Graph::default();
+        let reader = property_node(&mut g, "GetProperty", "Sprite2D", "modulate");
+        let reroute = g.add_reroute([0.0, 0.0]);
+        let print = adiciona(&mut g, "Print");
+        g.connect((reader, "value"), (reroute, "in")).unwrap();
+        g.connect((reroute, "out"), (print, "msg")).unwrap();
+        if last {
+            g.disconnect((reader, "value"), (reroute, "in")).unwrap();
+            g.connect((reader, "value"), (reroute, "in")).unwrap();
+        }
+        (g, reader, reroute, print)
+    }
+
+    /// Changing the name of a property node drops the wires that no longer type-check, including the wire out of a
+    /// reroute that takes its type from the value. The result is the same whatever order the wires were made in
+    /// (VIS-021): before, the wire into the reroute went first, and the wire out of it was left with no input.
+    #[test]
+    fn stale_wires_behind_reroute_drop_the_same_in_any_order() {
+        // "nao_existe" is not a property of Sprite2D, so the value has no type and both wires go. "visible" is a bool:
+        // only the wire out of the reroute (text) goes, and the wire into the reroute, now bool, stays.
+        for (name, kept) in [("nao_existe", 0), ("visible", 1)] {
+            let mut outcomes = Vec::new();
+            for last in [false, true] {
+                let (mut g, reader, reroute, print) = reroute_to_print(last);
+                // The list keeps the order the wires were made in, so `last` changes the order the removal sees.
+                assert_eq!(g.wires[0].to.node, if last { print } else { reroute }, "{name}");
+                let dropped = g
+                    .set_value(reader, "name", Value::String(name.into()))
+                    .unwrap();
+                assert_eq!(g.wires.len(), kept, "{name}, last={last}: {:?}", g.wires);
+                assert_eq!(dropped.len(), 2 - kept, "{name}, last={last}");
+                let errors = g.validate();
+                assert!(
+                    !errors.iter().any(|e| e.message.contains("sem fio de entrada")),
+                    "{name}, last={last}: {errors:?}"
+                );
+                let mut dropped: Vec<String> = dropped.iter().map(|w| format!("{w:?}")).collect();
+                dropped.sort();
+                let mut left: Vec<String> = g.wires.iter().map(|w| format!("{w:?}")).collect();
+                left.sort();
+                outcomes.push((dropped, left));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "{name}");
+        }
     }
 }

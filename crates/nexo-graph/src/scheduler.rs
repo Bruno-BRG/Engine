@@ -338,7 +338,7 @@ mod tests {
     use nexo_core::{AudioCommand, Uid};
     use crate::ir::{FlowWire, compile};
     use crate::types::{LogLevel, PinType, Value};
-    use crate::vm::tests::{Mock, grafo_de_movimento};
+    use crate::vm::tests::{Mock, float_prop, grafo_de_movimento};
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
         g.add_node(kind, [0.0, 0.0]).unwrap()
@@ -380,20 +380,20 @@ mod tests {
         let compiled = compile(&plataforma()).unwrap();
         let mut ctx = compiled.new_context(7);
         let mut host = Mock::default();
-        host.props.insert((7, "position_x".to_string()), 10.0);
+        host.props.insert((7, "position_x".to_string()), Value::Float(10.0));
         let mut sched = Scheduler::new();
 
         // Sem ação: nada se mexe.
         sched.iniciar(&compiled, "OnProcess");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(host.props[&(7, "position_x".to_string())], 10.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 10.0);
         assert_eq!(ctx.vars[0], Value::Float(0.0));
 
         // Com ação: move 0.5 * 100 e incrementa.
         host.pressionadas.push("ui_right".into());
         sched.iniciar(&compiled, "OnProcess");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(host.props[&(7, "position_x".to_string())], 60.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 60.0);
         assert_eq!(ctx.vars[0], Value::Float(1.0));
     }
 
@@ -497,15 +497,15 @@ mod tests {
         let compiled = compile(&g).unwrap();
         let mut ctx = compiled.new_context(7);
         let mut host = Mock::default();
-        host.props.insert((7, "position_x".to_string()), 10.0);
+        host.props.insert((7, "position_x".to_string()), Value::Float(10.0));
         let mut sched = Scheduler::new();
         sched.iniciar(&compiled, "OnReady");
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert!((host.props[&(7, "position_x".to_string())] - 55.0).abs() < 1e-9);
+        assert!((float_prop(&host, 7, "position_x") - 55.0).abs() < 1e-9);
         assert!(host.impressos.is_empty());
         sched.tick(&compiled, &mut ctx, &mut host, 0.5).unwrap();
-        assert_eq!(host.props[&(7, "position_x".to_string())], 100.0);
+        assert_eq!(float_prop(&host, 7, "position_x"), 100.0);
         assert_eq!(host.impressos.len(), 1);
     }
 

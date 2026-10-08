@@ -209,8 +209,9 @@ fn tipos_dos_registradores(compiled: &Compiled, programa: &Program) -> Vec<PinTy
             | Op::Mul { dst, .. }
             | Op::Div { dst, .. }
             | Op::VecLength { dst, .. }
-            | Op::GetAxis { dst, .. }
-            | Op::GetProp { dst, .. } => (*dst, PinType::Float),
+            | Op::GetAxis { dst, .. } => (*dst, PinType::Float),
+            // Property read: the register takes the property's type (VIS-021), not a fixed decimal.
+            Op::GetProp { dst, ty, .. } => (*dst, *ty),
             Op::GetVar { dst, var } => (
                 *dst,
                 compiled
@@ -286,8 +287,18 @@ fn instrucao(names: &[String], op: &Op) -> String {
         } => format!("r{dst} = Nexo.GetVector(r{left}, r{right}, r{up}, r{down});"),
         Op::MouseWorld { dst } => format!("r{dst} = Nexo.MouseWorld();"),
         Op::MouseScreen { dst } => format!("r{dst} = Nexo.MouseScreen();"),
-        Op::GetProp { dst, node, name } => format!("r{dst} = Nexo.GetProperty(r{node}, r{name});"),
-        Op::SetProp { node, name, value } => {
+        Op::GetProp {
+            dst,
+            node,
+            name,
+            ty,
+        } => format!(
+            "r{dst} = Nexo.GetProperty<{}>(r{node}, r{name});",
+            tipo(*ty)
+        ),
+        Op::SetProp {
+            node, name, value, ..
+        } => {
             format!("Nexo.SetProperty(r{node}, r{name}, r{value});")
         }
         Op::FindNode { dst, name } => format!("r{dst} = Nexo.FindNode(r{name});"),
@@ -607,6 +618,27 @@ mod tests {
         assert_eq!(ident("vida total"), "vida_total");
         assert_eq!(ident("2x"), "_2x");
         assert_eq!(ident("int"), "@int");
+    }
+
+    #[test]
+    fn typed_property_has_register_of_own_type() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let gp = adiciona(&mut g, "GetProperty");
+        g.set_value(gp, "type", Value::String("Sprite2D".into())).unwrap();
+        g.set_value(gp, "name", Value::String("modulate".into())).unwrap();
+        let pr = adiciona(&mut g, "Print");
+        g.connect((ev, "exec"), (pr, "exec")).unwrap();
+        g.connect((ev, "self"), (gp, "node")).unwrap();
+        g.connect((gp, "value"), (pr, "msg")).unwrap();
+        let code = generate_csharp(&compile(&g).unwrap(), "Teste");
+        // The read register is text, and the call asks for text: it is no longer a fixed decimal.
+        assert!(
+            code.lines().any(|l| l.trim_start().starts_with("string r")),
+            "{code}"
+        );
+        assert!(code.contains("Nexo.GetProperty<string>(r"), "{code}");
+        assert!(!code.contains("double r2 = default;"), "{code}");
     }
 
     #[test]

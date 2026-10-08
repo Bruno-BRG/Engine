@@ -1,17 +1,25 @@
 <script lang="ts">
   import { valueFromText, type PinType, type Value } from '$lib/logic/model';
+  import type { PropDef } from '$lib/state/scene.svelte';
 
   // Campo do valor embutido de uma entrada sem fio. Só para os tipos que se digitam (decimal, inteiro,
   // booleano, texto e vetor 2D). Os demais recebem o valor por fio.
+  // On a property node, the registry property picks the field: options for an enum, a picker for a colour (VIS-021).
   let {
     ty,
     valor,
     onchange,
+    prop,
+    suggestions = [],
   }: {
     ty: PinType;
     valor: Value | undefined;
     onchange: (v: Value) => void;
+    prop?: PropDef;
+    /** Options offered under a text field. The field still takes any text (VIS-021). */
+    suggestions?: { value: string; label: string }[];
   } = $props();
+  const listId = $props.id();
 
   const pare = (e: Event) => e.stopPropagation();
   const enter = (e: KeyboardEvent) => {
@@ -52,16 +60,45 @@
     onchange={(e) => envia(e.currentTarget.value)}
     aria-label="Valor"
   />
+{:else if ty === 'String' && prop?.kind === 'enum'}
+  <select
+    class="campo wide"
+    value={texto(valor)}
+    onpointerdown={pare}
+    onchange={(e) => onchange({ String: e.currentTarget.value })}
+    aria-label="Opção"
+  >
+    {#each prop.options as option (option)}
+      <option value={option}>{option}</option>
+    {/each}
+  </select>
+{:else if ty === 'String' && prop?.kind === 'color'}
+  <input
+    class="color"
+    type="color"
+    value={texto(valor) || '#ffffff'}
+    onpointerdown={pare}
+    onchange={(e) => onchange({ String: e.currentTarget.value })}
+    aria-label="Cor"
+  />
 {:else if ty === 'String'}
   <input
     class="campo"
     type="text"
     value={texto(valor)}
+    list={suggestions.length ? listId : undefined}
     onpointerdown={pare}
     onkeydown={enter}
     onchange={(e) => envia(e.currentTarget.value)}
     aria-label="Texto"
   />
+  {#if suggestions.length}
+    <datalist id={listId}>
+      {#each suggestions as s (s.value)}
+        <option value={s.value} label={s.label}></option>
+      {/each}
+    </datalist>
+  {/if}
 {:else if ty === 'Vec2'}
   {@const par = vetor(valor)}
   <span class="par">
@@ -109,11 +146,22 @@
   .num {
     width: 46px;
   }
+  .wide {
+    width: 96px;
+  }
   .par {
     display: inline-flex;
     gap: 2px;
   }
   .marca {
     margin: 0 2px;
+  }
+  .color {
+    width: 46px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--r-ctl);
+    background: var(--bg-0);
   }
 </style>
