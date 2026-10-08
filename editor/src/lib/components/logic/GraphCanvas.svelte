@@ -115,7 +115,7 @@
     return out;
   });
   const ativo = $derived(logic.active);
-  // The trace is per instance: the open graph shows the trace of the chosen instance, if it runs this script.
+  // O rastro é por instância: o grafo aberto mostra o da instância escolhida, se ela roda este script.
   const uidRastro = $derived(
     ativo && logicDebug.selecionada && scene.byUid.get(logicDebug.selecionada)?.props.script === ativo
       ? logicDebug.selecionada

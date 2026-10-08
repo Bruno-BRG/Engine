@@ -7,9 +7,9 @@
   import { scene } from '$lib/state/scene.svelte';
   import { Bug, Play, StepForward, X } from '@lucide/svelte';
 
-  // Visual logic section of the Depurador (VIS-031, DBG-003): the instance the debugger follows, the breakpoints of all
-  // scripts, its pause with Continuar and Próxima operação, and how many nodes ran in the last traced segment. Each node
-  // with a script is an instance, and the game keeps running while one of them is paused.
+  // Seção de lógica visual do Depurador (VIS-031, DBG-003): a instância que o Depurador acompanha, os pontos de
+  // parada de todos os scripts, a pausa dela com Continuar e Próxima operação, e quantos nós rodaram no último
+  // trecho com rastro. Cada nó com script é uma instância, e o jogo segue quando uma delas pausa.
   const pontos = $derived(Object.entries(logicDebug.breaks).filter(([, ids]) => ids.length > 0));
   const escolhida = $derived(logicDebug.escolhida);
   // The banner shows any pause; the buttons also need a pause at an operation and a running game (see podeAcionar).
@@ -21,25 +21,25 @@
   onMount(() => runtime.definirPainelDepurador(true));
   onDestroy(() => runtime.definirPainelDepurador(false));
 
-  /** Name of the node that runs the instance, for the list. */
+  /** Nome do nó que roda a instância, para a lista. */
   function nomeDaInstancia(uid: string): string {
     return scene.byUid.get(uid)?.name ?? uid;
   }
 
-  /** Script that the instance runs. */
+  /** Script que a instância roda. */
   function scriptDe(uid: string): string {
     const nome = scene.byUid.get(uid)?.props.script;
     return typeof nome === 'string' ? nome : '';
   }
 
-  /** Name of a breakpoint's node: its label when the script is open, its id otherwise. */
+  /** Nome do nó de um ponto de parada: com o script aberto, o rótulo; nos outros, o id. */
   function nomeDoPonto(script: string, id: number): string {
     if (script !== logic.active) return `nó ${id}`;
     const n = logic.snap.nodes.find((x) => x.id === id);
     return n ? logic.labelOf(n) : `nó ${id}`;
   }
 
-  /** Changes the followed instance. If it runs another script, the workspace opens that script. */
+  /** Troca a instância acompanhada. Se ela roda outro script, o workspace abre esse script. */
   function escolher(uid: string) {
     runtime.escolherInstancia(uid || null);
     const script = uid ? scriptDe(uid) : '';
@@ -80,7 +80,7 @@
     <button
       class="btn"
       disabled={!acionavel}
-      title="Roda uma operação e para na seguinte. F10 avança um quadro inteiro."
+      title="Roda uma operação desta instância e para na seguinte. F10 avança um quadro do jogo, sem liberar esta instância pausada (use Continuar)."
       onclick={() => acionavel && runtime.depurar('proxima', acionavel.uid)}
     >
       <StepForward size={12} /> Próxima operação

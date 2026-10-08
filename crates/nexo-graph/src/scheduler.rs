@@ -66,7 +66,7 @@ impl Scheduler {
         }
     }
 
-    /// Replaces all breakpoints with the given set (VIS-031).
+    /// Troca todos os pontos de parada pelo conjunto dado (VIS-031).
     pub fn definir_pontos_de_parada(&mut self, pontos: BTreeSet<u64>) {
         self.pontos = pontos;
     }
@@ -114,9 +114,8 @@ impl Scheduler {
         self.rodar(compiled, ctx, host, None)
     }
 
-    /// Roda uma op e pausa de novo na op seguinte (VIS-031, passo a passo). Pode atravessar tarefas: a pausa cai
-    /// na próxima op da instância, qualquer que seja a tarefa.
-    /// Without a pause, it does nothing.
+    /// Runs one operation and pauses again before the next (VIS-031, step by step). It may cross tasks: the pause falls
+    /// on the next operation of the instance, whatever the task. Without a pause, it does nothing.
     pub fn passo(
         &mut self,
         compiled: &Compiled,
@@ -129,8 +128,8 @@ impl Scheduler {
         self.rodar(compiled, ctx, host, Some(1))
     }
 
-    /// Starts a frame with time `dt` and pauses before the first operation of the tasks created with `iniciar`, without
-    /// running any. Step-by-step uses it to stop at the start of an event (VIS-031). Does nothing while a pause is active.
+    /// Começa um quadro com o tempo `dt` e pausa antes da primeira op das tarefas (criadas com `iniciar`), sem rodar
+    /// nenhuma. O passo a passo usa para parar no começo de um evento (VIS-031). Não faz nada com uma pausa em curso.
     pub fn parar_antes(
         &mut self,
         compiled: &Compiled,
@@ -145,8 +144,8 @@ impl Scheduler {
         self.rodar(compiled, ctx, host, Some(0))
     }
 
-    /// Marks the start of a frame with time `dt`: the context gets the `delta`, the pending signals are delivered, and
-    /// the tasks run from the start of the queue.
+    /// Marca o começo de um quadro com o tempo `dt`: o contexto recebe o `delta`, os sinais pendentes são entregues
+    /// e as tarefas rodam a partir do começo da fila.
     fn abrir_quadro(&mut self, ctx: &mut Context, dt: f64) {
         ctx.delta = dt;
         self.acordar_sinais();
@@ -600,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_and_step_without_pause_run_nothing_and_park_stops_before_first_op() {
+    fn continuar_e_passo_sem_pausa_nao_rodam_nada_e_parar_antes_para_na_primeira_op() {
         let mut g = Graph::default();
         let ev = adiciona(&mut g, "OnReady");
         let pa = imprime(&mut g, (ev, "exec"), "a");
@@ -610,12 +609,12 @@ mod tests {
         let mut host = Mock::default();
         let mut sched = Scheduler::new();
 
-        // Without a pause, continue and step run nothing: neither old nor new tasks.
+        // Sem pausa, continuar e passo não fazem nada: não rodam tarefas antigas nem novas.
         sched.continuar(&compiled, &mut ctx, &mut host).unwrap();
         sched.passo(&compiled, &mut ctx, &mut host).unwrap();
         assert!(host.impressos.is_empty());
 
-        // Park: no operation runs, and the following steps reach the first Print without going past the second one.
+        // Parar antes: nenhuma op roda, e os passos seguintes levam ao primeiro Print, sem passar do segundo.
         sched.iniciar(&compiled, "OnReady");
         sched.parar_antes(&compiled, &mut ctx, &mut host, 0.0).unwrap();
         assert!(sched.pausa().is_some());
