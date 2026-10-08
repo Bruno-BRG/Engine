@@ -177,8 +177,6 @@ impl SceneEditor {
 mod tests {
     use super::*;
 
-    /// Checks only the JSON of each frame kind. It does not cover the panel, the double-click, or the stack
-    /// contents at a pause (those are tested in the graph crate and not in the editor).
     /// The trace goes to the panel as nodes, wires (by nodes and pin) and values, with no trace event per operation.
     #[test]
     fn trace_json_has_the_shape_the_canvas_reads() {
@@ -205,6 +203,8 @@ mod tests {
         );
     }
 
+    /// Checks only the JSON of each frame kind. It does not cover the panel, the double-click, or the stack
+    /// contents at a pause (those are tested in the graph crate and not in the editor).
     #[test]
     fn frame_json_has_the_shape_the_panel_reads() {
         assert_eq!(

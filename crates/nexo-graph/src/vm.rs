@@ -65,13 +65,16 @@ pub struct Context {
 pub const TRACE_TEXT_LIMIT: usize = 64;
 
 /// What one instance did since its last read (VIS-030, DBG-003). It is a summary, not a log: its size follows the
-/// graph (nodes, wires and values), not the number of operations, so a loop of 10,000 turns leaves the same trace
-/// as a loop of 2. Each operation costs one set insert while the trace is on, and nothing while it is off.
+/// graph (nodes, wires and values), not the number of operations, so a loop of 10,000 turns leaves a trace of the same
+/// size as a loop of 2. While the trace is on, each operation costs a few set and map operations: its node, the wires
+/// it takes, and its value when it produces one. While it is off, nothing is recorded.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Trace {
     /// Nodes that ran at least one operation, and the event node when its program starts.
     pub nodes: BTreeSet<u64>,
-    /// Flow wires that were taken. A branch that was not taken leaves its wire out.
+    /// Flow wires that were taken. A branch that was not taken leaves its wire out. A wire into a node with no
+    /// operation is recorded only if an operation, or the end of the program, comes before the next join (see `join`
+    /// in ir.rs).
     pub wires: BTreeSet<FlowWire>,
     /// Last value each node produced, with texts cut to `TRACE_TEXT_LIMIT` characters.
     pub values: BTreeMap<u64, Value>,

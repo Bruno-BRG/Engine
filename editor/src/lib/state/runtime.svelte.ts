@@ -155,13 +155,13 @@ class PlayRuntime {
     if (!ed || !ed.is_playing()) return;
     if (!logicDebug.observando) {
       // Nothing observes the play session now: the lit highlight must not stay on the canvas.
-      logicDebug.apagarRealce();
+      logicDebug.clearHighlight();
       return;
     }
-    const estado = ed.debug_state();
-    if (estado !== this.#debugState) {
-      this.#debugState = estado;
-      logicDebug.setInstancias(JSON.parse(estado) as InstanciaDebug[]);
+    const state = ed.debug_state();
+    if (state !== this.#debugState) {
+      this.#debugState = state;
+      logicDebug.setInstancias(JSON.parse(state) as InstanciaDebug[]);
     }
     // No valid choice (game start, or the instance is gone): the first paused one, or the first.
     if (!logicDebug.instancias.some((i) => i.uid === logicDebug.selecionada)) {

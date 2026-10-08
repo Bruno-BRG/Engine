@@ -132,9 +132,9 @@ pub(crate) fn aplicar_pontos(instancias: &mut [Instancia], pontos: &BTreeMap<Uid
     }
 }
 
-/// Whether an instance records its trace (VIS-030, DBG-003). The trace costs a set insert per operation, so it is on
-/// only for the instance the debugger follows, and only when there is a reason to look: the panel is open, the
-/// instance is paused, or it has a breakpoint.
+/// Whether an instance records its trace (VIS-030, DBG-003). The trace costs a few set and map operations per
+/// operation, so it is on only for the instance the debugger follows, and only when there is a reason to look: the
+/// panel is open, the instance is paused, or it has a breakpoint.
 pub(crate) fn grava_rastro(escolhida: bool, painel_aberto: bool, pausada: bool, tem_ponto: bool) -> bool {
     escolhida && (painel_aberto || pausada || tem_ponto)
 }

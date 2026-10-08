@@ -1,6 +1,7 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
-  import { chaveDoFio, logicDebug } from '$lib/logic/debug.svelte';
+  import { logicDebug } from '$lib/logic/debug.svelte';
+  import { wireKey } from '$lib/logic/highlight';
   import { scene } from '$lib/state/scene.svelte';
   import { focus, focusPanel } from '$lib/state/focus.svelte';
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
@@ -157,7 +158,7 @@
           fluxo: ty === 'Flow',
           cor: pinStyle(ty).color,
           // Lit only if this wire was taken: a branch that did not run leaves its wire dark (VIS-030).
-          quente: litWires.has(chaveDoFio(w.from.node, w.from.pin, w.to.node)),
+          quente: litWires.has(wireKey(w.from.node, w.from.pin, w.to.node)),
           sel: logic.selWire?.from.node === w.from.node &&
             logic.selWire?.from.pin === w.from.pin &&
             logic.selWire?.to.node === w.to.node &&
