@@ -29,6 +29,17 @@ pub enum PropKind {
     Points,
 }
 
+/// Lista das Configurações do Projeto de onde vêm os nomes válidos de um texto (SCN-033, AUD-001, PHY-023).
+/// O registro só diz qual lista; a interface lê os nomes de `projectSettings`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameList {
+    Tags,
+    Layers,
+    Buses,
+    PhysicsMaterials,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropDef {
@@ -44,6 +55,10 @@ pub struct PropDef {
     pub options: &'static [&'static str],
     /// Para `PropKind::Uid`: tipo de asset aceito, por exemplo "texture".
     pub asset: Option<&'static str>,
+    /// Para `PropKind::Float` com faixa: o Inspector mostra também um controle deslizante (INS-003).
+    pub slider: bool,
+    /// Para `PropKind::Str` que nomeia algo do projeto: de qual lista vêm as opções.
+    pub names: Option<NameList>,
 }
 
 impl PropDef {
@@ -60,6 +75,8 @@ impl PropDef {
             unit: None,
             options: &[],
             asset: None,
+            slider: false,
+            names: None,
         }
     }
     fn range(mut self, min: f64, max: f64) -> Self {
@@ -81,6 +98,14 @@ impl PropDef {
     }
     fn asset(mut self, asset: &'static str) -> Self {
         self.asset = Some(asset);
+        self
+    }
+    fn slider(mut self) -> Self {
+        self.slider = true;
+        self
+    }
+    fn names(mut self, list: NameList) -> Self {
+        self.names = Some(list);
         self
     }
 }
@@ -116,22 +141,25 @@ fn audio_player_props() -> Vec<PropDef> {
         PropDef::new("volume_db", "Volume", "Reprodução", PropKind::Float, json!(0.0))
             .range(-80.0, 24.0)
             .step(0.5)
-            .unit("dB"),
+            .unit("dB")
+            .slider(),
         PropDef::new("pitch_scale", "Tom", "Reprodução", PropKind::Float, json!(1.0))
             .range(0.01, 4.0)
-            .step(0.01),
+            .step(0.01)
+            .slider(),
         PropDef::new("autoplay", "Tocar ao iniciar", "Reprodução", PropKind::Bool, json!(false)),
         PropDef::new("loop", "Repetir", "Reprodução", PropKind::Bool, json!(false)),
-        PropDef::new("bus", "Barramento", "Reprodução", PropKind::Str, json!("Master")),
+        PropDef::new("bus", "Barramento", "Reprodução", PropKind::Str, json!("Master")).names(NameList::Buses),
     ]
 }
 
-/// Camadas de todo corpo e área: máscara, camadas incluídas e excluídas (PHY-022).
+/// Camadas de todo corpo e área: máscara, camadas incluídas e excluídas (PHY-022). As três são bits
+/// das camadas nomeadas: a interface as mostra pelo nome.
 fn layer_props() -> Vec<PropDef> {
     vec![
         collision_mask(),
-        PropDef::new("include_layers", "Incluir camadas", "Colisão", PropKind::Int, json!(0)),
-        PropDef::new("exclude_layers", "Excluir camadas", "Colisão", PropKind::Int, json!(0)),
+        PropDef::new("include_layers", "Incluir camadas", "Colisão", PropKind::Mask, json!(0)),
+        PropDef::new("exclude_layers", "Excluir camadas", "Colisão", PropKind::Mask, json!(0)),
     ]
 }
 
@@ -145,6 +173,7 @@ fn com_camadas(mut extra: Vec<PropDef>) -> Vec<PropDef> {
 /// Material de física pelo nome (PHY-023): vazio = sem material.
 fn material() -> PropDef {
     PropDef::new("physics_material", "Material de física", "Colisão", PropKind::Str, json!(""))
+        .names(NameList::PhysicsMaterials)
 }
 
 fn build() -> Vec<NodeType> {
@@ -155,8 +184,9 @@ fn build() -> Vec<NodeType> {
             category: "Básico",
             description: "Base de todos os nós da cena.",
             props: vec![
-                PropDef::new("tag", "Tag", "Identificação", PropKind::Str, json!("untagged")),
-                PropDef::new("layer", "Layer", "Identificação", PropKind::Str, json!("default")),
+                PropDef::new("tag", "Tag", "Identificação", PropKind::Str, json!("untagged")).names(NameList::Tags),
+                PropDef::new("layer", "Layer", "Identificação", PropKind::Str, json!("default"))
+                    .names(NameList::Layers),
                 PropDef::new("locked", "Estático", "Editor", PropKind::Bool, json!(false)),
             ],
         },
@@ -207,7 +237,8 @@ fn build() -> Vec<NodeType> {
                 PropDef::new("current", "Câmera atual", "Câmera", PropKind::Bool, json!(true)),
                 PropDef::new("smoothing", "Suavização", "Câmera", PropKind::Float, json!(0.0))
                     .range(0.0, 20.0)
-                    .step(0.1),
+                    .step(0.1)
+                    .slider(),
             ],
         },
         NodeType {
@@ -236,13 +267,16 @@ fn build() -> Vec<NodeType> {
                 material(),
                 PropDef::new("gravity_scale", "Escala de gravidade", "Física", PropKind::Float, json!(1.0))
                     .range(-10.0, 10.0)
-                    .step(0.1),
+                    .step(0.1)
+                    .slider(),
                 PropDef::new("linear_damping", "Amortecimento linear", "Física", PropKind::Float, json!(0.0))
                     .range(0.0, 10.0)
-                    .step(0.1),
+                    .step(0.1)
+                    .slider(),
                 PropDef::new("angular_damping", "Amortecimento angular", "Física", PropKind::Float, json!(0.0))
                     .range(0.0, 10.0)
-                    .step(0.1),
+                    .step(0.1)
+                    .slider(),
                 PropDef::new("mass", "Massa", "Física", PropKind::Float, json!(1.0))
                     .range(0.01, 10000.0)
                     .step(0.1),
@@ -275,7 +309,8 @@ fn build() -> Vec<NodeType> {
                     .options(OVERRIDE_MODES),
                 PropDef::new("linear_damp", "Amortecimento linear", "Área", PropKind::Float, json!(0.0))
                     .range(0.0, 10.0)
-                    .step(0.1),
+                    .step(0.1)
+                    .slider(),
             ]),
         },
         NodeType {
@@ -416,7 +451,8 @@ fn build() -> Vec<NodeType> {
                 props.push(
                     PropDef::new("attenuation", "Curva de atenuação", "Atenuação", PropKind::Float, json!(1.0))
                         .range(0.0, 4.0)
-                        .step(0.1),
+                        .step(0.1)
+                        .slider(),
                 );
                 props
             },
@@ -526,5 +562,60 @@ mod tests {
         assert_eq!(default_value("Timer", "wait_time"), Some(json!(1.0)));
         assert_eq!(default_value("Timer", "one_shot"), Some(json!(false)));
         assert_eq!(prop_def("AudioStreamPlayer", "stream").and_then(|p| p.asset), Some("audio"));
+    }
+
+    #[test]
+    fn campos_de_nome_apontam_para_a_lista_do_projeto() {
+        assert_eq!(prop_def("StaticBody2D", "tag").unwrap().names, Some(NameList::Tags));
+        assert_eq!(prop_def("StaticBody2D", "layer").unwrap().names, Some(NameList::Layers));
+        assert_eq!(prop_def("AudioStreamPlayer", "bus").unwrap().names, Some(NameList::Buses));
+        assert_eq!(prop_def("RigidBody2D", "physics_material").unwrap().names, Some(NameList::PhysicsMaterials));
+        assert_eq!(prop_def("Sprite2D", "texture").unwrap().names, None);
+    }
+
+    #[test]
+    fn todo_campo_de_nome_e_texto() {
+        for t in node_types() {
+            for p in t.props.iter().filter(|p| p.names.is_some()) {
+                assert_eq!(p.kind, PropKind::Str, "{}.{}", t.name, p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn camadas_incluir_e_excluir_sao_mascaras() {
+        for kind in ["StaticBody2D", "RigidBody2D", "Area2D"] {
+            assert_eq!(prop_def(kind, "include_layers").unwrap().kind, PropKind::Mask);
+            assert_eq!(prop_def(kind, "exclude_layers").unwrap().kind, PropKind::Mask);
+        }
+        assert_eq!(default_value("Area2D", "exclude_layers"), Some(json!(0)));
+    }
+
+    #[test]
+    fn controle_deslizante_so_em_faixa_limitada() {
+        // Sem faixa, o controle deslizante não tem onde começar e terminar.
+        for t in node_types() {
+            for p in t.props.iter().filter(|p| p.slider) {
+                assert!(
+                    p.kind == PropKind::Float && p.min.is_some() && p.max.is_some(),
+                    "{}.{}",
+                    t.name,
+                    p.name
+                );
+            }
+        }
+        assert!(prop_def("AudioStreamPlayer", "pitch_scale").unwrap().slider);
+        assert!(!prop_def("Sprite2D", "size").unwrap().slider);
+    }
+
+    #[test]
+    fn metadados_chegam_ao_editor_em_json() {
+        let bus = serde_json::to_value(prop_def("AudioStreamPlayer", "bus").unwrap()).unwrap();
+        assert_eq!(bus["names"], json!("buses"));
+        assert_eq!(bus["slider"], json!(false));
+        let material = serde_json::to_value(prop_def("RigidBody2D", "physics_material").unwrap()).unwrap();
+        assert_eq!(material["names"], json!("physics_materials"));
+        let pitch = serde_json::to_value(prop_def("AudioStreamPlayer", "pitch_scale").unwrap()).unwrap();
+        assert_eq!(pitch["slider"], json!(true));
     }
 }

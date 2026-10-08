@@ -4,7 +4,10 @@
 import { createSceneEditor, randomSeed, readNodeRegistry, type SceneEditor } from '$lib/runtime/engine';
 import { log } from './log.svelte';
 
-export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask';
+export type PropKind = 'float' | 'int' | 'bool' | 'str' | 'vec2' | 'color' | 'enum' | 'uid' | 'mask' | 'points';
+
+/** Lista das Configurações do Projeto de onde vêm os nomes de um campo de texto (`NameList` do registro). */
+export type NameList = 'tags' | 'layers' | 'buses' | 'physics_materials';
 
 export interface PropDef {
   name: string;
@@ -18,6 +21,10 @@ export interface PropDef {
   unit: string | null;
   options: string[];
   asset: string | null;
+  /** Float com faixa que também mostra um controle deslizante (INS-003). */
+  slider: boolean;
+  /** Campo de texto que nomeia algo do projeto: as opções vêm dessa lista. */
+  names: NameList | null;
 }
 
 export interface NodeType {

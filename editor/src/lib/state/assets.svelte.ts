@@ -69,6 +69,8 @@ class AssetsState {
   /** Assets de todas as pastas (com UID), para texturas e busca. */
   all = $state<AssetRef[]>([]);
   textures = $derived(this.all.filter((a) => a.kind === 'texture'));
+  /** Arquivos de áudio com UID: o campo de áudio do Inspector lista estes (AUD-002). */
+  audios = $derived(this.all.filter((a) => a.kind === 'audio'));
 
   #listing = $state<Record<string, DirEntry[]>>({});
   #byUid = new Map<string, AssetRef>();

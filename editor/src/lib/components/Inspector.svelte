@@ -2,15 +2,19 @@
   import { scene, type NodeType, type PropDef } from '$lib/state/scene.svelte';
   import { focus, focusPanel } from '$lib/state/focus.svelte';
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
-  import { assets } from '$lib/state/assets.svelte';
   import { textures } from '$lib/state/textures.svelte';
   import { projectSettings } from '$lib/state/settings.svelte';
-  import { withValue } from '$lib/settings';
+  import { namesOf } from '$lib/settings';
   import { OBJECT_PALETTE } from '$lib/palette';
   import PanelHeader from './PanelHeader.svelte';
   import NodeIcon from './NodeIcon.svelte';
   import NumberField from './NumberField.svelte';
   import LayerMaskField from './settings/LayerMaskField.svelte';
+  import NameField from './inspector/NameField.svelte';
+  import PointsField from './inspector/PointsField.svelte';
+  import AssetField from './inspector/AssetField.svelte';
+  import NodeRefField from './inspector/NodeRefField.svelte';
+  import RangeField from './inspector/RangeField.svelte';
   import { ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Lock, LockOpen, Plus, Search, Braces } from '@lucide/svelte';
 
   const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -25,12 +29,9 @@
   const node = $derived(scene.selected);
   const multi = $derived(scene.selection.length > 1);
 
-  // Tag e Layer vêm das Configurações do Projeto (SCN-033). Um valor da cena que não está mais na
-  // lista continua aparecendo, para o nó não perder o nome.
-  const tagOptions = $derived(withValue(projectSettings.tags, String(node?.props.tag ?? 'untagged')));
-  const layerOptions = $derived(
-    withValue(projectSettings.layers.filter(Boolean), String(node?.props.layer ?? 'default')),
-  );
+  // Nomes válidos para Tag e Layer (SCN-033): vêm das Configurações do Projeto.
+  const tagNames = $derived(namesOf(projectSettings, 'tags'));
+  const layerNames = $derived(namesOf(projectSettings, 'layers'));
 
   /** Tipos da cadeia de herança do nó, do mais específico ao `Node` (INS-002). */
   const chain = $derived.by<NodeType[]>(() => {
@@ -99,16 +100,17 @@
     ]);
   }
 
-  function textureName(uid: string) {
-    if (!uid) return 'Nenhuma';
-    return assets.byUid(uid)?.name ?? 'Textura ausente';
-  }
-
+  /** Escolher uma textura também ajusta o tamanho do sprite às dimensões da imagem. */
   function pickTexture(def: PropDef, uid: string) {
     setProp(def, uid);
     if (!uid || !node) return;
     const d = textures.dims(uid);
     if (d) scene.setProp(node.uid, 'size', [d.w, d.h]);
+  }
+
+  /** Pontos de um polígono de colisão (PHY-011). Valor ausente ou malformado vira lista vazia. */
+  function pointsOf(v: unknown): [number, number][] {
+    return Array.isArray(v) ? (v as [number, number][]) : [];
   }
 
   /** Propriedades que já aparecem no cabeçalho (Tag, Layer e Estático) não se repetem nas seções. */
@@ -126,15 +128,32 @@
     return groups;
   }
 
+  /** Tipos que batem com a busca, por nome ou por categoria (INS-004). */
   const addTypes = $derived.by(() => {
     const q = norm(addQuery.trim());
     return scene.types.filter((t) => !q || norm(t.name).includes(q) || norm(t.category).includes(q));
   });
 
-  function addComponent(kind: string) {
+  /** Os tipos da busca agrupados por categoria, na ordem do registro (a do menu de criação). */
+  const addGroups = $derived.by(() => {
+    const groups: { category: string; types: NodeType[] }[] = [];
+    for (const t of addTypes) {
+      const g = groups.find((x) => x.category === t.category);
+      if (g) g.types.push(t);
+      else groups.push({ category: t.category, types: [t] });
+    }
+    return groups;
+  });
+
+  /** Cria um nó do tipo escolhido como filho do nó selecionado (INS-004). */
+  function addNode(kind: string) {
     if (!node) return;
     const uid = scene.add(kind, node.uid);
     if (uid) scene.select(uid);
+    closeAdd();
+  }
+
+  function closeAdd() {
     addOpen = false;
     addQuery = '';
   }
@@ -193,18 +212,22 @@
       <span class="sub mono">{chain.map((t) => t.name).join(' › ')}</span>
     </div>
     <div class="ident">
-      <label class="field">
-        <span class="flabel">Tag</span>
-        <select class="sel" value={String(node.props.tag ?? 'untagged')} onchange={(e) => scene.setProp(node!.uid, 'tag', e.currentTarget.value)}>
-          {#each tagOptions as tag (tag)}<option value={tag}>{ENUM_LABELS.tag[tag] ?? tag}</option>{/each}
-        </select>
-      </label>
-      <label class="field">
-        <span class="flabel">Layer</span>
-        <select class="sel" value={String(node.props.layer ?? 'default')} onchange={(e) => scene.setProp(node!.uid, 'layer', e.currentTarget.value)}>
-          {#each layerOptions as layer (layer)}<option value={layer}>{ENUM_LABELS.layer[layer] ?? layer}</option>{/each}
-        </select>
-      </label>
+      <NameField
+        compact
+        label="Tag"
+        value={String(node.props.tag ?? 'untagged')}
+        options={tagNames}
+        labels={ENUM_LABELS.tag}
+        onchange={(tag) => scene.setProp(node!.uid, 'tag', tag)}
+      />
+      <NameField
+        compact
+        label="Layer"
+        value={String(node.props.layer ?? 'default')}
+        options={layerNames}
+        labels={ENUM_LABELS.layer}
+        onchange={(layer) => scene.setProp(node!.uid, 'layer', layer)}
+      />
     </div>
 
     <div class="body">
@@ -229,7 +252,19 @@
                   {#each g.props as def (def.name)}
                     {@const v = value(def)}
                     <div class="prop" class:changed={node.props[def.name] !== undefined}>
-                      {#if def.kind === 'float' || def.kind === 'int'}
+                      {#if def.kind === 'float' && def.slider && def.min !== null && def.max !== null}
+                        <RangeField
+                          label={def.label}
+                          value={Number(v)}
+                          min={def.min}
+                          max={def.max}
+                          step={def.step ?? 0.1}
+                          precision={decimals(def.step)}
+                          suffix={def.unit ? ' ' + def.unit : ''}
+                          onchange={(x) => setProp(def, x, true)}
+                          onend={endEdit}
+                        />
+                      {:else if def.kind === 'float' || def.kind === 'int'}
                         <NumberField
                           label={def.label}
                           value={Number(v)}
@@ -268,7 +303,7 @@
                           <span>{def.label}</span>
                         </label>
                       {:else if def.kind === 'color'}
-                        <div class="field">
+                        <div class="campo">
                           <span class="flabel">{def.label}</span>
                           <div class="swatches">
                             {#each OBJECT_PALETTE as c (c)}
@@ -292,7 +327,7 @@
                       {:else if def.kind === 'mask'}
                         <LayerMaskField label={def.label} value={Number(v)} onchange={(m) => setProp(def, m)} />
                       {:else if def.kind === 'enum'}
-                        <label class="field">
+                        <label class="campo">
                           <span class="flabel">{def.label}</span>
                           <select class="sel" value={String(v)} onchange={(e) => setProp(def, e.currentTarget.value)}>
                             {#each def.options as o (o)}
@@ -300,21 +335,33 @@
                             {/each}
                           </select>
                         </label>
+                      {:else if def.kind === 'points'}
+                        <PointsField
+                          label={def.label}
+                          points={pointsOf(v)}
+                          onset={(pts, coalesce) => setProp(def, pts, coalesce)}
+                          onend={endEdit}
+                        />
+                      {:else if def.kind === 'uid' && def.asset}
+                        <AssetField
+                          label={def.label}
+                          kind={def.asset === 'audio' ? 'audio' : 'texture'}
+                          value={String(v)}
+                          onchange={(uid) => (def.asset === 'texture' ? pickTexture(def, uid) : setProp(def, uid))}
+                        />
                       {:else if def.kind === 'uid'}
-                        <label class="field">
-                          <span class="flabel">{def.label}</span>
-                          <select class="sel" value={String(v)} onchange={(e) => pickTexture(def, e.currentTarget.value)}>
-                            <option value="">Nenhuma</option>
-                            {#each assets.textures as tex (tex.uid)}
-                              <option value={tex.uid}>{tex.name}</option>
-                            {/each}
-                            {#if v && !assets.byUid(String(v))}
-                              <option value={String(v)}>{textureName(String(v))}</option>
-                            {/if}
-                          </select>
-                        </label>
+                        <NodeRefField label={def.label} value={String(v)} self={node.uid} onchange={(uid) => setProp(def, uid)} />
+                      {:else if def.names}
+                        <NameField
+                          label={def.label}
+                          value={String(v)}
+                          options={namesOf(projectSettings, def.names)}
+                          labels={ENUM_LABELS[def.name]}
+                          emptyLabel={def.default === '' ? 'Nenhum' : null}
+                          onchange={(name) => setProp(def, name)}
+                        />
                       {:else}
-                        <label class="field">
+                        <label class="campo">
                           <span class="flabel">{def.label}</span>
                           <input class="txt" value={String(v)} onchange={(e) => setProp(def, e.currentTarget.value)} />
                         </label>
@@ -335,21 +382,30 @@
     </div>
 
     <div class="foot">
-      <button class="add" onclick={() => (addOpen = !addOpen)} aria-expanded={addOpen}>
-        <Plus size={13} /> Adicionar componente
+      <button class="add" onclick={() => (addOpen ? closeAdd() : (addOpen = true))} aria-expanded={addOpen}>
+        <Plus size={13} /> Adicionar nó
       </button>
       {#if addOpen}
         <div class="pop" role="menu">
           <label class="pop-search">
             <Search size={11} />
-            <input bind:value={addQuery} placeholder="Buscar tipo" aria-label="Buscar tipo de nó" />
+            <input
+              bind:value={addQuery}
+              placeholder="Buscar tipo ou categoria"
+              aria-label="Buscar tipo de nó"
+              onkeydown={(e) => {
+                if (e.key === 'Escape') closeAdd();
+              }}
+            />
           </label>
-          {#each addTypes as t (t.name)}
-            <button class="pop-item" role="menuitem" onclick={() => addComponent(t.name)}>
-              <NodeIcon kind={t.name} size={12} />
-              <span>{t.name}</span>
-              <em>{t.category}</em>
-            </button>
+          {#each addGroups as g (g.category)}
+            <div class="pop-cat" role="presentation">{g.category}</div>
+            {#each g.types as t (t.name)}
+              <button class="pop-item" role="menuitem" onclick={() => addNode(t.name)}>
+                <NodeIcon kind={t.name} size={12} />
+                <span>{t.name}</span>
+              </button>
+            {/each}
           {:else}
             <div class="pop-empty">Nenhum tipo encontrado</div>
           {/each}
@@ -446,9 +502,6 @@
     padding: 6px 8px;
     border-bottom: 1px solid var(--line-soft);
   }
-  .ident .field {
-    grid-template-columns: 30px 1fr;
-  }
   .kind-line .sub {
     color: var(--text-faint);
     overflow: hidden;
@@ -526,7 +579,7 @@
     font-size: var(--fs-11);
     color: var(--text-dim);
   }
-  .field {
+  .campo {
     display: grid;
     grid-template-columns: 84px minmax(0, 1fr);
     align-items: start;
@@ -663,9 +716,8 @@
   .pop-item:hover {
     background: var(--bg-hover);
   }
-  .pop-item em {
-    margin-left: auto;
-    font-style: normal;
+  .pop-cat {
+    padding: 6px 6px 2px;
     font-size: var(--fs-11);
     color: var(--text-faint);
   }

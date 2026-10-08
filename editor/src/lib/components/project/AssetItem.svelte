@@ -3,6 +3,7 @@
   import { dragState } from './drag.svelte';
   import { thumbGen, thumbUrl } from './thumbs.svelte';
   import { editableStem, formatSize, kindLabel, withExtension } from './names';
+  import AudioPreview from '../AudioPreview.svelte';
   import { Folder, Image as ImageIcon, Music, Type, Clapperboard, File } from '@lucide/svelte';
 
   let {
@@ -128,6 +129,10 @@
     {:else}
       <span class="name">{entry.name}</span>
     {/if}
+    <!-- svelte-ignore a11y_no_static_element_interactions (ouvir não seleciona nem arrasta o item) -->
+    <span class="act" onpointerdown={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()}>
+      {#if entry.kind === 'audio' && entry.uid}<AudioPreview uid={entry.uid} compact />{/if}
+    </span>
     <span class="meta">{kindLabel(entry.kind)}</span>
     <span class="meta num">{entry.isDir ? '' : formatSize(entry.size)}</span>
   </div>
@@ -157,6 +162,12 @@
         <span class="glyph"><Icon size={Math.max(20, Math.round(tile * 0.32))} /></span>
       {/if}
     </div>
+    {#if entry.kind === 'audio' && entry.uid}
+      <!-- svelte-ignore a11y_no_static_element_interactions (ouvir não seleciona nem arrasta o item) -->
+      <span class="act tile-act" onpointerdown={(e) => e.stopPropagation()} ondblclick={(e) => e.stopPropagation()}>
+        <AudioPreview uid={entry.uid} compact />
+      </span>
+    {/if}
     {#if renaming}
       <input
         class="rename"
@@ -252,11 +263,20 @@
   /* Lista: linha de 20 px, como a Hierarquia */
   .row {
     display: grid;
-    grid-template-columns: 16px minmax(0, 1fr) 72px 56px;
+    grid-template-columns: 16px minmax(0, 1fr) 22px 72px 56px;
     align-items: center;
     gap: 6px;
     height: 20px;
     padding: 0 8px 0 6px;
+  }
+  .act {
+    display: inline-flex;
+    justify-content: center;
+  }
+  .tile-act {
+    position: absolute;
+    top: 6px;
+    right: 6px;
   }
   .row .ico {
     display: grid;
