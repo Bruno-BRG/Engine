@@ -2,7 +2,9 @@
   // Campo que aponta para um asset do projeto pelo UID: textura (Sprite2D.texture) ou áudio
   // (AudioStreamPlayer.stream). Lista só os assets do tipo pedido (AUD-002). Para áudio, o botão ao lado
   // ouve o arquivo, com o mesmo AudioPreview do painel de Projeto.
+  // Um asset arrastado do painel Projeto e solto aqui grava a mesma referência que a lista (INS-003).
   import { assets } from '$lib/state/assets.svelte';
+  import { assetSlot, dragState } from '../project/drag.svelte';
   import AudioPreview from '../AudioPreview.svelte';
 
   let {
@@ -19,11 +21,18 @@
 
   const list = $derived(kind === 'audio' ? assets.audios : assets.textures);
   const missing = $derived(value !== '' && !assets.byUid(value));
+
+  let pick = $state<HTMLElement>();
 </script>
 
 <div class="campo">
   <span class="flabel">{label}</span>
-  <div class="pick">
+  <div
+    class="pick"
+    class:drop={pick !== undefined && dragState.overSlot === pick}
+    bind:this={pick}
+    use:assetSlot={{ kind, drop: (uid) => onchange(uid) }}
+  >
     <select
       class="sel"
       aria-label={label}
@@ -79,5 +88,9 @@
   }
   .sel:focus {
     box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .pick.drop .sel {
+    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--accent-soft);
   }
 </style>
