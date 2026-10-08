@@ -31,6 +31,8 @@ Status: the physics runtime (Rapier 2D: static, rigid and character bodies, area
 
 **Exit:** someone who has never coded makes a playable platformer with coins in 30 minutes.
 
+**Done when:** every P0 and P1 item of [physics](backlog/physics.md), [input](backlog/input.md), [audio](backlog/audio.md) and [visual scripting](backlog/visual-scripting.md) is checked, plus SCN-013, SCN-014, SCN-033, SCN-034, INS-003, INS-005, CON-004, DBG-003, DBG-004, VPT-005 and EDT-023; and the exit above is demonstrated. PHY-013 (tilemap collision) waits for tilemaps in Phase 3. P2 items stay after 1.0.
+
 ## Phase 3: Public alpha
 
 Desktop + web export (EXP), tilemaps (R2D), sprite animation and AnimationPlayer (ANI), game UI nodes (GUI), particles, profiler basics (DBG), three example projects, node reference docs.
