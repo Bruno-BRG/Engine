@@ -5,7 +5,7 @@
 
 use crate::ir::{Compiled, Frame};
 use crate::vm::{
-    Ambiente, Context, Host, Latente, Parada, Tarefa, TraceEvent, Vm, VmError, avancar, progride,
+    Ambiente, Context, Host, Latente, Parada, Tarefa, Trace, Vm, VmError, avancar, progride,
 };
 use std::collections::BTreeSet;
 
@@ -31,7 +31,7 @@ pub struct Scheduler {
     dt_pendente: f64,
     pontos: BTreeSet<u64>,
     rastrear: bool,
-    rastro: Vec<TraceEvent>,
+    rastro: Trace,
 }
 
 impl Scheduler {
@@ -81,13 +81,14 @@ impl Scheduler {
         &self.pontos
     }
 
-    /// Liga ou desliga o rastro (VIS-030). Com o rastro ligado, cada op gera um evento.
+    /// Turns the trace on or off (VIS-030). While it is on, each op marks its node, the flow wires that led to it and
+    /// the value it produced. While it is off, nothing is recorded.
     pub fn definir_rastro(&mut self, ligado: bool) {
         self.rastrear = ligado;
     }
 
-    /// Entrega o rastro acumulado e esvazia a fila.
-    pub fn tomar_rastro(&mut self) -> Vec<TraceEvent> {
+    /// Takes the trace recorded since the last call and empties it, so the next call starts from zero.
+    pub fn tomar_rastro(&mut self) -> Trace {
         std::mem::take(&mut self.rastro)
     }
 
@@ -335,7 +336,7 @@ mod tests {
     use super::*;
     use crate::graph::Graph;
     use nexo_core::{AudioCommand, Uid};
-    use crate::ir::compile;
+    use crate::ir::{FlowWire, compile};
     use crate::types::{LogLevel, PinType, Value};
     use crate::vm::tests::{Mock, float_prop, grafo_de_movimento};
 
@@ -602,11 +603,8 @@ mod tests {
         assert_eq!(host.impressos[2], (LogLevel::Info, "c".to_string()));
 
         let rastro = sched.tomar_rastro();
-        assert!(rastro.contains(&TraceEvent::Executou {
-            evento: "OnReady".into(),
-            node: pa
-        }));
-        assert!(rastro.iter().any(|e| matches!(e, TraceEvent::Valor { node, valor } if *node == pa && *valor == Value::String("a".into()))));
+        assert!(rastro.nodes.contains(&pa));
+        assert_eq!(rastro.values.get(&pa), Some(&Value::String("a".into())));
     }
 
     #[test]
@@ -1135,5 +1133,201 @@ mod tests {
 
         assert!(sched.pausa().is_none());
         assert_eq!(sched.tarefas(), 0);
+    }
+
+    fn flow_wire(from: u64, pin: &'static str, to: u64) -> FlowWire {
+        FlowWire { from, pin, to }
+    }
+
+    #[test]
+    fn long_loop_leaves_a_trace_the_size_of_the_graph() {
+        // OnReady -> ForEach(1000) -> Print: 7 ops a turn, but the trace keeps only the 3 nodes and 2 wires.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let fe = adiciona(&mut g, "ForEach");
+        g.set_value(fe, "count", Value::Int(1000)).unwrap();
+        g.connect((ev, "exec"), (fe, "exec")).unwrap();
+        let p = imprime(&mut g, (fe, "body"), "x");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(host.impressos.len(), 1000);
+
+        let trace = sched.tomar_rastro();
+        assert_eq!(trace.nodes, std::collections::BTreeSet::from([ev, fe, p]));
+        assert_eq!(trace.wires.len(), 2);
+        assert!(trace.wires.contains(&flow_wire(ev, "exec", fe)));
+        assert!(trace.wires.contains(&flow_wire(fe, "body", p)));
+    }
+
+    #[test]
+    fn untaken_branch_leaves_its_wire_out_and_the_read_clears_the_trace() {
+        // Condition false: the "false" wire and its Print run; the "true" wire and its Print do not.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let br = adiciona(&mut g, "Branch");
+        g.set_value(br, "condition", Value::Bool(false)).unwrap();
+        g.connect((ev, "exec"), (br, "exec")).unwrap();
+        let true_branch = imprime(&mut g, (br, "true"), "sim");
+        let false_branch = imprime(&mut g, (br, "false"), "nao");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+
+        let trace = sched.tomar_rastro();
+        assert!(trace.wires.contains(&flow_wire(ev, "exec", br)));
+        assert!(trace.wires.contains(&flow_wire(br, "false", false_branch)));
+        assert!(!trace.wires.contains(&flow_wire(br, "true", true_branch)));
+        assert!(trace.nodes.contains(&false_branch));
+        assert!(!trace.nodes.contains(&true_branch));
+        // The read empties the trace: the next read starts from zero.
+        assert!(sched.tomar_rastro().is_empty());
+    }
+
+    #[test]
+    fn wires_pass_through_a_sequence_and_a_dead_end_is_taken_at_the_end() {
+        // OnReady -> Sequence: then_0 leads to a Print, then_1 leads to a Print; the Sequence has no op of its own.
+        // A second Sequence with no output is a dead end: its incoming wire is taken at the end of the program.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let seq = adiciona(&mut g, "Sequence");
+        g.connect((ev, "exec"), (seq, "exec")).unwrap();
+        let a = imprime(&mut g, (seq, "then_0"), "a");
+        let b = imprime(&mut g, (seq, "then_1"), "b");
+        let no_output = adiciona(&mut g, "Sequence");
+        g.connect((a, "exec"), (no_output, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+
+        let trace = sched.tomar_rastro();
+        assert!(trace.wires.contains(&flow_wire(ev, "exec", seq)));
+        assert!(trace.wires.contains(&flow_wire(seq, "then_0", a)));
+        assert!(trace.wires.contains(&flow_wire(seq, "then_1", b)));
+        assert!(trace.wires.contains(&flow_wire(a, "exec", no_output)));
+        assert!(trace.nodes.contains(&ev));
+    }
+
+    #[test]
+    fn empty_true_branch_takes_its_wire_and_the_untaken_false_one_stays_out() {
+        // Condition true, and the true branch leads to a Sequence with no output: its wire is taken at the Jump that
+        // skips the false branch. The false branch's Print does not run, so its wire stays out.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let br = adiciona(&mut g, "Branch");
+        g.set_value(br, "condition", Value::Bool(true)).unwrap();
+        g.connect((ev, "exec"), (br, "exec")).unwrap();
+        let empty = adiciona(&mut g, "Sequence");
+        g.connect((br, "true"), (empty, "exec")).unwrap();
+        let false_branch = imprime(&mut g, (br, "false"), "nao");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+
+        let trace = sched.tomar_rastro();
+        assert!(trace.wires.contains(&flow_wire(br, "true", empty)));
+        assert!(!trace.wires.contains(&flow_wire(br, "false", false_branch)));
+        assert!(host.impressos.is_empty());
+    }
+
+    #[test]
+    fn empty_false_branch_is_not_taken_when_the_true_branch_runs() {
+        // Condition true, the false branch leads to a Sequence with no output. The true path reaches the end of the
+        // program by a jump, so the false wire (which only the false path crosses) must not be taken at the end.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let br = adiciona(&mut g, "Branch");
+        g.set_value(br, "condition", Value::Bool(true)).unwrap();
+        g.connect((ev, "exec"), (br, "exec")).unwrap();
+        let true_branch = imprime(&mut g, (br, "true"), "sim");
+        let empty = adiciona(&mut g, "Sequence");
+        g.connect((br, "false"), (empty, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+
+        let trace = sched.tomar_rastro();
+        assert!(trace.wires.contains(&flow_wire(br, "true", true_branch)));
+        assert!(!trace.wires.contains(&flow_wire(br, "false", empty)));
+    }
+
+    #[test]
+    fn function_call_takes_the_wires_inside_and_around_the_body() {
+        // OnReady -> CallFunction("f") -> Print("depois"); Function "f": exec -> Print("dentro") -> Return.
+        let mut g = Graph::default();
+        let def = adiciona(&mut g, "Function");
+        texto(&mut g, def, "name", "f");
+        let inside = imprime(&mut g, (def, "exec"), "dentro");
+        let ret = adiciona(&mut g, "Return");
+        g.connect((inside, "exec"), (ret, "exec")).unwrap();
+        let ev = adiciona(&mut g, "OnReady");
+        let calls = adiciona(&mut g, "CallFunction");
+        texto(&mut g, calls, "name", "f");
+        g.connect((ev, "exec"), (calls, "exec")).unwrap();
+        let after = imprime(&mut g, (calls, "exec"), "depois");
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut host = Mock::default();
+        let mut sched = Scheduler::new();
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched.tick(&compiled, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(host.impressos.len(), 2);
+
+        let trace = sched.tomar_rastro();
+        assert!(trace.wires.contains(&flow_wire(ev, "exec", calls)));
+        assert!(trace.wires.contains(&flow_wire(def, "exec", inside)));
+        assert!(trace.wires.contains(&flow_wire(inside, "exec", ret)));
+        assert!(trace.wires.contains(&flow_wire(calls, "exec", after)));
+    }
+
+    #[test]
+    fn trace_off_records_nothing_and_text_values_are_cut() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let p = adiciona(&mut g, "Print");
+        g.set_value(p, "msg", Value::String("é".repeat(70)))
+            .unwrap();
+        g.connect((ev, "exec"), (p, "exec")).unwrap();
+        let compiled = compile(&g).unwrap();
+        let mut ctx = compiled.new_context(1);
+        let mut sched = Scheduler::new();
+        sched.iniciar(&compiled, "OnReady");
+        sched
+            .tick(&compiled, &mut ctx, &mut Mock::default(), 0.0)
+            .unwrap();
+        assert!(
+            sched.tomar_rastro().is_empty(),
+            "the trace is off, so nothing is recorded"
+        );
+
+        // With the trace on, the text is kept as its first 64 characters (not bytes).
+        sched.definir_rastro(true);
+        sched.iniciar(&compiled, "OnReady");
+        sched
+            .tick(&compiled, &mut ctx, &mut Mock::default(), 0.0)
+            .unwrap();
+        let trace = sched.tomar_rastro();
+        assert_eq!(trace.values.get(&p), Some(&Value::String("é".repeat(64))));
     }
 }

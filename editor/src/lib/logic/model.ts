@@ -118,8 +118,23 @@ export interface Colados {
   comments: number[];
 }
 
-/** Evento de rastro do VM (vm.rs, TraceEvent): nó executado, ou valor produzido pelo nó. */
-export type TraceEvent = { Executou: { evento: string; node: number } } | { Valor: { node: number; valor: Value } };
+/** A flow wire that was taken (VIS-030): output `pin` of node `from` led to the execution input of node `to`. */
+export interface TracedWire {
+  from: number;
+  pin: string;
+  to: number;
+}
+
+/**
+ * One instance's trace since the last read (VIS-030, `debug_trace` in debug.rs): the nodes that ran, the flow wires
+ * taken and the last value of each node (texts cut to 64 characters). It has no item per operation, so its size
+ * follows the graph, not the number of turns of a loop.
+ */
+export interface Trace {
+  nodes: number[];
+  wires: TracedWire[];
+  values: { node: number; value: Value }[];
+}
 
 /** Forma visual de um pino: cada tipo tem uma cor e uma forma (VIS-013, docs/04-visual-programming.md). */
 export type PinShape = 'tri' | 'diamond' | 'square' | 'circle' | 'hex' | 'ring';
