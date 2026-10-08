@@ -41,10 +41,10 @@ const ATRASO_SALVAR = 600;
 
 const VAZIO: GraphSnapshot = { nodes: [], wires: [], comments: [], variables: [], pins: [] };
 
-/** C# do script aberto (VIS-024): o texto gerado, ou a mensagem do grafo que impede a geração. */
-export type CSharpSaida =
-  | { ok: true; classe: string; codigo: string }
-  | { ok: false; classe: string; erro: string };
+/** C# of the open script (VIS-024): the generated text, or the graph message that blocks the generation. */
+export type CSharpOutput =
+  | { ok: true; className: string; code: string }
+  | { ok: false; className: string; error: string };
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -74,19 +74,19 @@ class LogicState {
   /** Erros de validação do grafo aberto. */
   errors = $state.raw<GraphError[]>([]);
   /**
-   * C# gerado da IR do script aberto (VIS-024). É uma derivada: só é calculada quando o painel a lê, e é refeita a
-   * cada operação do grafo, que troca `snap`.
+   * C# generated from the IR of the open script (VIS-024). It is derived state: it is only computed when the panel
+   * reads it, and it is recomputed after every graph operation, which replaces `snap`.
    */
-  csharp = $derived.by<CSharpSaida | null>(() => {
+  csharp = $derived.by<CSharpOutput | null>(() => {
     void this.snap;
-    const nome = this.active;
+    const script = this.active;
     const ed = this.#ed();
-    if (!nome || !ed) return null;
-    const classe = csharpClassName(nome);
+    if (!script || !ed) return null;
+    const className = csharpClassName(script);
     try {
-      return { ok: true, classe, codigo: ed.to_csharp(nome) };
+      return { ok: true, className, code: ed.to_csharp(script) };
     } catch (e) {
-      return { ok: false, classe, erro: msg(e) };
+      return { ok: false, className, error: msg(e) };
     }
   });
   /** Seleção do grafo aberto (ids de nós, de caixas e um fio). */

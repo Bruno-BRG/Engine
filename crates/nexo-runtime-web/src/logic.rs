@@ -47,8 +47,8 @@ fn variables_json(variables: &[Variable]) -> Result<serde_json::Value, serde_jso
 /// C# of a graph: the class `csharp_class_name(script)` with one method per event. A compile error comes back as
 /// the messages of the validation, one per line, and no code is generated (VIS-024).
 fn csharp_text(graph: &Graph, script: &str) -> Result<String, String> {
-    let compiled = nexo_graph::compile(graph).map_err(|erros| {
-        erros
+    let compiled = nexo_graph::compile(graph).map_err(|errors| {
+        errors
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -151,13 +151,13 @@ impl GraphEditor {
         to_json(&erros)
     }
 
-    /// Código C# do script, gerado da IR (VIS-024). Com erro no grafo, a exceção traz as mensagens de validação, uma
-    /// por linha. A classe sai com `csharp_class_name(script)`.
+    /// C# code of the script, generated from the IR (VIS-024). If the graph has errors, the exception carries the
+    /// validation messages, one per line. The class is named by `csharp_class_name(script)`.
     pub fn to_csharp(&self, script: &str) -> Result<String, JsError> {
         csharp_text(&self.graph, script).map_err(|msg| JsError::new(&msg))
     }
 
-    /// Nome da classe C# de um script, como `to_csharp` a escreve. O arquivo gerado é esse nome com `.cs`.
+    /// C# class name of a script, as `to_csharp` writes it. The generated file is that name plus `.cs`.
     pub fn csharp_class_name(script: &str) -> String {
         nexo_graph::csharp_class_name(script)
     }
@@ -342,21 +342,21 @@ mod tests {
     fn csharp_of_script_uses_its_class_name_and_reports_compile_errors() {
         let mut g = Graph::default();
         g.add_node("OnReady", [0.0, 0.0]).unwrap();
-        let texto = csharp_text(&g, "Script 1").unwrap();
+        let code = csharp_text(&g, "Script 1").unwrap();
         assert!(
-            texto.contains("public partial class Script_1 : NexoScript"),
-            "{texto}"
+            code.contains("public partial class Script_1 : NexoScript"),
+            "{code}"
         );
-        assert!(texto.contains("public void OnReady_"), "{texto}");
+        assert!(code.contains("public void OnReady_"), "{code}");
 
-        // Variável sem nome: a validação recusa o grafo, e a mensagem chega ao painel sem gerar código.
+        // Variable without a name: validation refuses the graph, and the message reaches the panel without code.
         g.variables.push(Variable {
             name: " ".into(),
             ty: PinType::Float,
             default: Value::Float(0.0),
             exported: false,
         });
-        let erro = csharp_text(&g, "Script 1").unwrap_err();
-        assert!(erro.contains("nome de variável vazio"), "{erro}");
+        let error = csharp_text(&g, "Script 1").unwrap_err();
+        assert!(error.contains("nome de variável vazio"), "{error}");
     }
 }

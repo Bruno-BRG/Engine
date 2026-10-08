@@ -92,8 +92,8 @@ const RESERVADAS: &[&str] = &[
     "while",
 ];
 
-/// Gera a classe C# do script. `class_name` precisa ser um identificador C# válido: `csharp_class_name` faz isso
-/// a partir do nome do script.
+/// Generates the C# class of a script. `class_name` must be a valid C# identifier: `csharp_class_name` builds it
+/// from the script name.
 pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     let mut out = String::new();
     out.push_str("// Gerado pelo Nexo a partir da IR do script. Não edite à mão: a próxima geração sobrescreve.\n");
@@ -101,44 +101,46 @@ pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     out.push_str("using Nexo;\n\n");
     let _ = writeln!(out, "public partial class {class_name} : NexoScript");
     out.push_str("{\n");
-    let nomes = nomes_dos_campos(compiled);
-    for (var, nome) in compiled.variables.iter().zip(&nomes) {
-        campo(&mut out, var, nome);
+    let names = field_names(compiled, class_name);
+    for (var, name) in compiled.variables.iter().zip(&names) {
+        campo(&mut out, var, name);
     }
     for programa in &compiled.programs {
         out.push('\n');
-        metodo(&mut out, compiled, programa);
+        metodo(&mut out, compiled, programa, &names);
     }
     out.push_str("}\n");
     out
 }
 
-/// Nome da classe C# de um script (VIS-024). Usa a mesma regra dos identificadores: "Script 1" vira `Script_1`, e
-/// o arquivo gerado é esse nome com `.cs`.
+/// C# class name of a script (VIS-024). It follows the identifier rule: "Script 1" becomes `Script_1`, and the
+/// generated file is that name plus `.cs`.
 pub fn csharp_class_name(script: &str) -> String {
     ident(script)
 }
 
-/// Nome C# de cada variável, na ordem de `compiled.variables`. Dois nomes que viram o mesmo identificador ("vida
-/// total" e "vida_total") ganham sufixo numérico, para o código gerado não repetir um campo.
-fn nomes_dos_campos(compiled: &Compiled) -> Vec<String> {
-    let mut usados = BTreeSet::new();
-    let mut nomes = Vec::with_capacity(compiled.variables.len());
+/// C# name of each variable, in the order of `compiled.variables`. Names that become the same identifier ("vida
+/// total" and "vida_total") get a numeric suffix. The class name and the generated methods are reserved first: a
+/// field cannot have the name of its enclosing class (CS0542) or of a method (CS0102).
+fn field_names(compiled: &Compiled, class_name: &str) -> Vec<String> {
+    let mut used = BTreeSet::from([class_name.to_string()]);
+    used.extend(compiled.programs.iter().map(method_name));
+    let mut names = Vec::with_capacity(compiled.variables.len());
     for var in &compiled.variables {
         let base = ident(&var.name);
-        let mut nome = base.clone();
-        let mut numero = 2;
-        while !usados.insert(nome.clone()) {
-            nome = format!("{base}_{numero}");
-            numero += 1;
+        let mut name = base.clone();
+        let mut number = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{base}_{number}");
+            number += 1;
         }
-        nomes.push(nome);
+        names.push(name);
     }
-    nomes
+    names
 }
 
 /// Variável do script como campo. As exportadas aparecem no Inspector (`[Export]`), as outras são privadas.
-fn campo(out: &mut String, var: &Variable, nome: &str) {
+fn campo(out: &mut String, var: &Variable, name: &str) {
     let acesso = if var.exported {
         "    [Export] public "
     } else {
@@ -146,14 +148,19 @@ fn campo(out: &mut String, var: &Variable, nome: &str) {
     };
     let _ = writeln!(
         out,
-        "{acesso}{} {nome} = {};",
+        "{acesso}{} {name} = {};",
         tipo(var.ty),
         literal(&var.default)
     );
 }
 
+/// Name of the C# method of a program: its event and the id of the event node, as in `OnReady_1`.
+fn method_name(program: &Program) -> String {
+    format!("{}_{}", program.event, program.node)
+}
+
 /// Um programa como método. Métodos com pausa latente são `async Task`.
-fn metodo(out: &mut String, compiled: &Compiled, programa: &Program) {
+fn metodo(out: &mut String, compiled: &Compiled, programa: &Program, names: &[String]) {
     let assincrono = programa.ops.iter().any(latente);
     let retorno = if assincrono { "async Task" } else { "void" };
     let parametros = if matches!(programa.event.as_str(), "OnProcess" | "OnPhysicsProcess") {
@@ -163,8 +170,8 @@ fn metodo(out: &mut String, compiled: &Compiled, programa: &Program) {
     };
     let _ = writeln!(
         out,
-        "    public {retorno} {}_{}({parametros})",
-        programa.event, programa.node
+        "    public {retorno} {}({parametros})",
+        method_name(programa)
     );
     out.push_str("    {\n");
     for (r, ty) in tipos_dos_registradores(compiled, programa)
@@ -176,9 +183,9 @@ fn metodo(out: &mut String, compiled: &Compiled, programa: &Program) {
     let alvos: BTreeSet<usize> = programa.ops.iter().filter_map(alvo).collect();
     for (i, op) in programa.ops.iter().enumerate() {
         if alvos.contains(&i) {
-            let _ = writeln!(out, "        L{i}: {}", instrucao(compiled, op));
+            let _ = writeln!(out, "        L{i}: {}", instrucao(names, op));
         } else {
-            let _ = writeln!(out, "        {}", instrucao(compiled, op));
+            let _ = writeln!(out, "        {}", instrucao(names, op));
         }
     }
     if alvos.contains(&programa.ops.len()) {
@@ -237,13 +244,13 @@ fn tipos_dos_registradores(compiled: &Compiled, programa: &Program) -> Vec<PinTy
 }
 
 /// Instrução C# de uma op. Os registradores viram `r<n>`.
-fn instrucao(c: &Compiled, op: &Op) -> String {
+fn instrucao(names: &[String], op: &Op) -> String {
     match op {
         Op::Const { dst, value } => format!("r{dst} = {};", literal(value)),
         Op::Owner { dst } => format!("r{dst} = self;"),
         Op::Delta { dst } => format!("r{dst} = delta;"),
-        Op::GetVar { dst, var } => format!("r{dst} = {};", nome_variavel(c, *var)),
-        Op::SetVar { var, src } => format!("{} = r{src};", nome_variavel(c, *var)),
+        Op::GetVar { dst, var } => format!("r{dst} = {};", nome_variavel(names, *var)),
+        Op::SetVar { var, src } => format!("{} = r{src};", nome_variavel(names, *var)),
         Op::Add { dst, a, b }
         | Op::IntAdd { dst, a, b }
         | Op::AddVec { dst, a, b }
@@ -377,11 +384,8 @@ fn nivel(level: LogLevel) -> &'static str {
     }
 }
 
-fn nome_variavel(c: &Compiled, var: usize) -> String {
-    nomes_dos_campos(c)
-        .get(var)
-        .cloned()
-        .unwrap_or_else(|| format!("v{var}"))
+fn nome_variavel(names: &[String], var: usize) -> String {
+    names.get(var).cloned().unwrap_or_else(|| format!("v{var}"))
 }
 
 fn tipo(ty: PinType) -> &'static str {
@@ -439,10 +443,10 @@ fn escapa(s: &str) -> String {
     out
 }
 
-/// Nomes que o código gerado usa em posição de expressão: o parâmetro do quadro (`delta`), o dono (`self`), o
-/// motor (`Nexo`, `NodeRef`, `LogLevel`) e os tipos da classe. Um campo com um desses nomes esconderia o que o
-/// código quer dizer, então sai com `_` no fim.
-const NOMES_DO_CODIGO: &[&str] = &[
+/// Names the generated code uses in expression position: the frame parameter (`delta`), the owner (`self`), the
+/// engine (`Nexo`, `NodeRef`, `LogLevel`) and the types of the class (`NexoScript`, `Vector2`, `Task`, `Export`). A
+/// field with one of these names would hide what the code means, so it gets a `_` at the end.
+const GENERATED_NAMES: &[&str] = &[
     "self",
     "delta",
     "Nexo",
@@ -454,9 +458,8 @@ const NOMES_DO_CODIGO: &[&str] = &[
     "Export",
 ];
 
-/// Identificador C# a partir do nome do Nexo: troca o que não é letra, dígito ou `_`, e protege palavras
-/// reservadas com `@`. Nomes que o próprio código gerado usa (`NOMES_DO_CODIGO` e os registradores `r<n>`) ganham
-/// `_` no fim.
+/// C# identifier from a Nexo name: replaces what is not a letter, digit or `_`, and protects reserved words with
+/// `@`. Names the generated code uses itself (`GENERATED_NAMES` and the registers `r<n>`) get a `_` at the end.
 fn ident(nome: &str) -> String {
     let mut s: String = nome
         .chars()
@@ -473,14 +476,14 @@ fn ident(nome: &str) -> String {
     }
     if RESERVADAS.contains(&s.as_str()) {
         s.insert(0, '@');
-    } else if NOMES_DO_CODIGO.contains(&s.as_str()) || eh_registrador(&s) {
+    } else if GENERATED_NAMES.contains(&s.as_str()) || is_register(&s) {
         s.push('_');
     }
     s
 }
 
-/// `r<n>`: o nome dos registradores no código gerado.
-fn eh_registrador(s: &str) -> bool {
+/// `r<n>`: the name of the registers in the generated code.
+fn is_register(s: &str) -> bool {
     s.strip_prefix('r')
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -496,9 +499,9 @@ mod tests {
         g.add_node(kind, [0.0, 0.0]).unwrap()
     }
 
-    /// Script com duas variáveis que viram o mesmo identificador ("vida total" e "vida_total"), e uma chamada
-    /// `delta`, que é o nome do parâmetro do quadro no código gerado.
-    fn colisoes() -> Compiled {
+    /// Script with two variables that become the same identifier ("vida total" and "vida_total"), and a variable
+    /// named `delta`, the name of the frame parameter in the generated code.
+    fn collisions() -> Compiled {
         let mut g = Graph::default();
         g.add_variable("vida total", PinType::Float, Value::Float(1.0), true)
             .unwrap();
@@ -607,9 +610,9 @@ mod tests {
     }
 
     #[test]
-    fn nome_que_o_codigo_gerado_usa_ganha_sufixo() {
-        // `self`, `delta`, o motor e os registradores `r<n>` são usados no código gerado: um campo com esse nome
-        // esconderia o que a expressão quer dizer.
+    fn names_used_by_generated_code_get_suffix() {
+        // `self`, `delta`, the engine and the registers `r<n>` are used in the generated code: a field with one of
+        // these names would hide what the expression means.
         assert_eq!(ident("delta"), "delta_");
         assert_eq!(ident("self"), "self_");
         assert_eq!(ident("Nexo"), "Nexo_");
@@ -619,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn nome_de_classe_vira_identificador_valido() {
+    fn class_name_becomes_valid_identifier() {
         assert_eq!(csharp_class_name("Script 1"), "Script_1");
         assert_eq!(csharp_class_name("Ação de salto"), "Ação_de_salto");
         assert_eq!(csharp_class_name("Task"), "Task_");
@@ -628,25 +631,66 @@ mod tests {
     }
 
     #[test]
-    fn campos_com_o_mesmo_identificador_ganham_numero() {
-        let texto = generate_csharp(&colisoes(), "Teste");
+    fn fields_with_same_identifier_get_number() {
+        let code = generate_csharp(&collisions(), "Teste");
         assert!(
-            texto.contains("[Export] public double vida_total = 1.0;"),
-            "{texto}"
+            code.contains("[Export] public double vida_total = 1.0;"),
+            "{code}"
         );
         assert!(
-            texto.contains("[Export] public double vida_total_2 = 2.0;"),
-            "{texto}"
+            code.contains("[Export] public double vida_total_2 = 2.0;"),
+            "{code}"
         );
-        // Sem campo repetido: cada identificador aparece uma vez na declaração.
-        assert_eq!(texto.matches("double vida_total ").count(), 1, "{texto}");
+        // No repeated field: each identifier appears once in the declarations.
+        assert_eq!(code.matches("double vida_total ").count(), 1, "{code}");
     }
 
     #[test]
-    fn variavel_chamada_delta_nao_vira_o_parametro_do_quadro() {
-        let texto = generate_csharp(&colisoes(), "Teste");
-        assert!(texto.contains("private double delta_ = 0.5;"), "{texto}");
-        assert!(texto.contains("= delta_;"), "{texto}");
-        assert!(!texto.contains("= delta;"), "{texto}");
+    fn variable_named_delta_does_not_become_frame_parameter() {
+        let code = generate_csharp(&collisions(), "Teste");
+        assert!(code.contains("private double delta_ = 0.5;"), "{code}");
+        assert!(code.contains("= delta_;"), "{code}");
+        assert!(!code.contains("= delta;"), "{code}");
+    }
+
+    #[test]
+    fn field_named_like_the_class_gets_suffix() {
+        // A member cannot have the name of the type that contains it (CS0542).
+        let mut g = Graph::default();
+        g.add_variable("Jogador", PinType::Float, Value::Float(1.0), true)
+            .unwrap();
+        let code = generate_csharp(&compile(&g).unwrap(), "Jogador");
+        assert!(
+            code.contains("public partial class Jogador : NexoScript"),
+            "{code}"
+        );
+        assert!(
+            code.contains("[Export] public double Jogador_2 = 1.0;"),
+            "{code}"
+        );
+        assert!(!code.contains("double Jogador = 1.0;"), "{code}");
+    }
+
+    #[test]
+    fn field_named_like_a_generated_method_gets_suffix() {
+        // A field and a method cannot share a name in C# (CS0102). The method of an OnReady node is `OnReady_<id>`.
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let method = format!("OnReady_{ev}");
+        g.add_variable(&method, PinType::Float, Value::Float(0.5), false)
+            .unwrap();
+        let code = generate_csharp(&compile(&g).unwrap(), "Teste");
+        assert!(
+            code.contains(&format!("void {method}(NodeRef self)")),
+            "{code}"
+        );
+        assert!(
+            code.contains(&format!("private double {method}_2 = 0.5;")),
+            "{code}"
+        );
+        assert!(
+            !code.contains(&format!("private double {method} =")),
+            "{code}"
+        );
     }
 }

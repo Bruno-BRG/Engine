@@ -12,8 +12,8 @@
   import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare, Braces } from '@lucide/svelte';
 
   let nomeFuncao = $state('');
-  /** Painel lateral com o C# gerado do script (VIS-024). Aberto pelo botão da barra. */
-  let csharpAberto = $state(false);
+  /** Side panel with the C# generated from the script (VIS-024). Opened by the toolbar button. */
+  let csharpOpen = $state(false);
   const erros = $derived(logic.errors.length);
 
   /** Colapsa a seleção em função (VIS-015). Só o que funções expressam; macros ficam pendentes. */
@@ -53,7 +53,7 @@
         <MessageSquare size={12} />
       </button>
       <span class="sep"></span>
-      <button class="icon-btn" class:active={csharpAberto} title="Mostrar o C# gerado do script" aria-label="Mostrar o C# gerado do script" aria-pressed={csharpAberto} onclick={() => (csharpAberto = !csharpAberto)}>
+      <button class="icon-btn" class:active={csharpOpen} title="Mostrar o C# gerado do script" aria-label="Mostrar o C# gerado do script" aria-pressed={csharpOpen} onclick={() => (csharpOpen = !csharpOpen)}>
         <Braces size={13} />
       </button>
       <span class="sep"></span>
@@ -84,9 +84,9 @@
     {/if}
   </section>
 
-  {#if csharpAberto}
+  {#if csharpOpen}
     <aside class="csharp">
-      <CSharpLogicPanel onclose={() => (csharpAberto = false)} />
+      <CSharpLogicPanel onclose={() => (csharpOpen = false)} />
     </aside>
   {/if}
 

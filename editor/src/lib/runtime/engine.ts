@@ -41,7 +41,7 @@ export async function readNodeLibrary(): Promise<string> {
   return GraphEditor.node_library();
 }
 
-/** Nome da classe C# de um script, como o gerador a escreve (VIS-024). Só vale depois de carregar o WASM. */
+/** C# class name of a script, as the generator writes it (VIS-024). Only valid after the WASM is loaded. */
 export function csharpClassName(script: string): string {
   return GraphEditor.csharp_class_name(script);
 }
