@@ -3,12 +3,12 @@
 //! condicional. Os erros de ligação e de entrada obrigatória são reunidos e devolvidos ao editor, cada um
 //! com o id do nó onde foi achado.
 
-use crate::graph::{Graph, GraphNode, def_of};
+use crate::graph::{Graph, GraphNode, REROUTE, def_of};
 use crate::library;
 use crate::types::{Value, Variable};
 use crate::vm::Context;
-use std::collections::HashSet;
-use std::fmt;
+
+pub use crate::graph::CompileError;
 
 /// Índice de um registrador do programa.
 pub type Reg = usize;
@@ -86,21 +86,6 @@ impl Compiled {
     }
 }
 
-/// Erro de validação. `node` é o nó onde o problema foi achado, quando há um.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CompileError {
-    pub node: Option<u64>,
-    pub message: String,
-}
-
-impl fmt::Display for CompileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for CompileError {}
-
 fn err(node: u64, message: impl Into<String>) -> CompileError {
     CompileError {
         node: Some(node),
@@ -108,10 +93,13 @@ fn err(node: u64, message: impl Into<String>) -> CompileError {
     }
 }
 
-/// Compila o grafo: um programa por nó de evento. Devolve todos os erros de validação que achar.
+/// Compila o grafo: um programa por nó de evento. Primeiro roda `Graph::validate` (o mesmo que o editor usa),
+/// e só compila se não houver erro. Devolve todos os erros de validação que achar.
 pub fn compile(graph: &Graph) -> Result<Compiled, Vec<CompileError>> {
-    let mut errors = Vec::new();
-    check_graph(graph, &mut errors);
+    let mut errors = graph.validate();
+    if !errors.is_empty() {
+        return Err(errors);
+    }
     let mut programs = Vec::new();
     for event in graph.nodes.iter().filter(|n| is_event(n)) {
         match compile_event(graph, event) {
@@ -130,36 +118,6 @@ pub fn compile(graph: &Graph) -> Result<Compiled, Vec<CompileError>> {
 
 fn is_event(node: &GraphNode) -> bool {
     library::find(&node.kind).is_some_and(|d| d.event)
-}
-
-/// Checagens que valem para o grafo inteiro, mesmo nos nós que nenhum evento alcança.
-fn check_graph(graph: &Graph, errors: &mut Vec<CompileError>) {
-    let mut ids = HashSet::new();
-    for node in &graph.nodes {
-        if !ids.insert(node.id) {
-            errors.push(err(node.id, format!("id de nó repetido: {}", node.id)));
-        }
-        if let Err(msg) = def_of(node) {
-            errors.push(err(node.id, msg));
-        }
-    }
-    // Fios montados à mão (por exemplo, num arquivo editado) não passaram pelo `connect`.
-    let mut ligadas = HashSet::new();
-    for w in &graph.wires {
-        if let Err(msg) = graph.endpoint_type(&w.from, &w.to) {
-            errors.push(err(w.to.node, msg));
-            continue;
-        }
-        if !ligadas.insert(&w.to) {
-            errors.push(err(
-                w.to.node,
-                format!(
-                    "a entrada '{}' do nó {} está ligada mais de uma vez",
-                    w.to.pin, w.to.node
-                ),
-            ));
-        }
-    }
 }
 
 fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileError> {
@@ -288,6 +246,8 @@ impl<'g> Emitter<'g> {
                 self.flow(id, "then_0")?;
                 self.flow(id, "then_1")
             }
+            // O reroute só repassa o fluxo: a execução segue pelos fios que saem dele.
+            REROUTE => self.flow(id, "out"),
             other => Err(err(id, format!("{other} não é um nó de fluxo"))),
         }
     }
@@ -414,6 +374,16 @@ impl<'g> Emitter<'g> {
                 let dst = self.reg();
                 self.emit(Op::GetVar { dst, var }, id);
                 Ok(dst)
+            }
+            // O valor do reroute é o valor do fio que chega nele.
+            (REROUTE, "out") => {
+                let graph = self.graph;
+                let w = graph
+                    .wires
+                    .iter()
+                    .find(|w| w.to.node == id && w.to.pin == "in")
+                    .ok_or_else(|| err(id, format!("{} sem fio de entrada", node.etiqueta())))?;
+                self.output(w.from.node, &w.from.pin)
             }
             _ => Err(err(id, format!("{} não tem a saída de valor '{pin}'", node.etiqueta()))),
         }

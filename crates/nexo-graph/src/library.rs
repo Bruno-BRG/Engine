@@ -52,6 +52,17 @@ impl PinDef {
         }
     }
 
+    /// Pino cujo tipo segue o fio que chega ao reroute (VIS-014). Sem `ty`, como o de variável, mas a
+    /// resolução é por fio: ver `Graph::tipo_do_reroute`.
+    fn segue_o_fio(name: &'static str, label: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            ty: None,
+            default: None,
+        }
+    }
+
     /// Valor usado quando o pino não tem fio nem valor embutido.
     fn padrao(mut self, value: Value) -> Self {
         self.default = Some(value);
@@ -221,6 +232,15 @@ fn build() -> Vec<NodeDef> {
             ],
             outputs: vec![exec()],
         },
+        NodeDef {
+            kind: "Reroute",
+            category: "Organização",
+            label: "Ponto de passagem (Reroute)",
+            description: "Passa o fio adiante sem mudar nada. O tipo é o do fio que chega.",
+            event: false,
+            inputs: vec![PinDef::segue_o_fio("in", "Entrada")],
+            outputs: vec![PinDef::segue_o_fio("out", "Saída")],
+        },
     ]
 }
 
@@ -241,7 +261,7 @@ mod tests {
 
     #[test]
     fn biblioteca_v1_serializa_para_o_editor() {
-        assert_eq!(library().len(), 14);
+        assert_eq!(library().len(), 15);
         assert!(find("Branch").is_some_and(|d| !d.event));
         assert!(find("OnProcess").is_some_and(|d| d.event));
         assert!(find("Nada").is_none());

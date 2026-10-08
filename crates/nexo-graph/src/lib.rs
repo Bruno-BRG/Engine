@@ -11,7 +11,7 @@ pub mod library;
 pub mod types;
 pub mod vm;
 
-pub use graph::{Graph, GraphNode, PinRef, Wire};
+pub use graph::{Comment, Graph, GraphNode, PinRef, Wire};
 pub use ir::{CompileError, Compiled, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};
 pub use types::{PinType, Value, Variable};
