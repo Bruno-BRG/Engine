@@ -813,12 +813,12 @@ impl<'g> Emitter<'g> {
     fn output_node(&mut self, node: &'g GraphNode, pin: &str) -> Result<Reg, CompileError> {
         let id = node.id;
         match (node.kind.as_str(), pin) {
-            ("OnReady" | "OnProcess", "self") => {
+            ("OnReady" | "OnProcess" | "OnPhysicsProcess", "self") => {
                 let dst = self.reg();
                 self.emit(Op::Owner { dst }, id);
                 Ok(dst)
             }
-            ("OnProcess", "delta") => {
+            ("OnProcess" | "OnPhysicsProcess", "delta") => {
                 let dst = self.reg();
                 self.emit(Op::Delta { dst }, id);
                 Ok(dst)

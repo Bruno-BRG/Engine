@@ -131,7 +131,7 @@ fn campo(out: &mut String, var: &Variable) {
 fn metodo(out: &mut String, compiled: &Compiled, programa: &Program) {
     let assincrono = programa.ops.iter().any(latente);
     let retorno = if assincrono { "async Task" } else { "void" };
-    let parametros = if programa.event == "OnProcess" {
+    let parametros = if matches!(programa.event.as_str(), "OnProcess" | "OnPhysicsProcess") {
         "NodeRef self, double delta"
     } else {
         "NodeRef self"

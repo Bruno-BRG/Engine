@@ -17,7 +17,7 @@ pub mod vm;
 
 pub use audio::AudioCommand;
 pub use csharp::generate_csharp;
-pub use graph::{Comment, CompileError, Graph, GraphNode, PinRef, Wire};
+pub use graph::{Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Wire};
 pub use ir::{Compiled, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};
 pub use scheduler::{Pausa, Scheduler, recarregar_contexto};

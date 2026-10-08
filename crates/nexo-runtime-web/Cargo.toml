@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 nexo-core.workspace = true
+nexo-graph.workspace = true
 nexo-physics.workspace = true
 nexo-render.workspace = true
 wgpu = { workspace = true, features = ["webgl"] }

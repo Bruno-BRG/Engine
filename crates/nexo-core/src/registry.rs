@@ -158,6 +158,9 @@ fn build() -> Vec<NodeType> {
                 PropDef::new("tag", "Tag", "Identificação", PropKind::Str, json!("untagged")),
                 PropDef::new("layer", "Layer", "Identificação", PropKind::Str, json!("default")),
                 PropDef::new("locked", "Estático", "Editor", PropKind::Bool, json!(false)),
+                // Script anexado ao nó (VIS-003, INS-005): o nome do arquivo `scripts/<nome>.logic.ron`, sem pasta
+                // e sem extensão. Vazio = nenhum. O Inspector mostra um slot próprio, não um campo de texto.
+                PropDef::new("script", "Script", "Lógica", PropKind::Str, json!("")),
             ],
         },
         NodeType {
@@ -503,6 +506,16 @@ mod tests {
         assert_eq!(prop_def("GrooveJoint2D", "groove_end").unwrap().default, json!([0.0, 100.0]));
         assert!(prop_def("DampedSpringJoint2D", "rest_length").is_some());
         assert!(is_2d("GrooveJoint2D"));
+    }
+
+    #[test]
+    fn todo_no_tem_script_anexado_vazio() {
+        // O script é propriedade do tipo base: vale para qualquer nó, inclusive os que herdam de Node2D.
+        let def = prop_def("Sprite2D", "script").expect("Node.script");
+        assert_eq!(def.kind, PropKind::Str);
+        assert_eq!(def.default, json!(""));
+        assert_eq!(def.group, "Lógica");
+        assert!(prop_def("Timer", "script").is_some());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod assets;
+mod logic;
 mod project;
 mod settings;
 
@@ -17,6 +18,13 @@ pub fn run() {
             project::save_scene,
             settings::load_settings,
             settings::save_settings,
+            logic::list_scripts,
+            logic::load_script,
+            logic::save_script,
+            logic::create_script,
+            logic::rename_script,
+            logic::duplicate_script,
+            logic::delete_script,
             assets::list_dir,
             assets::list_assets,
             assets::read_file,

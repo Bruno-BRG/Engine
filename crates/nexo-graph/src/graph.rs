@@ -58,6 +58,34 @@ pub struct Comment {
     pub size: [f64; 2],
 }
 
+/// Tipo resolvido de um pino (VIS-013). `ty` vazio quer dizer que o pino ainda não tem tipo: um reroute sem
+/// fio de entrada, ou uma variável que não existe.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PinInfo {
+    pub node: u64,
+    pub pin: String,
+    pub output: bool,
+    pub ty: Option<PinType>,
+}
+
+/// Ids novos do que foi colado (VIS-012): os nós e as caixas, na ordem do trecho.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Colados {
+    pub nodes: Vec<u64>,
+    pub comments: Vec<u64>,
+}
+
+/// Trecho copiado do grafo (VIS-012): os nós, os fios entre eles, as caixas de comentário e as variáveis que os
+/// nós usam. Colar gera ids novos, então o trecho cola no mesmo grafo ou em outro script.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fragment {
+    pub nodes: Vec<GraphNode>,
+    pub wires: Vec<Wire>,
+    pub comments: Vec<Comment>,
+    #[serde(default)]
+    pub variables: Vec<Variable>,
+}
+
 /// Erro de validação ou de compilação. `node` é o nó onde o problema foi achado, quando há um.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompileError {
@@ -106,6 +134,14 @@ struct GraphFile {
     comments: Vec<Comment>,
     #[serde(default)]
     proximo_id: u64,
+}
+
+/// Par (nó, pino) como `PinRef`.
+fn pin_ref((node, pin): (u64, &str)) -> PinRef {
+    PinRef {
+        node,
+        pin: pin.to_string(),
+    }
 }
 
 /// Definição do tipo do nó na biblioteca, ou erro quando o tipo não existe.
@@ -312,17 +348,318 @@ impl Graph {
         Ok(())
     }
 
+    /// Troca o texto, a posição e o tamanho de uma caixa de comentário (VIS-014).
+    pub fn set_comment(
+        &mut self,
+        id: u64,
+        text: &str,
+        position: [f64; 2],
+        size: [f64; 2],
+    ) -> Result<(), String> {
+        let c = self
+            .comments
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("comentário {id} não existe no grafo"))?;
+        c.text = text.to_string();
+        c.position = position;
+        c.size = size;
+        Ok(())
+    }
+
+    /// Move um nó ou um reroute (VIS-012). Não mexe nos fios: eles seguem os pinos.
+    pub fn set_position(&mut self, id: u64, position: [f64; 2]) -> Result<(), String> {
+        if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+            n.position = position;
+            return Ok(());
+        }
+        let c = self
+            .comments
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("nó {id} não existe no grafo"))?;
+        c.position = position;
+        Ok(())
+    }
+
+    /// Tira o valor embutido de uma entrada: ela volta ao padrão da biblioteca. Devolve se havia valor.
+    pub fn remove_value(&mut self, node: u64, pin: &str) -> bool {
+        self.nodes
+            .iter_mut()
+            .find(|n| n.id == node)
+            .is_some_and(|n| n.values.remove(pin).is_some())
+    }
+
+    /// Declara ou troca uma variável (VIS-022). Se o nome já existe, a variável é trocada no mesmo lugar, para a
+    /// ordem da lista não mudar. As mesmas regras de `add_variable` valem.
+    pub fn set_variable(
+        &mut self,
+        name: &str,
+        ty: PinType,
+        default: Value,
+        exported: bool,
+    ) -> Result<(), String> {
+        if self.variable(name).is_none() {
+            return self.add_variable(name, ty, default, exported);
+        }
+        if name.trim().is_empty() {
+            return Err("nome de variável vazio".into());
+        }
+        if ty == PinType::Flow {
+            return Err(format!("variável '{name}' não pode ser do tipo fluxo"));
+        }
+        if default.ty() != ty {
+            return Err(format!(
+                "padrão de '{name}' é {} mas a variável é {}",
+                default.ty().nome(),
+                ty.nome()
+            ));
+        }
+        if let Some(v) = self.variables.iter_mut().find(|v| v.name == name) {
+            *v = Variable {
+                name: name.to_string(),
+                ty,
+                default,
+                exported,
+            };
+        }
+        Ok(())
+    }
+
+    /// Copia um trecho: os nós e as caixas pedidos, os fios que ficam inteiros dentro da seleção e as variáveis
+    /// que os nós usam (VIS-012). Não muda o grafo.
+    pub fn copy_fragment(&self, nodes: &[u64], comments: &[u64]) -> Fragment {
+        let nos: HashSet<u64> = nodes.iter().copied().collect();
+        let caixas: HashSet<u64> = comments.iter().copied().collect();
+        let copied: Vec<GraphNode> = self
+            .nodes
+            .iter()
+            .filter(|n| nos.contains(&n.id))
+            .cloned()
+            .collect();
+        let mut variables: Vec<Variable> = Vec::new();
+        for n in &copied {
+            if n.kind != "GetVariable" && n.kind != "SetVariable" {
+                continue;
+            }
+            if let Some(v) = self.variable(&texto_do(n, "name"))
+                && !variables.iter().any(|x| x.name == v.name)
+            {
+                variables.push(v.clone());
+            }
+        }
+        Fragment {
+            nodes: copied,
+            wires: self
+                .wires
+                .iter()
+                .filter(|w| nos.contains(&w.from.node) && nos.contains(&w.to.node))
+                .cloned()
+                .collect(),
+            comments: self
+                .comments
+                .iter()
+                .filter(|c| caixas.contains(&c.id))
+                .cloned()
+                .collect(),
+            variables,
+        }
+    }
+
+    /// Cola um trecho deslocado por (dx, dy) e devolve os ids novos dos nós, na ordem do trecho. Recusa o trecho
+    /// inteiro se ele usa um tipo de nó que não existe ou uma variável com outro tipo; nesse caso o grafo não muda.
+    /// Variáveis que o trecho usa e o grafo não tem são criadas.
+    pub fn paste_fragment(&mut self, f: &Fragment, dx: f64, dy: f64) -> Result<Colados, String> {
+        for n in &f.nodes {
+            if library::find(&n.kind).is_none() {
+                return Err(format!("tipo de nó desconhecido: '{}'", n.kind));
+            }
+        }
+        for v in &f.variables {
+            if self.variable(&v.name).is_some_and(|atual| atual.ty != v.ty) {
+                return Err(format!(
+                    "já existe a variável '{}' com outro tipo",
+                    v.name
+                ));
+            }
+        }
+        for v in &f.variables {
+            if self.variable(&v.name).is_none() {
+                self.variables.push(v.clone());
+            }
+        }
+        let mut mapa: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut nos = Vec::with_capacity(f.nodes.len());
+        let mut caixas = Vec::with_capacity(f.comments.len());
+        for n in &f.nodes {
+            let id = self.novo_id();
+            mapa.insert(n.id, id);
+            let mut copia = n.clone();
+            copia.id = id;
+            copia.position = [n.position[0] + dx, n.position[1] + dy];
+            self.nodes.push(copia);
+            nos.push(id);
+        }
+        for c in &f.comments {
+            let id = self.novo_id();
+            self.comments.push(Comment {
+                id,
+                text: c.text.clone(),
+                position: [c.position[0] + dx, c.position[1] + dy],
+                size: c.size,
+            });
+            caixas.push(id);
+        }
+        for w in &f.wires {
+            if let (Some(&de), Some(&para)) = (mapa.get(&w.from.node), mapa.get(&w.to.node)) {
+                self.wires.push(Wire {
+                    from: PinRef {
+                        node: de,
+                        pin: w.from.pin.clone(),
+                    },
+                    to: PinRef {
+                        node: para,
+                        pin: w.to.pin.clone(),
+                    },
+                });
+            }
+        }
+        Ok(Colados {
+            nodes: nos,
+            comments: caixas,
+        })
+    }
+
+    /// Colapsa uma seleção de nós de fluxo num nó Função com o nome dado (VIS-015). O corpo da função recebe os nós
+    /// selecionados, ligados como estavam. No lugar da seleção fica um Chamar função, ligado ao fluxo de fora.
+    /// Só colapsa o que as funções já expressam: no máximo uma entrada e uma saída de fluxo na fronteira, e
+    /// nenhum fio de dados cruzando a fronteira (funções ainda não têm pinos, VIS-026). Macros ficam para depois.
+    /// Em caso de erro, o grafo fica como estava. Devolve o id do Chamar função.
+    pub fn collapse_to_function(&mut self, nodes: &[u64], name: &str) -> Result<u64, String> {
+        let antes = self.clone();
+        let antigos: Vec<String> = antes.validate().into_iter().map(|e| e.message).collect();
+        let res = self.colapsa(nodes, name).and_then(|c| {
+            match self.validate().into_iter().find(|e| !antigos.contains(&e.message)) {
+                Some(e) => Err(e.message),
+                None => Ok(c),
+            }
+        });
+        if res.is_err() {
+            *self = antes;
+        }
+        res
+    }
+
+    fn colapsa(&mut self, nodes: &[u64], name: &str) -> Result<u64, String> {
+        let nome = name.trim();
+        if nome.is_empty() {
+            return Err("a função precisa de um nome".into());
+        }
+        if self
+            .nodes
+            .iter()
+            .any(|n| n.kind == "Function" && texto_do(n, "name") == nome)
+        {
+            return Err(format!("função '{nome}' repetida"));
+        }
+        let sel: HashSet<u64> = nodes.iter().copied().collect();
+        let dentro: Vec<&GraphNode> = self.nodes.iter().filter(|n| sel.contains(&n.id)).collect();
+        if dentro.is_empty() {
+            return Err("nenhum nó selecionado".into());
+        }
+        for n in &dentro {
+            let def = def_of(n)?;
+            if def.event || n.kind == "Function" {
+                return Err(format!("{} não pode entrar numa função", n.etiqueta()));
+            }
+        }
+        let mut entradas = Vec::new();
+        let mut saidas = Vec::new();
+        for w in &self.wires {
+            let de_dentro = sel.contains(&w.from.node);
+            if de_dentro == sel.contains(&w.to.node) {
+                continue;
+            }
+            if !self.is_flow_wire(w) {
+                return Err(format!(
+                    "o fio de dados de {}.{} atravessa a seleção: funções ainda não têm pinos de entrada e saída",
+                    w.from.node, w.from.pin
+                ));
+            }
+            if de_dentro {
+                saidas.push(w.clone());
+            } else {
+                entradas.push(w.clone());
+            }
+        }
+        if entradas.len() > 1 {
+            return Err("a seleção tem mais de uma entrada de fluxo".into());
+        }
+        if saidas.len() > 1 {
+            return Err("a seleção tem mais de uma saída de fluxo".into());
+        }
+
+        let n = dentro.len() as f64;
+        let centro = [
+            dentro.iter().map(|n| n.position[0]).sum::<f64>() / n,
+            dentro.iter().map(|n| n.position[1]).sum::<f64>() / n,
+        ];
+        let topo = dentro
+            .iter()
+            .map(|n| n.position[1])
+            .fold(f64::INFINITY, f64::min);
+        let esquerda = dentro
+            .iter()
+            .map(|n| n.position[0])
+            .fold(f64::INFINITY, f64::min);
+        let f = self.add_node("Function", [esquerda, topo - 160.0])?;
+        self.set_value(f, "name", Value::String(nome.to_string()))?;
+        let c = self.add_node("CallFunction", centro)?;
+        self.set_value(c, "name", Value::String(nome.to_string()))?;
+
+        self.wires
+            .retain(|w| !entradas.contains(w) && !saidas.contains(w));
+        let exec = |node: u64| PinRef {
+            node,
+            pin: "exec".into(),
+        };
+        if let Some(e) = entradas.first() {
+            // Quem chamava a entrada agora chama o Chamar função, e o corpo começa onde a entrada tocava.
+            self.wires.push(Wire {
+                from: e.from.clone(),
+                to: exec(c),
+            });
+            self.wires.push(Wire {
+                from: exec(f),
+                to: e.to.clone(),
+            });
+        }
+        if let Some(s) = saidas.first() {
+            // Quando a função termina, o fluxo segue para onde a saída ia.
+            self.wires.push(Wire {
+                from: exec(c),
+                to: s.to.clone(),
+            });
+        }
+        Ok(c)
+    }
+
     /// Liga a saída `from` (nó, pino) à entrada `to`. Recusa pino inexistente, tipos diferentes, entrada já
     /// ligada e ciclo. Em caso de erro, o grafo fica como estava.
     pub fn connect(&mut self, from: (u64, &str), to: (u64, &str)) -> Result<(), String> {
-        let from = PinRef {
-            node: from.0,
-            pin: from.1.to_string(),
-        };
-        let to = PinRef {
-            node: to.0,
-            pin: to.1.to_string(),
-        };
+        self.can_connect(from, to)?;
+        self.wires.push(Wire {
+            from: pin_ref(from),
+            to: pin_ref(to),
+        });
+        Ok(())
+    }
+
+    /// Diz se `connect` aceitaria a ligação, sem mudar o grafo. Devolve o tipo do fio, ou o motivo da recusa
+    /// (VIS-013): o editor mostra o motivo ao soltar o fio e ao passar sobre a entrada.
+    pub fn can_connect(&self, from: (u64, &str), to: (u64, &str)) -> Result<PinType, String> {
+        let from = pin_ref(from);
+        let to = pin_ref(to);
         let ty = self.endpoint_type(&from, &to)?;
         // Cada entrada aceita um fio só. Vale para fluxo e para dados.
         if self.wires.iter().any(|w| w.to == to) {
@@ -340,8 +677,33 @@ impl Graph {
                 to.node, from.node
             ));
         }
-        self.wires.push(Wire { from, to });
-        Ok(())
+        Ok(ty)
+    }
+
+    /// Tipo resolvido de todos os pinos do grafo (VIS-013): o que o editor usa para colorir e dar forma aos pinos,
+    /// e para destacar as entradas que aceitam um fio arrastado. `ty` vem vazio quando o pino ainda não tem tipo.
+    pub fn pins(&self) -> Vec<PinInfo> {
+        let mut out = Vec::new();
+        for node in &self.nodes {
+            let Ok(def) = def_of(node) else { continue };
+            for p in &def.inputs {
+                out.push(PinInfo {
+                    node: node.id,
+                    pin: p.name.to_string(),
+                    output: false,
+                    ty: self.input_type(node, p.name).ok(),
+                });
+            }
+            for p in &def.outputs {
+                out.push(PinInfo {
+                    node: node.id,
+                    pin: p.name.to_string(),
+                    output: true,
+                    ty: self.output_type(node, p.name).ok(),
+                });
+            }
+        }
+        out
     }
 
     /// Tipo do fio de `from` até `to`, se as duas pontas existem, têm o pino e o tipo bate. A entrada de um
@@ -932,6 +1294,173 @@ mod tests {
             erros.iter().any(|e| e.message.contains("ciclo de dados")),
             "{erros:?}"
         );
+    }
+
+    #[test]
+    fn can_connect_diz_o_motivo_sem_mudar_o_grafo() {
+        let mut g = Graph::default();
+        let cmp = adiciona(&mut g, "Greater");
+        let soma = adiciona(&mut g, "Add");
+        let erro = g.can_connect((cmp, "result"), (soma, "a")).unwrap_err();
+        assert!(erro.contains("incompatíveis"), "{erro}");
+        let mult = adiciona(&mut g, "Multiply");
+        assert_eq!(g.can_connect((soma, "result"), (mult, "a")), Ok(PinType::Float));
+        assert!(g.wires.is_empty());
+    }
+
+    #[test]
+    fn pins_mostram_tipo_resolvido_de_variavel_e_de_reroute() {
+        let mut g = Graph::default();
+        g.add_variable("vida", PinType::Int, Value::Int(3), false)
+            .unwrap();
+        let lê = adiciona(&mut g, "GetVariable");
+        g.set_value(lê, "name", Value::String("vida".into())).unwrap();
+        let r = g.add_reroute([0.0, 0.0]);
+        let pinos = g.pins();
+        let tipo = |node: u64, pin: &str| {
+            pinos
+                .iter()
+                .find(|p| p.node == node && p.pin == pin)
+                .and_then(|p| p.ty)
+        };
+        assert_eq!(tipo(lê, "value"), Some(PinType::Int));
+        // Sem fio de entrada, o reroute ainda não tem tipo.
+        assert_eq!(tipo(r, "out"), None);
+        let soma = adiciona(&mut g, "Add");
+        g.connect((lê, "value"), (r, "in")).unwrap();
+        assert_eq!(g.pins().iter().find(|p| p.node == r && p.pin == "out").unwrap().ty, Some(PinType::Int));
+        assert!(g.connect((r, "out"), (soma, "a")).unwrap_err().contains("incompatíveis"));
+    }
+
+    #[test]
+    fn copia_e_cola_entre_grafos_com_ids_novos() {
+        let mut origem = Graph::default();
+        origem
+            .add_variable("vida", PinType::Float, Value::Float(1.0), false)
+            .unwrap();
+        let ev = adiciona(&mut origem, "OnReady");
+        let sv = adiciona(&mut origem, "SetVariable");
+        origem.set_value(sv, "name", Value::String("vida".into())).unwrap();
+        let soma = adiciona(&mut origem, "Add");
+        origem.connect((ev, "exec"), (sv, "exec")).unwrap();
+        origem.connect((soma, "result"), (sv, "value")).unwrap();
+        let c = origem.add_comment("trecho", [5.0, 5.0], [80.0, 40.0]);
+        let trecho = origem.copy_fragment(&[ev, sv, soma], &[c]);
+        // A variável vai junto, porque o SetVariable a usa. Os dois fios ficam dentro da seleção.
+        assert_eq!(trecho.variables.len(), 1);
+        assert_eq!(trecho.wires.len(), 2);
+
+        let mut destino = Graph::default();
+        let antes = adiciona(&mut destino, "Add");
+        let novos = destino.paste_fragment(&trecho, 40.0, 40.0).unwrap();
+        assert_eq!(novos.nodes.len(), 3);
+        assert_eq!(novos.comments.len(), 1);
+        assert!(novos.nodes.iter().all(|id| *id > antes));
+        assert!(destino.variable("vida").is_some());
+        assert_eq!(destino.wires.len(), 2);
+        assert_eq!(destino.comments[0].position, [45.0, 45.0]);
+        assert!(destino.validate().is_empty(), "{:?}", destino.validate());
+        // Colar de novo gera ids novos, sem reaproveitar nenhum.
+        let de_novo = destino.paste_fragment(&trecho, 0.0, 0.0).unwrap();
+        assert!(de_novo.nodes.iter().all(|id| !novos.nodes.contains(id)));
+    }
+
+    #[test]
+    fn colar_recusa_variavel_de_outro_tipo_sem_mudar_o_grafo() {
+        let mut origem = Graph::default();
+        origem
+            .add_variable("vida", PinType::Float, Value::Float(1.0), false)
+            .unwrap();
+        let lê = adiciona(&mut origem, "GetVariable");
+        origem.set_value(lê, "name", Value::String("vida".into())).unwrap();
+        let trecho = origem.copy_fragment(&[lê], &[]);
+
+        let mut destino = Graph::default();
+        destino
+            .add_variable("vida", PinType::Bool, Value::Bool(true), false)
+            .unwrap();
+        let antes = destino.clone();
+        assert!(destino.paste_fragment(&trecho, 0.0, 0.0).unwrap_err().contains("outro tipo"));
+        assert_eq!(destino, antes);
+    }
+
+    #[test]
+    fn colapsar_seleção_em_funcao_mantem_o_fluxo_e_compila() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let p1 = adiciona(&mut g, "Print");
+        let p2 = adiciona(&mut g, "Print");
+        let p3 = adiciona(&mut g, "Print");
+        g.connect((ev, "exec"), (p1, "exec")).unwrap();
+        g.connect((p1, "exec"), (p2, "exec")).unwrap();
+        g.connect((p2, "exec"), (p3, "exec")).unwrap();
+        let chamada = g.collapse_to_function(&[p1, p2], "Passos").unwrap();
+        // O evento agora chama a função, e a função chega a p3 pelo fim do corpo.
+        assert!(g.wires.iter().any(|w| w.from.node == ev && w.to.node == chamada));
+        assert!(g.wires.iter().any(|w| w.from.node == chamada && w.to.node == p3));
+        assert!(g.validate().is_empty(), "{:?}", g.validate());
+        assert!(crate::ir::compile(&g).is_ok());
+        // Sem a seleção, nada muda: o nome repetido e o fio de dados são recusados.
+        let antes = g.clone();
+        assert!(g.collapse_to_function(&[p3], "Passos").unwrap_err().contains("repetida"));
+        assert_eq!(g, antes);
+    }
+
+    #[test]
+    fn colapsar_recusa_fio_de_dados_na_fronteira() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let imp = adiciona(&mut g, "Print");
+        let texto = adiciona(&mut g, "Concat");
+        g.connect((ev, "exec"), (imp, "exec")).unwrap();
+        g.connect((texto, "result"), (imp, "msg")).unwrap();
+        // O Concat só carrega dado para o Print de fora: a seleção não pode virar função sem pinos.
+        let erro = g.collapse_to_function(&[texto], "Texto").unwrap_err();
+        assert!(erro.contains("atravessa"), "{erro}");
+        assert_eq!(g.wires.len(), 2);
+        assert!(g.nodes.iter().all(|n| n.kind != "Function"));
+    }
+
+    #[test]
+    fn variavel_trocada_fica_no_mesmo_lugar_e_recusa_padrao_errado() {
+        let mut g = Graph::default();
+        g.add_variable("a", PinType::Float, Value::Float(1.0), false).unwrap();
+        g.add_variable("b", PinType::Float, Value::Float(2.0), false).unwrap();
+        g.set_variable("a", PinType::Float, Value::Float(9.0), true).unwrap();
+        assert_eq!(g.variables[0].name, "a");
+        assert_eq!(g.variables[0].default, Value::Float(9.0));
+        assert!(g.variables[0].exported);
+        assert!(g.set_variable("a", PinType::Bool, Value::Float(1.0), false).is_err());
+        assert!(g.set_variable("c", PinType::Flow, Value::Bool(true), false).is_err());
+    }
+
+    #[test]
+    fn remover_valor_volta_ao_padrao_e_mover_no_ou_comentario() {
+        let mut g = Graph::default();
+        let soma = adiciona(&mut g, "Add");
+        g.set_value(soma, "a", Value::Float(4.0)).unwrap();
+        assert!(g.remove_value(soma, "a"));
+        assert!(!g.remove_value(soma, "a"));
+        g.set_position(soma, [7.0, 8.0]).unwrap();
+        assert_eq!(g.node(soma).unwrap().position, [7.0, 8.0]);
+        let c = g.add_comment("oi", [0.0, 0.0], [10.0, 10.0]);
+        g.set_comment(c, "tchau", [1.0, 2.0], [30.0, 40.0]).unwrap();
+        assert_eq!(g.comments[0].text, "tchau");
+        g.set_position(c, [3.0, 4.0]).unwrap();
+        assert_eq!(g.comments[0].position, [3.0, 4.0]);
+        assert!(g.set_position(99, [0.0, 0.0]).is_err());
+    }
+
+    #[test]
+    fn evento_de_fisica_compila_com_delta() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnPhysicsProcess");
+        let soma = adiciona(&mut g, "Add");
+        g.connect((ev, "delta"), (soma, "a")).unwrap();
+        g.set_value(soma, "b", Value::Float(0.0)).unwrap();
+        // Sem nenhum fio de fluxo, o programa existe e fica vazio: o evento é reconhecido.
+        let c = crate::ir::compile(&g).unwrap();
+        assert_eq!(c.programs[0].event, "OnPhysicsProcess");
     }
 
     #[test]

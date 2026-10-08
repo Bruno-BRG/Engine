@@ -3,7 +3,7 @@
   import { dragState } from './drag.svelte';
   import { thumbGen, thumbUrl } from './thumbs.svelte';
   import { editableStem, formatSize, kindLabel, withExtension } from './names';
-  import { Folder, Image as ImageIcon, Music, Type, Clapperboard, File } from '@lucide/svelte';
+  import { Folder, Image as ImageIcon, Music, Type, Clapperboard, Workflow, File } from '@lucide/svelte';
 
   let {
     entry,
@@ -37,6 +37,7 @@
     audio: Music,
     font: Type,
     scene: Clapperboard,
+    script: Workflow,
     other: File,
   };
   const Icon = $derived(ICONS[entry.kind] ?? File);
@@ -107,7 +108,7 @@
     title={entry.rel}
     data-dir={entry.isDir ? entry.rel : undefined}
     onpointerdown={(e) => { if (!renaming) onpress(e); }}
-    ondblclick={() => { if (!renaming && entry.isDir) onopen(); }}
+    ondblclick={() => { if (!renaming && (entry.isDir || entry.kind === 'script')) onopen(); }}
     oncontextmenu={(e) => { e.stopPropagation(); oncontext(e); }}
   >
     <span class="ico"><Icon size={12} /></span>
@@ -147,7 +148,7 @@
     tabindex="-1"
     data-dir={entry.isDir ? entry.rel : undefined}
     onpointerdown={(e) => { if (!renaming) onpress(e); }}
-    ondblclick={() => { if (!renaming && entry.isDir) onopen(); }}
+    ondblclick={() => { if (!renaming && (entry.isDir || entry.kind === 'script')) onopen(); }}
     oncontextmenu={(e) => { e.stopPropagation(); oncontext(e); }}
   >
     <div class="thumb">

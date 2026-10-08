@@ -1,8 +1,8 @@
 // Carregamento único do runtime WASM: o viewport (desenho) e o editor de cena (árvore de nós)
 // compartilham o mesmo módulo.
-import init, { SceneEditor, Viewport } from './pkg/nexo_runtime_web.js';
+import init, { GraphEditor, SceneEditor, Viewport } from './pkg/nexo_runtime_web.js';
 
-export type { Viewport, SceneEditor };
+export type { Viewport, SceneEditor, GraphEditor };
 
 let ready: Promise<unknown> | null = null;
 
@@ -27,6 +27,18 @@ export async function createSceneEditor(): Promise<SceneEditor> {
 /** Registro de tipos de nó em JSON (método estático do WASM, sem instância). */
 export function readNodeRegistry(): string {
   return SceneEditor.registry();
+}
+
+/** Grafo de lógica vazio (VIS-020). Um por script aberto. */
+export async function createGraphEditor(): Promise<GraphEditor> {
+  await loadRuntime();
+  return new GraphEditor();
+}
+
+/** Biblioteca de nós da lógica em JSON (estática). Depende só de o módulo WASM estar carregado. */
+export async function readNodeLibrary(): Promise<string> {
+  await loadRuntime();
+  return GraphEditor.node_library();
 }
 
 /** Semente de 52 bits para os UIDs (cabe em um número de JavaScript sem perda). */

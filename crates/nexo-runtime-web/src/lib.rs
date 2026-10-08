@@ -6,7 +6,9 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 mod editor;
+mod logic;
 pub use editor::SceneEditor;
+pub use logic::GraphEditor;
 
 #[wasm_bindgen]
 pub struct Viewport {
