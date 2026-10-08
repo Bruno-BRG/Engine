@@ -8,17 +8,27 @@ use crate::editor::{SceneEditor, js_err, to_json};
 use crate::host::Mundo;
 use crate::scripts::{self, Instancia, registrar};
 use nexo_core::Uid;
-use nexo_graph::{Frame, Host, TraceEvent, VmError};
+use nexo_graph::{Frame, Host, Trace, VmError};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
-/// Trace event as JSON: {"Executou": {evento, node}} or {"Valor": {node, valor}}, as the TypeScript reads it.
-fn evento_json(e: &TraceEvent) -> Json {
-    match e {
-        TraceEvent::Executou { evento, node } => json!({"Executou": {"evento": evento, "node": node}}),
-        TraceEvent::Valor { node, valor } => json!({"Valor": {"node": node, "valor": valor}}),
-    }
+/// Trace as JSON, as the TypeScript reads it (VIS-030): {"nodes": [node ids], "wires": [{"from", "pin", "to"}],
+/// "values": [{"node", "value"}]}. The texts in the values are already cut.
+fn trace_json(trace: &Trace) -> Json {
+    json!({
+        "nodes": &trace.nodes,
+        "wires": trace
+            .wires
+            .iter()
+            .map(|w| json!({"from": w.from, "pin": w.pin, "to": w.to}))
+            .collect::<Vec<Json>>(),
+        "values": trace
+            .values
+            .iter()
+            .map(|(node, value)| json!({"node": node, "value": value}))
+            .collect::<Vec<Json>>(),
+    })
 }
 
 /// Call stack frame as JSON, as the TypeScript panel reads it (DBG-003): {"kind": "event" | "function", "node",
@@ -66,18 +76,18 @@ impl SceneEditor {
         self.atualizar_depuracao();
     }
 
-    /// Trace of the chosen instance since the last call, as JSON (a list of events, see `evento_json`). Empties the
-    /// queue. An empty list without a play session or without a chosen instance.
+    /// Trace of the chosen instance since the last call, as JSON (see `trace_json`). Clears it. An empty trace without
+    /// a play session or without a chosen instance.
     pub fn debug_trace(&mut self) -> Result<String, JsError> {
         let escolhida = self.selecionada;
-        let eventos: Vec<Json> = match (self.play.as_mut(), escolhida) {
+        let trace = match (self.play.as_mut(), escolhida) {
             (Some(p), Some(uid)) => match p.instancias.iter_mut().find(|i| i.dono == uid) {
-                Some(inst) => inst.tomar_rastro().iter().map(evento_json).collect(),
-                None => Vec::new(),
+                Some(inst) => inst.tomar_rastro(),
+                None => Trace::default(),
             },
-            _ => Vec::new(),
+            _ => Trace::default(),
         };
-        to_json(&eventos)
+        to_json(&trace_json(&trace))
     }
 
     /// State of the instances of the play session, as JSON: [{uid, pausada, node, evento, stack}]. `pausada` is also
@@ -166,6 +176,32 @@ impl SceneEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trace goes to the panel as nodes, wires (by nodes and pin) and values, with no trace event per operation.
+    #[test]
+    fn trace_json_has_the_shape_the_canvas_reads() {
+        use nexo_graph::{FlowWire, Value};
+        let mut trace = Trace::default();
+        trace.nodes.insert(3);
+        trace.wires.insert(FlowWire {
+            from: 3,
+            pin: "true",
+            to: 4,
+        });
+        trace.values.insert(4, Value::Int(7));
+        assert_eq!(
+            trace_json(&trace),
+            json!({
+                "nodes": [3],
+                "wires": [{"from": 3, "pin": "true", "to": 4}],
+                "values": [{"node": 4, "value": {"Int": 7}}],
+            })
+        );
+        assert_eq!(
+            trace_json(&Trace::default()),
+            json!({"nodes": [], "wires": [], "values": []})
+        );
+    }
 
     /// Checks only the JSON of each frame kind. It does not cover the panel, the double-click, or the stack
     /// contents at a pause (those are tested in the graph crate and not in the editor).
