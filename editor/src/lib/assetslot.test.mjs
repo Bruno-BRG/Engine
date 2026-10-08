@@ -39,7 +39,7 @@ test('folders, scenes, scripts, fonts and other files are refused by both slots'
     for (const slot of ['texture', 'audio']) {
       const r = checkSlotDrop(slot, { name: 'x', kind, uid: null });
       assert.equal(r.ok, false, `${kind} into ${slot}`);
-      assert.match(r.message, new RegExp(`é ${noun}\.`), `${kind} into ${slot}`);
+      assert.match(r.message, new RegExp(`é ${noun}\\.`), `${kind} into ${slot}`);
     }
   }
 });

@@ -1,8 +1,8 @@
-// Arrastar um item do painel Projeto para uma pasta ou para um campo de recurso do Inspector (INS-003).
-// Usa o ponteiro, e não o arrastar nativo do HTML5: no Windows, com o tratador de arrastar do Tauri ligado,
-// o arrastar HTML5 não chega ao webview.
-// Os destinos são os elementos com `data-dir` (pasta: o valor é o caminho relativo da pasta) e os campos
-// registrados com a action `assetSlot` (`data-asset-slot`).
+// Drag an item of the Project panel onto a folder or onto a resource field of the Inspector (INS-003).
+// Uses the pointer, not the native HTML5 drag: on Windows, with the Tauri drag handler on, HTML5 drag
+// does not reach the webview.
+// Targets are the elements with `data-dir` (the value is the folder's relative path) and the fields
+// registered with the `assetSlot` action (`data-asset-slot`).
 import type { SlotKind } from '$lib/assetslot';
 
 export const dragState = $state<{ from: string | null; over: string | null; overSlot: HTMLElement | null }>({
@@ -11,13 +11,13 @@ export const dragState = $state<{ from: string | null; over: string | null; over
   overSlot: null,
 });
 
-/** Campo de recurso do Inspector que aceita um asset solto. `drop` recebe o UID do asset (INS-003). */
+/** Resource field of the Inspector that accepts a dropped asset. `drop` receives the asset UID (INS-003). */
 export interface AssetSlot {
   kind: SlotKind;
   drop: (uid: string) => void;
 }
 
-/** Onde a soltura caiu: uma pasta (caminho relativo) ou um campo de recurso. */
+/** Where the drop landed: a folder (relative path) or a resource field. */
 export type DropTarget = { kind: 'dir'; rel: string } | { kind: 'slot'; el: HTMLElement; slot: AssetSlot };
 
 /** Distância em pixels a partir da qual o clique vira arraste. */
@@ -47,7 +47,8 @@ export function assetSlot(node: HTMLElement, slot: AssetSlot) {
 /** The drop target under the pointer, or null. */
 function targetAt(x: number, y: number): DropTarget | null {
   const hit = document.elementFromPoint(x, y);
-  const dir = hit?.closest('[data-dir]');
+  // Logic graph pins also carry data-dir but are not folders: a drop on one must never move a file.
+  const dir = hit?.closest('[data-dir]:not([data-pin])');
   if (dir) return { kind: 'dir', rel: dir.getAttribute('data-dir') ?? '' };
   const el = hit?.closest<HTMLElement>('[data-asset-slot]');
   const slot = el ? slots.get(el) : undefined;

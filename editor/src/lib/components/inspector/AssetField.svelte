@@ -2,7 +2,7 @@
   // Campo que aponta para um asset do projeto pelo UID: textura (Sprite2D.texture) ou áudio
   // (AudioStreamPlayer.stream). Lista só os assets do tipo pedido (AUD-002). Para áudio, o botão ao lado
   // ouve o arquivo, com o mesmo AudioPreview do painel de Projeto.
-  // Um asset arrastado do painel Projeto e solto aqui grava a mesma referência que a lista (INS-003).
+  // An asset dragged from the Project panel and dropped here records the same reference as the list (INS-003).
   import { assets } from '$lib/state/assets.svelte';
   import { assetSlot, dragState } from '../project/drag.svelte';
   import AudioPreview from '../AudioPreview.svelte';
