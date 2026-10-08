@@ -3,6 +3,7 @@
 use nexo_core::{Camera, SPRITE_FLOATS, SpriteInstance};
 use nexo_render::Renderer;
 use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
 mod debug;
@@ -23,6 +24,8 @@ pub struct Viewport {
 #[wasm_bindgen]
 impl Viewport {
     /// Cria o viewport sobre um canvas. Usa WebGPU quando disponível e WebGL2 como reserva.
+    /// Só existe no alvo WASM: `SurfaceTarget::Canvas` só é compilado para `wasm32`.
+    #[cfg(target_arch = "wasm32")]
     pub async fn create(canvas: HtmlCanvasElement) -> Result<Viewport, JsError> {
         let (w, h) = (canvas.width(), canvas.height());
         let instance = wgpu::util::new_instance_with_webgpu_detection(wgpu::InstanceDescriptor {
