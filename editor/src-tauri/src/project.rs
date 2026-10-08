@@ -304,6 +304,113 @@ pub fn save_scene(path: String, text: String) -> CmdResult<()> {
     write_atomic(&Path::new(&path).join(MAIN_SCENE), text.as_bytes())
 }
 
+/// Result of `rename_material_in_scenes`. `changed` lists the scenes rewritten, `failed` the scenes that could not
+/// be read or written, and `skipped` the folders that could not be listed plus the scenes that need the change
+/// but are in an old format, which are left alone.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneRenameReport {
+    pub changed: Vec<String>,
+    pub failed: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+/// Folders the scene walk does not enter: build output and dependencies.
+const SKIPPED_DIRS: &[&str] = &["target", "node_modules"];
+
+/// Relative paths (with `/`) of every scene file in the project, in any folder. Hidden items, symbolic links and
+/// `SKIPPED_DIRS` are left out. A subfolder that fails to list goes to `skipped` and the walk goes on; only a
+/// failure to read the project root is returned as an error.
+fn scene_files(dir: &Path, rel: &str, out: &mut Vec<String>, skipped: &mut Vec<String>) -> CmdResult<()> {
+    for entry in fs::read_dir(dir).map_err(err)? {
+        let entry = entry.map_err(err)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        let kind = entry.file_type().map_err(err)?;
+        if kind.is_dir() {
+            if SKIPPED_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            if let Err(e) = scene_files(&entry.path(), &child, out, skipped) {
+                skipped.push(format!("{child}: {e}"));
+            }
+        } else if kind.is_file() && name.to_lowercase().ends_with(".scene.ron") {
+            out.push(child);
+        }
+    }
+    Ok(())
+}
+
+/// What a material rename did to one scene file.
+enum SceneRename {
+    /// No node held the old name; the file was not touched.
+    Unchanged,
+    /// The file was rewritten.
+    Changed,
+    /// The file needs the change but is left alone; the reason is shown to the user.
+    Skipped(String),
+}
+
+/// Renames the physics material in one scene file. The file is rewritten only if a node changed, and never when
+/// it is in an old format: saving it would migrate it and give its nodes new UIDs.
+fn rename_in_scene_file(path: &Path, from: &str, to: &str) -> CmdResult<SceneRename> {
+    let text = fs::read_to_string(path).map_err(err)?;
+    let mut scene = Scene::from_text(&text, seed_now())?;
+    if scene.rename_prop_value("physics_material", from, to)? == 0 {
+        return Ok(SceneRename::Unchanged);
+    }
+    if !is_format_2_or_later(&text) {
+        return Ok(SceneRename::Skipped(
+            "formato antigo: não regravada, para não trocar os UIDs dos nós".into(),
+        ));
+    }
+    write_atomic(path, scene.to_ron()?.as_bytes())?;
+    Ok(SceneRename::Changed)
+}
+
+/// The project's settings as saved on disk. A project without settings.ron has the defaults.
+fn settings_on_disk(dir: &Path) -> CmdResult<ProjectSettings> {
+    let file = dir.join(crate::settings::SETTINGS_FILE);
+    if !file.is_file() {
+        return Ok(ProjectSettings::default());
+    }
+    let text = fs::read_to_string(&file).map_err(err)?;
+    ProjectSettings::from_ron(&text).map_err(err)
+}
+
+/// Renames a physics material (PHY-023) in the scenes of the project saved on disk. The open scene is always
+/// `MAIN_SCENE`: the editor changes it in memory and saves it on autosave, so its file is never written here.
+/// `to` must already be a material in the saved settings.ron; the caller saves the settings before this call.
+#[tauri::command]
+pub fn rename_material_in_scenes(project: String, from: String, to: String) -> CmdResult<SceneRenameReport> {
+    let dir = PathBuf::from(&project);
+    if !project_file_exists(&dir) {
+        return Err(format!("{project} não é um projeto Nexo"));
+    }
+    let to = to.trim();
+    if to.is_empty() {
+        return Err("O nome não pode ficar vazio".into());
+    }
+    if !settings_on_disk(&dir)?.physics_materials.iter().any(|m| m.name == to) {
+        return Err(format!("Material de física desconhecido nas configurações: {to}"));
+    }
+    let mut files = Vec::new();
+    let mut report = SceneRenameReport::default();
+    scene_files(&dir, "", &mut files, &mut report.skipped)?;
+    for rel in files.into_iter().filter(|rel| rel.as_str() != MAIN_SCENE) {
+        match rename_in_scene_file(&dir.join(&rel), &from, to) {
+            Ok(SceneRename::Changed) => report.changed.push(rel),
+            Ok(SceneRename::Unchanged) => {}
+            Ok(SceneRename::Skipped(why)) => report.skipped.push(format!("{rel}: {why}")),
+            Err(e) => report.failed.push(format!("{rel}: {e}")),
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 pub(crate) mod testes {
     use super::*;
@@ -431,6 +538,79 @@ pub(crate) mod testes {
         assert_eq!(settings, ProjectSettings::default());
         assert!(settings.input.keys("ui_left").contains(&"dpad_left".to_string()));
         assert!(settings.input.keys("ui_accept").contains(&"gamepad_a".to_string()));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renomear_material_nas_cenas_do_disco_poupa_a_cena_aberta() {
+        use nexo_core::settings::PhysicsMaterial;
+        let dir = pasta_temporaria("renomear-cenas");
+        scaffold(&dir, "Teste", "vazio", &cena_v1()).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        // The editor saves the settings before the disk step, so the saved settings already hold the new name.
+        let mut cfg = ProjectSettings::default();
+        cfg.physics_materials.push(PhysicsMaterial {
+            name: "Gelo2".into(),
+            friction: 0.2,
+            bounce: 0.0,
+            rough: false,
+            absorbent: false,
+        });
+        fs::write(dir.join(crate::settings::SETTINGS_FILE), cfg.to_ron().unwrap()).unwrap();
+        // A new scene whose body uses the given material.
+        let com_material = |material: &str| {
+            let mut s = Scene::new_default("Cena", 3);
+            let root = s.roots()[0];
+            let corpo = s.add_node(Some(root), "StaticBody2D", None).unwrap();
+            s.set_prop(corpo, "physics_material", json!(material), None).unwrap();
+            s.to_ron().unwrap()
+        };
+        let pasta = dir.join(SCENE_DIR);
+        save_scene(path.clone(), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("Nova.scene.ron"), com_material("Gelo")).unwrap();
+        fs::create_dir_all(pasta.join("fases")).unwrap();
+        fs::write(pasta.join("fases").join("Fase 2.scene.ron"), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("Borracha.scene.ron"), com_material("Borracha")).unwrap();
+        fs::write(pasta.join(".rascunho.scene.ron"), com_material("Gelo")).unwrap();
+        fs::write(pasta.join("quebrada.scene.ron"), "isto não é ron (").unwrap();
+        // Old format (format 1) that needs the change: reported as skipped and left as it is.
+        let atual = format!("format: {}", nexo_core::SCENE_FORMAT);
+        let antiga = com_material("Gelo").replace(&atual, "format: 1");
+        assert!(antiga.contains("format: 1"), "a cena de teste precisa ter o campo de formato atual");
+        fs::write(pasta.join("antiga.scene.ron"), &antiga).unwrap();
+        // Build output is never entered.
+        fs::create_dir_all(dir.join("target")).unwrap();
+        fs::write(dir.join("target").join("gerada.scene.ron"), com_material("Gelo")).unwrap();
+        let aberta_antes = fs::read_to_string(dir.join(MAIN_SCENE)).unwrap();
+        let borracha_antes = fs::read_to_string(pasta.join("Borracha.scene.ron")).unwrap();
+        let gerada_antes = fs::read_to_string(dir.join("target").join("gerada.scene.ron")).unwrap();
+
+        let report = rename_material_in_scenes(path.clone(), "Gelo".into(), "Gelo2".into()).unwrap();
+
+        let mut changed = report.changed.clone();
+        changed.sort();
+        assert_eq!(changed, ["scenes/Nova.scene.ron", "scenes/fases/Fase 2.scene.ron"]);
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert!(report.failed[0].starts_with("scenes/quebrada.scene.ron: "));
+        assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
+        assert!(report.skipped[0].starts_with("scenes/antiga.scene.ron: "));
+        // The open scene is left as it is: the editor saves it through autosave.
+        assert_eq!(fs::read_to_string(dir.join(MAIN_SCENE)).unwrap(), aberta_antes);
+        // A scene without the old name, a hidden item, the old-format scene and build output are not rewritten.
+        assert_eq!(fs::read_to_string(pasta.join("Borracha.scene.ron")).unwrap(), borracha_antes);
+        assert!(fs::read_to_string(pasta.join(".rascunho.scene.ron")).unwrap().contains("\"Gelo\""));
+        assert_eq!(fs::read_to_string(pasta.join("antiga.scene.ron")).unwrap(), antiga);
+        assert_eq!(fs::read_to_string(dir.join("target").join("gerada.scene.ron")).unwrap(), gerada_antes);
+        // A rewritten scene uses the new name.
+        let nova = fs::read_to_string(pasta.join("Nova.scene.ron")).unwrap();
+        assert!(nova.contains("Gelo2") && !nova.contains("\"Gelo\""), "{nova}");
+
+        // A name that is not in the saved settings is refused, and so is a folder that is not a project.
+        assert!(rename_material_in_scenes(path.clone(), "Gelo".into(), "Inexistente".into()).is_err());
+        let fora = pasta_temporaria("renomear-sem-projeto");
+        let recusa = rename_material_in_scenes(fora.to_string_lossy().into_owned(), "Gelo".into(), "Gelo2".into());
+        assert!(recusa.is_err());
+        fs::remove_dir_all(&fora).ok();
         fs::remove_dir_all(&dir).ok();
     }
 

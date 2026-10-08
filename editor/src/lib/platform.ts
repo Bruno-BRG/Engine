@@ -15,6 +15,13 @@ export interface RecentProject {
   openedAt: number;
 }
 
+/** Outcome of a material rename in the scene files on disk. `skipped` holds reasons, not errors. */
+export interface SceneRenameReport {
+  changed: string[];
+  failed: string[];
+  skipped: string[];
+}
+
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -83,6 +90,16 @@ export const platform = {
     const all = readWeb();
     all[path].scene = text;
     writeWeb(all);
+  },
+
+  /**
+   * Renames a physics material in the scene files saved on disk. The open scene is not among them: the editor
+   * changes it in memory and autosaves it. `to` must already be saved in the project settings. The web build
+   * keeps one scene per project, so it has no other scene files to change.
+   */
+  async renameMaterialInSceneFiles(path: string, from: string, to: string): Promise<SceneRenameReport> {
+    if (isTauri) return invoke('rename_material_in_scenes', { project: path, from, to });
+    return { changed: [], failed: [], skipped: [] };
   },
 
   /** Configurações do projeto em JSON (settings.ron no disco). Sem arquivo, texto vazio (padrões). */

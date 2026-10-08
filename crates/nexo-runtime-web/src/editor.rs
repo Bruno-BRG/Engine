@@ -10,7 +10,7 @@ use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, reg
 use nexo_physics::{Physics, check_reference};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
 /// Reprodução: cópia da cena, relógio, mundo de física, áudio, temporizadores e scripts montados a partir dela.
@@ -30,7 +30,7 @@ pub struct SceneEditor {
     /// `pub(crate)`: os métodos de entrada em `input_devices` leem a reprodução e escrevem a entrada.
     pub(crate) play: Option<Play>,
     /// Configurações do projeto (settings.ron). O mapa de entrada usado pelo jogo é `settings.input`.
-    settings: ProjectSettings,
+    pub(crate) settings: ProjectSettings,
     pub(crate) input: Input,
     /// Grafos de script por UID do nó, como `set_scripts` os recebe (texto RON).
     pub(crate) scripts: BTreeMap<Uid, String>,
@@ -38,6 +38,12 @@ pub struct SceneEditor {
     pub(crate) console: Vec<Mensagem>,
     /// Último ponteiro enviado por `pointer_event`.
     pub(crate) pointer: Ponteiro,
+    /// Breakpoints per instance (UID of the node that runs the script), as `set_breakpoints` receives them (VIS-031).
+    pub(crate) pontos: BTreeMap<Uid, BTreeSet<u64>>,
+    /// Instance the debugger follows. Only it records a trace (`debug_select`, DBG-003).
+    pub(crate) selecionada: Option<Uid>,
+    /// Whether the Depurador panel is open (`debug_panel`). An open panel lets the followed instance record a trace.
+    pub(crate) painel_aberto: bool,
 }
 
 pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
@@ -76,6 +82,9 @@ impl SceneEditor {
             scripts: BTreeMap::new(),
             console: Vec::new(),
             pointer: Ponteiro::default(),
+            pontos: BTreeMap::new(),
+            selecionada: None,
+            painel_aberto: false,
         }
     }
 
@@ -135,6 +144,16 @@ impl SceneEditor {
         self.scene
             .set_prop(parse_uid(uid)?, key, value, coalesce.as_deref())
             .map_err(js_err)
+    }
+
+    /// Renames a name reference (the physics material, PHY-023) in every node of the edit scene, as one undo
+    /// step. The new name is checked against the project settings, as `set_prop` does, so the settings must
+    /// already hold it. `to` is trimmed here, the same way the core trims it. Returns how many nodes changed.
+    pub fn rename_prop_value(&mut self, key: &str, from: &str, to: &str) -> Result<u32, JsError> {
+        let to = to.trim();
+        check_reference(&self.settings, key, &Value::String(to.to_string())).map_err(js_err)?;
+        let changed = self.scene.rename_prop_value(key, from, to).map_err(js_err)?;
+        Ok(changed as u32)
     }
 
     /// Move o nó para `parent` (ou raiz) na posição final `index` entre os irmãos.
@@ -201,7 +220,9 @@ impl SceneEditor {
     /// (lançado como exceção no TypeScript) diz em qual script está.
     pub fn play_start(&mut self) -> Result<(), JsError> {
         let scene = self.scene.play_copy();
-        let instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
+        let mut instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
+        scripts::aplicar_pontos(&mut instancias, &self.pontos);
+        scripts::atualizar_rastro(&mut instancias, self.selecionada, self.painel_aberto);
         let physics = Physics::build(&scene, &self.settings);
         let mut audio = AudioPlayback::default();
         audio.autoplay(&scene);
@@ -228,6 +249,7 @@ impl SceneEditor {
             p.time += dt;
             let passos = p.physics.advance(&mut p.scene, dt);
             p.timers.advance(&p.scene, dt);
+            scripts::atualizar_rastro(&mut p.instancias, self.selecionada, self.painel_aberto);
             scripts::tick(p, passos, &self.settings, &self.input, self.pointer, &mut self.console, dt);
             p.audio.update(&p.scene, p.time);
             self.input.latch();
