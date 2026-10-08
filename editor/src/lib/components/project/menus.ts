@@ -16,15 +16,18 @@ export function createMenu(opts: { enabled: boolean; folder: () => void; scene: 
   ];
 }
 
-/** Menu de um item (arquivo ou pasta). */
+/** Menu de um item (arquivo ou pasta). `open` só existe para scripts (abrir no Lógica). */
 export function itemMenu(opts: {
   enabled: boolean;
   rename: () => void;
   trash: () => void;
   reveal: () => void;
   canReveal: boolean;
+  open?: () => void;
 }): MenuItem[] {
+  const abrir: MenuItem[] = opts.open ? [{ label: 'Abrir na Lógica', enabled: true, run: opts.open }, 'sep'] : [];
   return [
+    ...abrir,
     { label: 'Renomear', keys: 'F2', enabled: opts.enabled, run: opts.rename },
     'sep',
     { label: 'Mostrar no explorador', enabled: opts.canReveal, run: opts.reveal },

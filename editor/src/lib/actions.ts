@@ -7,10 +7,14 @@ import { assets } from './state/assets.svelte';
 import { textures } from './state/textures.svelte';
 import { log } from './state/log.svelte';
 import { viewApi } from './state/view';
+import { logic } from './logic/store.svelte';
 import { platform, type ProjectInfo } from './platform';
 import { templateById } from './templates';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** O workspace de Lógica está na frente: os comandos de edição agem no grafo, não na cena. */
+const naLogica = () => app.workspace === 'logica';
 
 export async function openProject(info: ProjectInfo) {
   try {
@@ -19,6 +23,7 @@ export async function openProject(info: ProjectInfo) {
     await loadProjectSettings(info.path);
     textures.reset();
     await assets.setProject(info.path);
+    await logic.setProject(info.path);
     app.project = info;
     app.workspace = 'cena';
     app.dirty = false;
@@ -51,6 +56,7 @@ export async function pickAndOpenProject() {
 export async function closeProject() {
   if (app.playing) togglePlay();
   if (app.dirty) await save(true);
+  await logic.close();
   await unloadProjectSettings();
   app.project = null;
   textures.reset();
@@ -60,6 +66,7 @@ export async function save(silent = false) {
   if (!app.project || app.saving) return;
   app.saving = true;
   try {
+    await logic.flush();
     await platform.saveScene(app.project.path, scene.snapshot());
     app.dirty = false;
     app.lastSaved = new Date();
@@ -110,24 +117,44 @@ export function stepFrame() {
 }
 
 export function copySelected() {
+  if (naLogica()) {
+    logic.copySelection();
+    return;
+  }
   if (scene.selectedId) scene.copy(scene.selectedId);
 }
 
 export function cutSelected() {
+  if (naLogica()) {
+    if (logic.copySelection()) logic.removeSelection();
+    return;
+  }
   if (scene.selectedId) scene.cut(scene.selectedId);
 }
 
 /** Cola ao lado da seleção (mesmo pai), ou na raiz quando nada está selecionado. */
 export function pasteClipboard() {
+  if (naLogica()) {
+    logic.paste();
+    return;
+  }
   scene.paste(scene.selected?.parent ?? null);
 }
 
 export function undo() {
+  if (naLogica()) {
+    logic.undo();
+    return;
+  }
   const label = scene.undo();
   if (label) log.info('Desfeito: ' + label);
 }
 
 export function redo() {
+  if (naLogica()) {
+    logic.redo();
+    return;
+  }
   const label = scene.redo();
   if (label) log.info('Refeito: ' + label);
 }
@@ -149,14 +176,24 @@ export function addShape(shape: 0 | 1 | 2) {
 }
 
 export function deleteSelected() {
+  if (naLogica()) {
+    logic.removeSelection();
+    return;
+  }
   scene.removeSelected();
 }
 
 export function duplicateSelected() {
+  if (naLogica()) {
+    logic.duplicateSelection();
+    return;
+  }
   scene.duplicateSelected();
 }
 
 export function setWorkspace(w: Workspace) {
+  // Sair da Lógica salva o script que estava sendo editado.
+  if (naLogica() && w !== 'logica') void logic.flush();
   app.workspace = w;
 }
 

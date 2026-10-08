@@ -8,8 +8,10 @@ use web_sys::HtmlCanvasElement;
 mod editor;
 mod host;
 mod input_devices;
+mod logic;
 mod scripts;
 pub use editor::SceneEditor;
+pub use logic::GraphEditor;
 
 #[wasm_bindgen]
 pub struct Viewport {

@@ -17,7 +17,8 @@
   import { dragState, startDrag } from './project/drag.svelte';
   import { createMenu, itemMenu } from './project/menus';
   import { importFilesTo, pickImportFiles } from './project/imports';
-  import { baseName, editableStem, invalidName, normalize, uniqueName, type NewItem } from './project/names';
+  import { baseName, editableStem, invalidName, normalize, scriptNameOf, uniqueName, type NewItem } from './project/names';
+  import { logic } from '$lib/logic/store.svelte';
 
   const SIZE_KEY = 'nexo.project.v1';
 
@@ -97,7 +98,13 @@
   /** Mover `from` para `to` é válido: não para dentro de si mesmo nem para a pasta onde já está. */
   function canDrop(from: string, to: string): boolean {
     if (to.startsWith('@') || to === from || to.startsWith(from + '/')) return false;
+    // Script se acha pelo nome, dentro de `scripts/`: arrastá-lo para outra pasta quebraria os nós que o usam.
+    if (entryOf(from)?.kind === 'script') return false;
     return parentOf(from) !== to;
+  }
+
+  function entryOf(rel: string): DirEntry | undefined {
+    return assets.entries.find((e) => e.rel === rel);
   }
 
   async function moveTo(from: string, to: string) {
@@ -143,7 +150,13 @@
     }
     const dest = join(parentOf(entry.rel), name);
     try {
-      await assets.rename(entry.rel, dest);
+      if (entry.kind === 'script') {
+        // O nome do script vai pela Lógica: ela ajusta os nós que o usam. Falha já aparece como aviso.
+        if (!(await logic.rename(scriptNameOf(entry.name), scriptNameOf(name)))) return;
+        await assets.refresh();
+      } else {
+        await assets.rename(entry.rel, dest);
+      }
       selected = dest;
     } catch (e) {
       log.toast('error', 'Não foi possível renomear', messageOf(e));
@@ -162,6 +175,14 @@
     const rel = confirming;
     if (!rel) return;
     confirming = null;
+    const entry = entryOf(rel);
+    if (entry?.kind === 'script') {
+      // A Lógica manda o arquivo para a lixeira e tira o script dos nós que o usavam.
+      await logic.remove(scriptNameOf(entry.name));
+      await assets.refresh();
+      if (selected === rel) selected = null;
+      return;
+    }
     try {
       await assets.trash(rel);
       if (selected === rel) selected = null;
@@ -257,6 +278,7 @@
         trash: () => askTrash(entry.rel),
         reveal: () => void reveal(entry.rel),
         canReveal: isTauri && !!assets.root,
+        open: entry.kind === 'script' ? () => void logic.openIn(scriptNameOf(entry.name)) : undefined,
       }),
     );
   }
@@ -288,6 +310,7 @@
     if (e.key === 'F2' && selectedEntry && writable) handled(() => startRename(selectedEntry.rel));
     else if (e.key === 'Delete' && selectedEntry && writable) handled(() => askTrash(selectedEntry.rel));
     else if (e.key === 'Enter' && selectedEntry?.isDir) handled(() => open(selectedEntry.rel));
+    else if (e.key === 'Enter' && selectedEntry?.kind === 'script') handled(() => void logic.openIn(scriptNameOf(selectedEntry.name)));
     else if (e.key === 'Escape' && (confirming || selected || creating)) {
       handled(() => {
         confirming = null;
@@ -355,7 +378,11 @@
           bind:creating
           {filtering}
           onpress={(e, entry) => press(e, entry.rel)}
-          onopen={(entry) => (entry.isDir ? open(entry.rel) : (selected = entry.rel))}
+          onopen={(entry) => {
+            if (entry.isDir) open(entry.rel);
+            else if (entry.kind === 'script') void logic.openIn(scriptNameOf(entry.name));
+            else selected = entry.rel;
+          }}
           oncontext={onItemContext}
           onempty={onEmptyContext}
           onclear={() => (selected = null)}

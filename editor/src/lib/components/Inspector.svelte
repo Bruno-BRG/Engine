@@ -15,6 +15,7 @@
   import AssetField from './inspector/AssetField.svelte';
   import NodeRefField from './inspector/NodeRefField.svelte';
   import RangeField from './inspector/RangeField.svelte';
+  import ScriptSlot from './logic/ScriptSlot.svelte';
   import { ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Lock, LockOpen, Plus, Search, Braces } from '@lucide/svelte';
 
   const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -120,7 +121,8 @@
   function groupsOf(t: NodeType) {
     const groups: { name: string; props: PropDef[] }[] = [];
     for (const p of t.props) {
-      if (HEADER_GROUPS.has(p.group)) continue;
+      // O script tem slot próprio (INS-005), no bloco de identificação, em vez de um campo de texto.
+      if (HEADER_GROUPS.has(p.group) || p.name === 'script') continue;
       const g = groups.at(-1);
       if (g && g.name === p.group) g.props.push(p);
       else groups.push({ name: p.group, props: [p] });
@@ -229,6 +231,7 @@
         onchange={(layer) => scene.setProp(node!.uid, 'layer', layer)}
       />
     </div>
+    <ScriptSlot {node} />
 
     <div class="body">
       {#each chain as t (t.name)}

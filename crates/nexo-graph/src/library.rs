@@ -164,6 +164,16 @@ fn build() -> Vec<NodeDef> {
                 PinDef::new("self", "Este nó", PinType::Node),
             ],
         ),
+        evento(
+            "OnPhysicsProcess",
+            "A cada quadro de física",
+            "Roda a cada passo fixo da física (On Physics Process). Fornece o delta, em segundos.",
+            vec![
+                exec(),
+                PinDef::new("delta", "Delta (s)", PinType::Float),
+                PinDef::new("self", "Este nó", PinType::Node),
+            ],
+        ),
         // Fluxo.
         def(
             "Branch",
@@ -691,9 +701,10 @@ mod tests {
 
     #[test]
     fn biblioteca_serializa_para_o_editor() {
-        assert_eq!(library().len(), 54);
+        assert_eq!(library().len(), 55);
         assert!(find("Branch").is_some_and(|d| !d.event));
         assert!(find("OnProcess").is_some_and(|d| d.event));
+        assert!(find("OnPhysicsProcess").is_some_and(|d| d.event));
         assert!(find("Nada").is_none());
         // O editor lê esta tabela como JSON.
         let json = serde_json::to_value(library()).unwrap();

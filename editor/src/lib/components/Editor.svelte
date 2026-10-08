@@ -14,6 +14,7 @@
   import StatusBar from './StatusBar.svelte';
   import WorkspacePreview from './WorkspacePreview.svelte';
   import WorkspaceTabs from './WorkspaceTabs.svelte';
+  import LogicWorkspace from './logic/LogicWorkspace.svelte';
 
   // Salvamento automático 1,5 s depois da última alteração.
   let first = true;
@@ -52,7 +53,9 @@
         <div class="layer" class:hidden={app.workspace !== 'jogo'}>
           <Viewport mode="jogo" active={app.workspace === 'jogo'} />
         </div>
-        {#if app.workspace !== 'cena' && app.workspace !== 'jogo'}
+        {#if app.workspace === 'logica'}
+          <LogicWorkspace />
+        {:else if app.workspace !== 'cena' && app.workspace !== 'jogo'}
           <WorkspacePreview workspace={app.workspace} />
         {/if}
       </div>

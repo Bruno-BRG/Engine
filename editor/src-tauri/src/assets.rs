@@ -134,11 +134,15 @@ fn check_user_path(rp: &Path) -> CmdResult<()> {
     Ok(())
 }
 
-/// Tipo do arquivo pelo nome. `scene` é a cena RON (não é asset importado).
+/// Tipo do arquivo pelo nome. `scene` é a cena RON e `script` o grafo de lógica (VIS-001): nenhum dos dois é
+/// asset importado, então não ganha sidecar nem UID.
 fn classify(name: &str) -> &'static str {
     let lower = name.to_lowercase();
     if lower.ends_with(".scene.ron") {
         return "scene";
+    }
+    if lower.ends_with(".logic.ron") {
+        return "script";
     }
     match lower.rsplit_once('.').map(|(_, e)| e) {
         Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp") => "texture",
@@ -214,7 +218,7 @@ fn collect_assets(dir: &Path, rel: &str, out: &mut Vec<DirEntry>) -> CmdResult<(
             continue;
         }
         let kind = classify(&name);
-        if kind == "scene" {
+        if matches!(kind, "scene" | "script") {
             continue;
         }
         out.push(DirEntry {
@@ -362,7 +366,7 @@ pub fn list_dir(project: String, rel: String) -> CmdResult<Vec<DirEntry>> {
             });
         } else {
             let kind = classify(&name);
-            let uid = if kind == "scene" {
+            let uid = if matches!(kind, "scene" | "script") {
                 None
             } else {
                 read_uid(&path)
@@ -495,7 +499,7 @@ pub fn rename_entry(project: String, from: String, to: String) -> CmdResult<()> 
         }
     } else if to_abs.is_file() {
         let kind = classify(file_name(&to_rp));
-        if kind != "scene" {
+        if !matches!(kind, "scene" | "script") {
             // Asset sem sidecar (criado fora do editor): ganha o UID agora.
             ensure_sidecar(&to_abs, kind)?;
         }

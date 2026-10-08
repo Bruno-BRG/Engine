@@ -3,7 +3,7 @@
 import { isTauri } from '$lib/platform';
 import { log } from './log.svelte';
 
-export type AssetKind = 'texture' | 'audio' | 'font' | 'scene' | 'folder' | 'other';
+export type AssetKind = 'texture' | 'audio' | 'font' | 'scene' | 'script' | 'folder' | 'other';
 
 /** Uma entrada de pasta, ou um asset de `listAssets`. Os campos vêm do backend (camelCase). */
 export interface DirEntry {

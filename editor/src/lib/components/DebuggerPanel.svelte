@@ -4,6 +4,7 @@
   import { scene } from '$lib/state/scene.svelte';
   import * as act from '$lib/actions';
   import NodeIcon from './NodeIcon.svelte';
+  import DebugLogic from './logic/DebugLogic.svelte';
   import { Play } from '@lucide/svelte';
   const n = (v: number, p = 1) => v.toFixed(p).replace('.', ',');
 </script>
@@ -30,10 +31,11 @@
   {:else}
     <div class="idle">
       <strong>Valores ao vivo aparecem aqui durante o jogo</strong>
-      <span>Na Fase 2, o depurador também vai mostrar o fluxo da lógica visual, breakpoints e o histórico por frame.</span>
+      <span>O depurador mostra os nós da cena e, abaixo, a lógica visual: pontos de parada, pausa e o último quadro.</span>
       <button class="btn" onclick={act.togglePlay}><Play size={13} fill="currentColor" /> Jogar agora</button>
     </div>
   {/if}
+  <DebugLogic />
 </div>
 
 <style>
@@ -81,7 +83,7 @@
     color: var(--text-dim);
   }
   .idle {
-    height: 100%;
+    min-height: 120px;
     display: flex;
     flex-direction: column;
     align-items: center;

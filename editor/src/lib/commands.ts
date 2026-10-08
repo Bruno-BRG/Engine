@@ -3,6 +3,7 @@ import { scene } from './state/scene.svelte';
 import { focus } from './state/focus.svelte';
 import { viewApi } from './state/view';
 import { keymap, shortcutsOpen } from './state/keymap.svelte';
+import { logic } from './logic/store.svelte';
 import * as act from './actions';
 
 export interface Command {
@@ -17,7 +18,9 @@ export interface Command {
 }
 
 const hasProject = () => app.project != null;
-const hasSelection = () => scene.selectedId != null;
+/** O workspace de Lógica está na frente: os comandos de edição e de seleção valem para o grafo. */
+const naLogica = () => app.workspace === 'logica';
+const hasSelection = () => (naLogica() ? logic.hasSelection : scene.selectedId != null);
 const editing = () => hasProject() && !app.playing;
 
 export const COMMANDS: Command[] = [
@@ -28,15 +31,16 @@ export const COMMANDS: Command[] = [
   { id: 'play-alt', title: 'Jogar / parar', group: 'Jogo', keys: 'Ctrl+P', global: true, enabled: hasProject, run: act.togglePlay },
   { id: 'pause', title: 'Pausar / retomar o jogo', group: 'Jogo', keys: 'F6', global: true, enabled: () => app.playing, run: act.togglePause },
   { id: 'step', title: 'Passo a passo (avançar um quadro)', group: 'Jogo', keys: 'F10', global: true, enabled: hasProject, run: act.stepFrame },
-  { id: 'undo', title: 'Desfazer', group: 'Editar', keys: 'Ctrl+Z', enabled: () => editing() && scene.canUndo, run: act.undo },
-  { id: 'redo', title: 'Refazer', group: 'Editar', keys: 'Ctrl+Shift+Z', enabled: () => editing() && scene.canRedo, run: act.redo },
-  { id: 'redo-alt', title: 'Refazer', group: 'Editar', keys: 'Ctrl+Y', enabled: () => editing() && scene.canRedo, run: act.redo },
+  { id: 'undo', title: 'Desfazer', group: 'Editar', keys: 'Ctrl+Z', enabled: () => editing() && (naLogica() ? logic.canUndo : scene.canUndo), run: act.undo },
+  { id: 'redo', title: 'Refazer', group: 'Editar', keys: 'Ctrl+Shift+Z', enabled: () => editing() && (naLogica() ? logic.canRedo : scene.canRedo), run: act.redo },
+  { id: 'redo-alt', title: 'Refazer', group: 'Editar', keys: 'Ctrl+Y', enabled: () => editing() && (naLogica() ? logic.canRedo : scene.canRedo), run: act.redo },
   { id: 'copy', title: 'Copiar objeto', group: 'Editar', keys: 'Ctrl+C', enabled: () => hasProject() && hasSelection(), run: act.copySelected },
   { id: 'cut', title: 'Recortar objeto', group: 'Editar', keys: 'Ctrl+X', enabled: () => editing() && hasSelection(), run: act.cutSelected },
-  { id: 'paste', title: 'Colar objeto', group: 'Editar', keys: 'Ctrl+V', enabled: () => editing() && scene.hasClipboard, run: act.pasteClipboard },
+  { id: 'paste', title: 'Colar objeto', group: 'Editar', keys: 'Ctrl+V', enabled: () => editing() && (naLogica() ? logic.clipboard !== null : scene.hasClipboard), run: act.pasteClipboard },
   { id: 'duplicate', title: 'Duplicar objeto selecionado', group: 'Editar', keys: 'Ctrl+D', enabled: () => editing() && hasSelection(), run: act.duplicateSelected },
   { id: 'delete', title: 'Excluir objeto selecionado', group: 'Editar', keys: 'Delete', enabled: () => editing() && hasSelection(), run: act.deleteSelected },
-  { id: 'deselect', title: 'Limpar seleção', group: 'Editar', keys: 'Escape', enabled: hasProject, run: () => (app.playing ? act.togglePlay() : (scene.selectedId = null)) },
+  { id: 'deselect', title: 'Limpar seleção', group: 'Editar', keys: 'Escape', enabled: hasProject, run: () => (app.playing ? act.togglePlay() : naLogica() ? logic.clearSelection() : (scene.selectedId = null)) },
+  { id: 'select-all', title: 'Selecionar tudo (grafo)', group: 'Editar', keys: 'Ctrl+A', enabled: () => hasProject() && naLogica() && !!logic.active, run: () => logic.selectAll() },
   { id: 'add-rect', title: 'Adicionar retângulo', group: 'Criar', enabled: editing, run: () => act.addShape(0) },
   { id: 'add-circle', title: 'Adicionar círculo', group: 'Criar', enabled: editing, run: () => act.addShape(1) },
   { id: 'add-diamond', title: 'Adicionar losango', group: 'Criar', enabled: editing, run: () => act.addShape(2) },
@@ -45,9 +49,10 @@ export const COMMANDS: Command[] = [
   { id: 'tool-rotate', title: 'Ferramenta: girar', group: 'Viewport', keys: 'E', enabled: hasProject, run: () => (app.tool = 'rotate') },
   { id: 'tool-scale', title: 'Ferramenta: escala', group: 'Viewport', keys: 'R', enabled: hasProject, run: () => (app.tool = 'scale') },
   { id: 'tool-rect', title: 'Ferramenta: retângulo', group: 'Viewport', keys: 'T', enabled: hasProject, run: () => (app.tool = 'rect') },
-  { id: 'frame-sel', title: 'Enquadrar seleção', group: 'Viewport', keys: 'F', enabled: hasProject, run: () => viewApi.frameSelection() },
-  { id: 'frame-screen', title: 'Enquadrar tela do jogo', group: 'Viewport', keys: 'Home', enabled: hasProject, run: () => viewApi.frameScreen() },
-  { id: 'zoom-100', title: 'Zoom 100%', group: 'Viewport', keys: 'Ctrl+1', enabled: hasProject, run: () => viewApi.zoomTo(1) },
+  { id: 'frame-sel', title: 'Enquadrar seleção', group: 'Viewport', keys: 'F', enabled: hasProject, run: () => (naLogica() ? logic.frameSelection() : viewApi.frameSelection()) },
+  { id: 'frame-screen', title: 'Enquadrar tela do jogo', group: 'Viewport', keys: 'Home', enabled: hasProject, run: () => (naLogica() ? logic.frameAll() : viewApi.frameScreen()) },
+  { id: 'zoom-100', title: 'Zoom 100%', group: 'Viewport', keys: 'Ctrl+1', enabled: () => hasProject() && !naLogica(), run: () => viewApi.zoomTo(1) },
+  { id: 'bp-toggle', title: 'Ponto de parada no nó selecionado', group: 'Lógica', keys: 'F9', enabled: () => hasProject() && naLogica() && logic.selNodes.length > 0, run: () => logic.toggleBreakpoint() },
   { id: 'ws-cena', title: 'Workspace: Cena', group: 'Workspaces', keys: 'Alt+1', enabled: hasProject, run: () => act.setWorkspace('cena') },
   { id: 'ws-jogo', title: 'Workspace: Jogo', group: 'Workspaces', keys: 'Alt+2', enabled: hasProject, run: () => act.setWorkspace('jogo') },
   { id: 'ws-logica', title: 'Workspace: Lógica', group: 'Workspaces', keys: 'Alt+3', enabled: hasProject, run: () => act.setWorkspace('logica') },
@@ -119,24 +124,4 @@ export function handleShortcut(e: KeyboardEvent): boolean {
   return false;
 }
 
-/** Busca difusa simples, sem acentos. Retorna -1 quando não casa. */
-export function fuzzyScore(query: string, text: string): number {
-  const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const q = norm(query.trim());
-  const s = norm(text);
-  if (!q) return 0;
-  const direct = s.indexOf(q);
-  if (direct >= 0) return 1000 - direct;
-  let score = 0;
-  let pos = 0;
-  let streak = 0;
-  for (const ch of q) {
-    if (ch === ' ') continue;
-    const i = s.indexOf(ch, pos);
-    if (i < 0) return -1;
-    streak = i === pos ? streak + 1 : 0;
-    score += 10 + streak * 5 - (i - pos);
-    pos = i + 1;
-  }
-  return score;
-}
+export { fuzzyScore } from './fuzzy';
