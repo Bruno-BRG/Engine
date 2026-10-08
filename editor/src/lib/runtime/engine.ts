@@ -41,6 +41,11 @@ export async function readNodeLibrary(): Promise<string> {
   return GraphEditor.node_library();
 }
 
+/** C# class name of a script, as the generator writes it (VIS-024). Only valid after the WASM is loaded. */
+export function csharpClassName(script: string): string {
+  return GraphEditor.csharp_class_name(script);
+}
+
 /** Semente de 52 bits para os UIDs (cabe em um número de JavaScript sem perda). */
 export function randomSeed(): number {
   const b = new Uint32Array(2);

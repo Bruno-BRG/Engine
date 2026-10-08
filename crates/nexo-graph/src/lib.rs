@@ -15,7 +15,7 @@ pub mod scheduler;
 pub mod types;
 pub mod vm;
 
-pub use csharp::generate_csharp;
+pub use csharp::{csharp_class_name, generate_csharp};
 pub use graph::{
     Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Refusal, Wire,
 };
