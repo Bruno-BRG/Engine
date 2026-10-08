@@ -362,7 +362,7 @@ fn rename_in_scene_file(path: &Path, from: &str, to: &str) -> CmdResult<SceneRen
     if scene.rename_prop_value("physics_material", from, to)? == 0 {
         return Ok(SceneRename::Unchanged);
     }
-    if !is_format_2(&text) {
+    if !is_format_2_or_later(&text) {
         return Ok(SceneRename::Skipped(
             "formato antigo: não regravada, para não trocar os UIDs dos nós".into(),
         ));
@@ -574,7 +574,9 @@ pub(crate) mod testes {
         fs::write(pasta.join(".rascunho.scene.ron"), com_material("Gelo")).unwrap();
         fs::write(pasta.join("quebrada.scene.ron"), "isto não é ron (").unwrap();
         // Old format (format 1) that needs the change: reported as skipped and left as it is.
-        let antiga = com_material("Gelo").replace("format: 2", "format: 1");
+        let atual = format!("format: {}", nexo_core::SCENE_FORMAT);
+        let antiga = com_material("Gelo").replace(&atual, "format: 1");
+        assert!(antiga.contains("format: 1"), "a cena de teste precisa ter o campo de formato atual");
         fs::write(pasta.join("antiga.scene.ron"), &antiga).unwrap();
         // Build output is never entered.
         fs::create_dir_all(dir.join("target")).unwrap();
