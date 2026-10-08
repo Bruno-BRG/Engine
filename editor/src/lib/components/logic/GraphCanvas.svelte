@@ -1,6 +1,7 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
   import { logicDebug } from '$lib/logic/debug.svelte';
+  import { scene } from '$lib/state/scene.svelte';
   import { focus, focusPanel } from '$lib/state/focus.svelte';
   import { showContextMenu } from '$lib/state/contextmenu.svelte';
   import { log } from '$lib/state/log.svelte';
@@ -114,9 +115,15 @@
     return out;
   });
   const ativo = $derived(logic.active);
-  const executados = $derived(new Set(ativo ? (logicDebug.executados[ativo] ?? []) : []));
+  // O rastro é por instância: o grafo aberto mostra o da instância escolhida, se ela roda este script.
+  const uidRastro = $derived(
+    ativo && logicDebug.selecionada && scene.byUid.get(logicDebug.selecionada)?.props.script === ativo
+      ? logicDebug.selecionada
+      : null,
+  );
+  const executados = $derived(new Set(uidRastro ? (logicDebug.executados[uidRastro] ?? []) : []));
   const pontosDeParada = $derived(new Set(ativo ? logicDebug.breakpointsOf(ativo) : []));
-  const valores = $derived<Record<number, Value>>(ativo ? (logicDebug.valores[ativo] ?? {}) : {});
+  const valores = $derived<Record<number, Value>>(uidRastro ? (logicDebug.valores[uidRastro] ?? {}) : {});
 
   /** Ponto de um pino no mundo, ou null se o nó não existe. */
   function pinoNoMundo(ref: PinRef, saida: boolean): Vec | null {

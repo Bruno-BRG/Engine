@@ -10,7 +10,7 @@ use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, reg
 use nexo_physics::{Physics, check_reference};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
 /// Reprodução: cópia da cena, relógio, mundo de física, áudio, temporizadores e scripts montados a partir dela.
@@ -30,7 +30,7 @@ pub struct SceneEditor {
     /// `pub(crate)`: os métodos de entrada em `input_devices` leem a reprodução e escrevem a entrada.
     pub(crate) play: Option<Play>,
     /// Configurações do projeto (settings.ron). O mapa de entrada usado pelo jogo é `settings.input`.
-    settings: ProjectSettings,
+    pub(crate) settings: ProjectSettings,
     pub(crate) input: Input,
     /// Grafos de script por UID do nó, como `set_scripts` os recebe (texto RON).
     pub(crate) scripts: BTreeMap<Uid, String>,
@@ -38,6 +38,10 @@ pub struct SceneEditor {
     pub(crate) console: Vec<Mensagem>,
     /// Último ponteiro enviado por `pointer_event`.
     pub(crate) pointer: Ponteiro,
+    /// Pontos de parada por instância (UID do nó que roda o script), como `set_breakpoints` os recebe (VIS-031).
+    pub(crate) pontos: BTreeMap<Uid, BTreeSet<u64>>,
+    /// Instância que o depurador acompanha: só ela grava o rastro (`debug_select`, DBG-003).
+    pub(crate) selecionada: Option<Uid>,
 }
 
 pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
@@ -76,6 +80,8 @@ impl SceneEditor {
             scripts: BTreeMap::new(),
             console: Vec::new(),
             pointer: Ponteiro::default(),
+            pontos: BTreeMap::new(),
+            selecionada: None,
         }
     }
 
@@ -186,7 +192,8 @@ impl SceneEditor {
     /// (lançado como exceção no TypeScript) diz em qual script está.
     pub fn play_start(&mut self) -> Result<(), JsError> {
         let scene = self.scene.play_copy();
-        let instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
+        let mut instancias = scripts::iniciar(&scene, &self.scripts).map_err(js_err)?;
+        scripts::aplicar_depuracao(&mut instancias, &self.pontos, self.selecionada);
         let physics = Physics::build(&scene, &self.settings);
         let mut audio = AudioPlayback::default();
         audio.autoplay(&scene);

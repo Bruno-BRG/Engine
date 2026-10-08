@@ -36,5 +36,5 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 ## Debugging
 
 - [ ] **VIS-030** (P1) Live execution highlight on wires; pin value on hover. *Status (Fase 2): parcial: o valor do pino aparece ao passar o mouse. Falta o realce ao vivo dos fios, que depende do rastro enviado pela reprodução.*
-- [ ] **VIS-031** (P1) Breakpoints, step, instance picker. *Status (Fase 2): parcial: pontos de parada (F9), continuar e passo. Falta o seletor de instância.*
+- [ ] **VIS-031** (P1) Breakpoints, step, instance picker. *Status (Fase 2): implementado, sem verificação no app desktop (os scripts exigem o Tauri, então não rodam no navegador). Pontos de parada (F9) por instância, Continuar, Próxima operação (uma operação, que cruza eventos e quadros) e seletor de instância, ligados ao Rust por `set_breakpoints`, `debug_continue`, `debug_step`, `debug_state` e `debug_trace`. Pausa só a instância: o jogo segue. Testado em Rust.*
 - [ ] **VIS-032** (P2) Per-frame execution history.

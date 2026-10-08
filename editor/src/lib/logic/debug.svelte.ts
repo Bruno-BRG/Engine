@@ -1,36 +1,47 @@
-// Depurador da lógica (VIS-030, VIS-031, DBG-003). A interface guarda os pontos de parada, mostra o rastro e a
-// pausa e oferece Continuar e Passo. A reprodução (o agendador do VM) é quem alimenta o rastro com `pushTrace`,
-// informa a pausa com `setPausa` e liga os controles com `attach`. Sem reprodução, nada disso aparece.
+// Depurador da lógica (VIS-031, DBG-003). A interface guarda os pontos de parada por script, a instância que o
+// Depurador acompanha e o rastro dela. A reprodução (runtime.svelte.ts) envia os pontos com `set_breakpoints`,
+// escolhe a instância com `debug_select` e lê o estado (`debug_state`) e o rastro (`debug_trace`) a cada quadro.
+// O rastro é por instância, com o UID do nó como chave: dois nós com o mesmo script têm os mesmos ids de grafo.
 
 import type { TraceEvent, Value } from './model';
 
-/** Onde a execução parou: o script, o nó da op que vai rodar e o evento do programa (Pausa de scheduler.rs). */
-export interface Pausa {
-  script: string;
-  node: number;
-  evento: string;
-}
-
-/** Controles da reprodução: continuar até a próxima pausa, ou rodar uma op. */
-export interface ControlesDepurador {
-  continuar: () => void;
-  passo: () => void;
+/** Estado de uma instância de script na reprodução, como `debug_state` a envia. */
+export interface InstanciaDebug {
+  /** UID do nó que roda o script. Identifica a instância. */
+  uid: string;
+  /** Parada por depuração: um ponto de parada, um passo, ou o fim de um quadro durante o passo a passo. */
+  pausada: boolean;
+  /** Nó da operação onde a execução parou. Null quando a pausa é o início de um quadro. */
+  node: number | null;
+  /** Evento do programa da operação onde a execução parou. Null sem pausa numa operação. */
+  evento: string | null;
 }
 
 class LogicDebug {
-  /** Pontos de parada por script: ids dos nós. A reprodução os copia para o agendador. */
+  /** Pontos de parada por script: ids dos nós do grafo. A reprodução os envia por instância. */
   breaks = $state<Record<string, number[]>>({});
-  /** Nós que rodaram no último quadro, por script (pulsam os fios de fluxo). */
+  /** Instâncias da reprodução, na ordem da árvore. Vazio fora do jogo. */
+  instancias = $state.raw<InstanciaDebug[]>([]);
+  /** UID da instância que o Depurador acompanha. Só ela grava o rastro. */
+  selecionada = $state<string | null>(null);
+  /** Nós que rodaram no último trecho com rastro, por instância (pulsam os fios de fluxo). */
   executados = $state.raw<Record<string, number[]>>({});
-  /** Último valor produzido por cada nó, por script (aparece no hover do pino). */
+  /** Último valor produzido por cada nó, por instância (aparece no hover do pino). */
   valores = $state.raw<Record<string, Record<number, Value>>>({});
-  /** Pausa atual, quando um ponto de parada interrompeu a execução. */
-  pausa = $state<Pausa | null>(null);
-  /** Controles da reprodução. Null quando não há reprodução com depurador. */
-  controles = $state.raw<ControlesDepurador | null>(null);
+  /** Avisado quando os pontos mudam: a reprodução os reenvia. Ligado pelo runtime. */
+  onPontosMudaram: (() => void) | null = null;
 
-  attach(c: ControlesDepurador | null) {
-    this.controles = c;
+  /** A instância escolhida, se ela existe na reprodução. */
+  get escolhida(): InstanciaDebug | null {
+    return this.instancias.find((i) => i.uid === this.selecionada) ?? null;
+  }
+
+  setInstancias(lista: InstanciaDebug[]) {
+    this.instancias = lista;
+  }
+
+  select(uid: string | null) {
+    this.selecionada = uid;
   }
 
   /** Liga ou desliga os pontos de parada dos nós. Se algum nó ainda não tem ponto, todos ganham. */
@@ -42,33 +53,31 @@ class LogicDebug {
       else atuais.add(id);
     }
     this.breaks = { ...this.breaks, [script]: [...atuais].sort((a, b) => a - b) };
+    this.onPontosMudaram?.();
   }
 
   breakpointsOf(script: string): number[] {
     return this.breaks[script] ?? [];
   }
 
-  /** Registra o rastro de um quadro (ou de um intervalo) de um script. Substitui o anterior do mesmo script. */
-  pushTrace(script: string, eventos: TraceEvent[]) {
+  /** Registra um trecho de rastro da instância: os nós que rodaram nele e os valores que produziram. */
+  pushTrace(uid: string, eventos: TraceEvent[]) {
     const rodaram = new Set<number>();
-    const valores: Record<number, Value> = { ...(this.valores[script] ?? {}) };
+    const valores: Record<number, Value> = { ...(this.valores[uid] ?? {}) };
     for (const ev of eventos) {
       if ('Executou' in ev) rodaram.add(ev.Executou.node);
       else valores[ev.Valor.node] = ev.Valor.valor;
     }
-    this.executados = { ...this.executados, [script]: [...rodaram] };
-    this.valores = { ...this.valores, [script]: valores };
+    this.executados = { ...this.executados, [uid]: [...rodaram] };
+    this.valores = { ...this.valores, [uid]: valores };
   }
 
-  setPausa(p: Pausa | null) {
-    this.pausa = p;
-  }
-
-  /** Esquece o rastro e a pausa (a reprodução parou). Os pontos de parada ficam. */
+  /** Esquece o rastro e as instâncias (a reprodução parou). Os pontos de parada ficam. */
   limpar() {
     this.executados = {};
     this.valores = {};
-    this.pausa = null;
+    this.instancias = [];
+    this.selecionada = null;
   }
 }
 

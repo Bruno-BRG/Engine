@@ -1,38 +1,84 @@
 <script lang="ts">
   import { logic } from '$lib/logic/store.svelte';
   import { logicDebug } from '$lib/logic/debug.svelte';
+  import { runtime } from '$lib/state/runtime.svelte';
+  import { scene } from '$lib/state/scene.svelte';
   import { Bug, Play, StepForward, X } from '@lucide/svelte';
 
-  // Seção de lógica visual do Depurador (VIS-031, DBG-003): pontos de parada de todos os scripts, a pausa
-  // atual com Continuar e Passo, e quantos nós rodaram no último quadro. Os dados chegam da reprodução.
+  // Seção de lógica visual do Depurador (VIS-031, DBG-003): a instância que o Depurador acompanha, os pontos de
+  // parada de todos os scripts, a pausa dela com Continuar e Próxima operação, e quantos nós rodaram no último
+  // trecho com rastro. Cada nó com script é uma instância, e o jogo segue quando uma delas pausa.
   const pontos = $derived(Object.entries(logicDebug.breaks).filter(([, ids]) => ids.length > 0));
-  const controles = $derived(logicDebug.controles);
-  const pausa = $derived(logicDebug.pausa);
-  const rodaram = $derived(logic.active ? (logicDebug.executados[logic.active] ?? []).length : 0);
+  const escolhida = $derived(logicDebug.escolhida);
+  const pausada = $derived(escolhida?.pausada ? escolhida : null);
+  const rodaram = $derived(escolhida ? (logicDebug.executados[escolhida.uid] ?? []).length : 0);
 
-  /** Nome do nó para a lista: com o script aberto, o rótulo; nos outros, o id. */
-  function nomeDo(script: string, id: number): string {
+  /** Nome do nó que roda a instância, para a lista. */
+  function nomeDaInstancia(uid: string): string {
+    return scene.byUid.get(uid)?.name ?? uid;
+  }
+
+  /** Script que a instância roda. */
+  function scriptDe(uid: string): string {
+    const nome = scene.byUid.get(uid)?.props.script;
+    return typeof nome === 'string' ? nome : '';
+  }
+
+  /** Nome do nó de um ponto de parada: com o script aberto, o rótulo; nos outros, o id. */
+  function nomeDoPonto(script: string, id: number): string {
     if (script !== logic.active) return `nó ${id}`;
     const n = logic.snap.nodes.find((x) => x.id === id);
     return n ? logic.labelOf(n) : `nó ${id}`;
+  }
+
+  /** Troca a instância acompanhada. Se ela roda outro script, o workspace abre esse script. */
+  function escolher(uid: string) {
+    runtime.escolherInstancia(uid || null);
+    const script = uid ? scriptDe(uid) : '';
+    if (script && script !== logic.active) void logic.open(script);
   }
 </script>
 
 <section class="dbg-logic">
   <header><Bug size={12} /> <span>Lógica visual</span></header>
 
-  {#if pausa}
-    <p class="pausa">Pausado em <b class="mono">{pausa.script}</b>, {nomeDo(pausa.script, pausa.node)} ({pausa.evento})</p>
+  <label class="instancia">
+    <span>Instância</span>
+    <select
+      value={logicDebug.selecionada ?? ''}
+      disabled={logicDebug.instancias.length === 0}
+      aria-label="Instância depurada"
+      onchange={(e) => escolher(e.currentTarget.value)}
+    >
+      {#each logicDebug.instancias as inst (inst.uid)}
+        <option value={inst.uid}>
+          {nomeDaInstancia(inst.uid)} · {scriptDe(inst.uid)}{inst.pausada ? ' (pausado)' : ''}
+        </option>
+      {:else}
+        <option value="">Nenhuma (jogue com F5)</option>
+      {/each}
+    </select>
+  </label>
+
+  {#if pausada}
+    <p class="pausa">
+      Pausado em <b class="mono">{scriptDe(pausada.uid)}</b>{#if pausada.node !== null}, {nomeDoPonto(scriptDe(pausada.uid), pausada.node)} ({pausada.evento}){:else}, início do quadro{/if}
+    </p>
   {/if}
   <div class="botoes">
-    <button class="btn" disabled={!controles || !pausa} onclick={() => controles?.continuar()}>
+    <button class="btn" disabled={!pausada} onclick={() => pausada && runtime.depurar('continuar', pausada.uid)}>
       <Play size={12} fill="currentColor" /> Continuar
     </button>
-    <button class="btn" disabled={!controles || !pausa} onclick={() => controles?.passo()}>
-      <StepForward size={12} /> Passo
+    <button
+      class="btn"
+      disabled={!pausada}
+      title="Roda uma operação e para na seguinte. F10 avança um quadro inteiro."
+      onclick={() => pausada && runtime.depurar('proxima', pausada.uid)}
+    >
+      <StepForward size={12} /> Próxima operação
     </button>
   </div>
-  {#if !controles}
+  {#if logicDebug.instancias.length === 0}
     <p class="nota">Pontos de parada e pausas valem durante o jogo (F5). Marque um nó com F9.</p>
   {/if}
 
@@ -42,7 +88,7 @@
       {#each ids as id (id)}
         <li>
           <span class="mono script">{script}</span>
-          <span class="no">{nomeDo(script, id)}</span>
+          <span class="no">{nomeDoPonto(script, id)}</span>
           <button class="icon-btn" title="Remover ponto de parada" aria-label="Remover ponto de parada" onclick={() => logicDebug.toggleBreakpoints(script, [id])}>
             <X size={11} />
           </button>
@@ -54,10 +100,10 @@
   </ul>
 
   <p class="nota">
-    {#if logic.active}
-      Último quadro: {rodaram} nó{rodaram === 1 ? '' : 's'} executado{rodaram === 1 ? '' : 's'} em {logic.active}.
+    {#if escolhida}
+      Último rastro: {rodaram} nó{rodaram === 1 ? '' : 's'} executado{rodaram === 1 ? '' : 's'} em {scriptDe(escolhida.uid)}.
     {:else}
-      Abra um script para ver o rastro dele.
+      Escolha uma instância para ver o rastro dela.
     {/if}
   </p>
 </section>
@@ -85,6 +131,17 @@
     font-size: var(--fs-11);
     font-weight: 600;
     color: var(--text-faint);
+  }
+  .instancia {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-11);
+    color: var(--text-dim);
+  }
+  .instancia select {
+    flex: 1;
+    min-width: 0;
   }
   .pausa {
     margin: 0;

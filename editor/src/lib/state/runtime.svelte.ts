@@ -6,6 +6,8 @@ import { scene, type NodeView } from './scene.svelte';
 import { log } from './log.svelte';
 import { audio } from './audio.svelte';
 import { logic } from '$lib/logic/store.svelte';
+import { logicDebug, type InstanciaDebug } from '$lib/logic/debug.svelte';
+import type { TraceEvent } from '$lib/logic/model';
 import type { AudioCommand } from '$lib/audio/types';
 import { pollGamepad, resetGamepad, syncMouse } from '$lib/runtime/devices';
 
@@ -30,6 +32,13 @@ class PlayRuntime {
   /** Nós da cópia de reprodução, atualizados algumas vezes por segundo para o Depurador. */
   live = $state.raw<NodeView[]>([]);
   #sinceLive = 0;
+  /** Pontos de parada como foram enviados por último, para não reenviar o que não mudou. */
+  #pontosEnviados: string | null = null;
+
+  constructor() {
+    // Um ponto de parada marcado ou removido vale já: a reprodução recebe os pontos na hora, mesmo sem quadros.
+    logicDebug.onPontosMudaram = () => this.#sincronizarPontos();
+  }
 
   /** Começa a reprodução. Devolve false se o jogo não começou: um script não compila ou não pode ser lido, e o erro vai ao Console. */
   async start(): Promise<boolean> {
@@ -37,6 +46,8 @@ class PlayRuntime {
     if (!ed) return false;
     try {
       ed.set_scripts(JSON.stringify(await this.#scriptsForPlay()));
+      this.#pontosEnviados = null;
+      this.#sincronizarPontos();
       ed.play_start();
     } catch (e) {
       log.error('O jogo não começou: ' + (e instanceof Error ? e.message : String(e)));
@@ -45,11 +56,13 @@ class PlayRuntime {
     ed.release_keys();
     resetGamepad();
     audio.beginPlay();
+    logicDebug.limpar();
     // Os players com autoplay já estão na fila: começam neste mesmo clique.
     this.#drainAudio();
     this.drainConsole();
     this.#sinceLive = 0;
     this.syncLive();
+    this.#atualizarDepurador();
     window.addEventListener('keydown', this.#keyDown, true);
     window.addEventListener('keyup', this.#keyUp, true);
     window.addEventListener('blur', this.#blur);
@@ -65,10 +78,80 @@ class PlayRuntime {
     this.#drainEvents();
     this.#drainAudio();
     this.drainConsole();
+    this.#atualizarDepurador();
     this.#sinceLive += dt;
     if (this.#sinceLive > 0.1) {
       this.#sinceLive = 0;
       this.syncLive();
+    }
+  }
+
+  /** Escolhe a instância que o Depurador acompanha. Só ela grava o rastro na reprodução. */
+  escolherInstancia(uid: string | null) {
+    logicDebug.select(uid);
+    try {
+      scene.editor?.debug_select(uid ?? '');
+    } catch (e) {
+      log.error('Depurador: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  /** Continuar, ou Próxima operação, numa instância pausada (VIS-031). Só a instância muda; o jogo segue. */
+  depurar(acao: 'continuar' | 'proxima', uid: string) {
+    const ed = scene.editor;
+    if (!ed?.is_playing()) return;
+    try {
+      if (acao === 'continuar') ed.debug_continue(uid);
+      else ed.debug_step(uid);
+    } catch (e) {
+      log.error('Depurador: ' + (e instanceof Error ? e.message : String(e)));
+    }
+    this.#drainEvents();
+    this.#drainAudio();
+    this.drainConsole();
+    this.#atualizarDepurador();
+    this.syncLive();
+  }
+
+  /** Estado das instâncias e rastro da escolhida: o que o Depurador mostra depois de cada quadro ou ação. */
+  #atualizarDepurador() {
+    const ed = scene.editor;
+    if (!ed || !ed.is_playing()) return;
+    const lista = JSON.parse(ed.debug_state()) as InstanciaDebug[];
+    logicDebug.setInstancias(lista);
+    // Sem escolha válida (início do jogo, ou a instância sumiu): a primeira pausada, ou a primeira.
+    if (!lista.some((i) => i.uid === logicDebug.selecionada)) {
+      this.escolherInstancia((lista.find((i) => i.pausada) ?? lista[0])?.uid ?? null);
+    }
+    const uid = logicDebug.selecionada;
+    if (uid) {
+      const eventos = JSON.parse(ed.debug_trace()) as TraceEvent[];
+      // Sem eventos (a instância está parada), o último trecho continua visível.
+      if (eventos.length) logicDebug.pushTrace(uid, eventos);
+    }
+  }
+
+  /**
+   * Envia os pontos de parada à reprodução: cada nó com script recebe os pontos do script dele. Só reenvia quando
+   * mudam. Os pontos valem na reprodução atual e nas próximas (VIS-031).
+   */
+  #sincronizarPontos() {
+    const ed = scene.editor;
+    if (!ed) return;
+    const porUid: Record<string, number[]> = {};
+    for (const node of scene.data.nodes) {
+      const nome = node.props.script;
+      if (typeof nome !== 'string' || !nome) continue;
+      const ids = logicDebug.breakpointsOf(nome);
+      if (ids.length) porUid[node.uid] = ids;
+    }
+    const json = JSON.stringify(porUid);
+    if (json === this.#pontosEnviados) return;
+    try {
+      ed.set_breakpoints(json);
+      this.#pontosEnviados = json;
+    } catch (e) {
+      log.error('Pontos de parada: ' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -99,6 +182,7 @@ class PlayRuntime {
     scene.editor?.play_stop();
     audio.endPlay();
     this.live = [];
+    logicDebug.limpar();
   }
 
   /** Entrega ao motor de áudio os comandos do quadro (contrato em crates/nexo-core/src/audio.rs). */

@@ -156,8 +156,9 @@ pub(crate) struct Tarefa {
     pub pc: usize,
     pub regs: Vec<Value>,
     pub latente: Option<Latente>,
-    /// Quando parou num ponto de parada, o próximo passo não pode parar de novo no mesmo lugar.
-    pub ignora_ponto: bool,
+    /// Nó da última op rodada, ou onde a tarefa parou. Um ponto de parada vale uma vez por visita ao nó: as ops
+    /// seguintes do mesmo nó (um Print tem mais de uma) não voltam a parar nele (VIS-031).
+    pub ultimo_no: Option<u64>,
     /// Criada por Spawn neste quadro: o tempo dela só começa a contar no quadro seguinte.
     pub nova: bool,
 }
@@ -169,7 +170,7 @@ impl Tarefa {
             pc: 0,
             regs: vec![Value::Bool(false); program.regs],
             latente: None,
-            ignora_ponto: false,
+            ultimo_no: None,
             nova: false,
         }
     }
@@ -252,22 +253,18 @@ pub(crate) fn avancar(
     limite: u32,
 ) -> Result<Parada, VmError> {
     let mut passos = 0u32;
-    let mut executadas = 0u32;
     loop {
         if t.pc >= program.ops.len() {
             return Ok(Parada::Fim);
         }
         let origem = program.sources.get(t.pc).copied().unwrap_or(program.node);
-        // Pausa antes da op: por passo esgotado, ou por ponto de parada na execução livre. Ao retomar de um
-        // ponto, a primeira op roda sem parar de novo no mesmo lugar.
-        let primeira = executadas == 0;
-        if !(primeira && t.ignora_ponto) {
-            let passo_esgotado = matches!(amb.passo, Some(0));
-            let ponto = amb.passo.is_none() && amb.pontos.contains(&origem);
-            if passo_esgotado || ponto {
-                t.ignora_ponto = true;
-                return Ok(Parada::Pausa { node: origem });
-            }
+        // Pausa antes da op: por passo esgotado, ou por ponto de parada na execução livre. O ponto vale uma vez por
+        // visita ao nó: ao retomar, as ops do mesmo nó rodam sem parar de novo nele.
+        let passo_esgotado = matches!(amb.passo, Some(0));
+        let ponto = amb.passo.is_none() && amb.pontos.contains(&origem) && t.ultimo_no != Some(origem);
+        if passo_esgotado || ponto {
+            t.ultimo_no = Some(origem);
+            return Ok(Parada::Pausa { node: origem });
         }
         passos += 1;
         if passos > limite {
@@ -278,7 +275,6 @@ pub(crate) fn avancar(
         }
         let atual = t.pc;
         t.pc += 1;
-        executadas += 1;
         let op = &program.ops[atual];
         if let Some(tr) = amb.trace.as_mut() {
             tr.push(TraceEvent::Executou {
@@ -287,7 +283,7 @@ pub(crate) fn avancar(
             });
         }
         let parada = executa(op, origem, t, amb)?;
-        t.ignora_ponto = false;
+        t.ultimo_no = Some(origem);
         if let Some(restam) = amb.passo.as_mut() {
             *restam = restam.saturating_sub(1);
         }
@@ -607,7 +603,7 @@ fn executa(
                 pc: *entry,
                 regs: regs.to_vec(),
                 latente: None,
-                ignora_ponto: false,
+                ultimo_no: None,
                 nova: false,
             };
             if s > 0.0 {
