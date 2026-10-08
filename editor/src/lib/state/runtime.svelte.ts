@@ -5,6 +5,7 @@
 import { scene, type NodeView } from './scene.svelte';
 import { log } from './log.svelte';
 import { audio } from './audio.svelte';
+import { logic } from '$lib/logic/store.svelte';
 import type { AudioCommand } from '$lib/audio/types';
 import { pollGamepad, resetGamepad, syncMouse } from '$lib/runtime/devices';
 
@@ -30,11 +31,12 @@ class PlayRuntime {
   live = $state.raw<NodeView[]>([]);
   #sinceLive = 0;
 
-  /** Começa a reprodução. Devolve false se o jogo não começou: um script não compila, e o erro vai ao Console. */
-  start(): boolean {
+  /** Começa a reprodução. Devolve false se o jogo não começou: um script não compila ou não pode ser lido, e o erro vai ao Console. */
+  async start(): Promise<boolean> {
     const ed = scene.editor;
     if (!ed) return false;
     try {
+      ed.set_scripts(JSON.stringify(await this.#scriptsForPlay()));
       ed.play_start();
     } catch (e) {
       log.error('O jogo não começou: ' + (e instanceof Error ? e.message : String(e)));
@@ -104,6 +106,22 @@ class PlayRuntime {
     const ed = scene.editor;
     if (!ed) return;
     audio.consume(JSON.parse(ed.audio_commands()) as AudioCommand[]);
+  }
+
+  /** Grafos dos scripts anexados aos nós (VIS-023), como `{uid do nó: texto RON}`, para `set_scripts`. */
+  async #scriptsForPlay(): Promise<Record<string, string>> {
+    const nomePorNo = new Map<string, string>();
+    for (const node of scene.data.nodes) {
+      const nome = node.props.script;
+      if (typeof nome === 'string' && nome) nomePorNo.set(node.uid, nome);
+    }
+    const textos = await logic.textsForPlay([...new Set(nomePorNo.values())]);
+    const porNo: Record<string, string> = {};
+    for (const [uid, nome] of nomePorNo) {
+      const texto = textos.get(nome);
+      if (texto !== undefined) porNo[uid] = texto;
+    }
+    return porNo;
   }
 
   /**

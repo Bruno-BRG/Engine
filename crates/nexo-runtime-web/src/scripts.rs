@@ -7,6 +7,7 @@ use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
 use nexo_graph::{Compiled, Context, Graph, Scheduler, compile};
+use nexo_physics::STEP;
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
@@ -104,10 +105,12 @@ pub(crate) fn sincronizar(
     }
 }
 
-/// Um quadro de todos os scripts da reprodução. Por instância: os eventos "A cada quadro" e o estado ativo entram no
-/// agendador, que roda as tarefas. Erro de execução vai ao console uma vez por mensagem; a instância segue.
+/// Um quadro de todos os scripts da reprodução. Por instância: primeiro um evento "OnPhysicsProcess" por passo de
+/// física (com o passo fixo), depois o "OnProcess" do quadro, com o estado ativo. Erro de execução vai ao console uma
+/// vez por mensagem; a instância segue.
 pub(crate) fn tick(
     p: &mut Play,
+    passos: usize,
     ajustes: &ProjectSettings,
     entrada: &Input,
     ponteiro: Ponteiro,
@@ -116,7 +119,9 @@ pub(crate) fn tick(
 ) {
     p.instancias.retain(|i| p.scene.node(i.dono).is_some());
     for inst in &mut p.instancias {
-        let resultado = {
+        let mut resultado = Ok(());
+        let quadro = (0..passos).map(|_| ("OnPhysicsProcess", STEP)).chain(std::iter::once(("OnProcess", dt)));
+        for (evento, passo) in quadro {
             let mut mundo = Mundo {
                 cena: &mut p.scene,
                 fisica: &mut p.physics,
@@ -127,10 +132,15 @@ pub(crate) fn tick(
                 console: &mut *console,
                 dono: inst.dono,
             };
-            inst.agenda.iniciar(&inst.grafo, "OnProcess");
-            inst.agenda.iniciar_estado(&inst.grafo, &inst.contexto.estado);
-            inst.agenda.tick(&inst.grafo, &mut inst.contexto, &mut mundo, dt)
-        };
+            inst.agenda.iniciar(&inst.grafo, evento);
+            if evento == "OnProcess" {
+                inst.agenda.iniciar_estado(&inst.grafo, &inst.contexto.estado);
+            }
+            resultado = inst.agenda.tick(&inst.grafo, &mut inst.contexto, &mut mundo, passo);
+            if resultado.is_err() {
+                break;
+            }
+        }
         if let Err(erro) = resultado {
             let mensagem = erro.to_string();
             if inst.erros.insert(mensagem.clone()) {

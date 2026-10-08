@@ -286,6 +286,21 @@ class LogicState {
     }
   }
 
+  /** Texto RON dos scripts pedidos, para a reprodução (VIS-023). Um script aberto vale pelo que está na tela, mesmo sem salvar. */
+  async textsForPlay(names: string[]): Promise<Map<string, string>> {
+    const textos = new Map<string, string>();
+    for (const name of names) {
+      const aberto = this.#editors.get(name);
+      if (aberto) {
+        textos.set(name, aberto.to_ron());
+        continue;
+      }
+      if (!this.project) throw new Error('Nenhum projeto aberto.');
+      textos.set(name, await call<string>('load_script', { path: this.project, name }));
+    }
+    return textos;
+  }
+
   /** Variáveis exportadas de um script (INS-005), mesmo que ele não esteja aberto. */
   async exportedOf(name: string): Promise<Variable[]> {
     if (name === this.active) return this.snap.variables.filter((v) => v.exported);

@@ -427,13 +427,17 @@ impl Physics {
     }
 
     /// Avança a simulação por `dt` segundos e grava as poses interpoladas na cena de reprodução.
-    pub fn advance(&mut self, scene: &mut Scene, dt: f64) {
+    /// Devolve quantos passos fixos rodaram, para os scripts de física (OnPhysicsProcess) rodarem o mesmo número de vezes.
+    pub fn advance(&mut self, scene: &mut Scene, dt: f64) -> usize {
         self.acc = (self.acc + dt.max(0.0)).min(STEP * MAX_STEPS as f64);
+        let mut passos = 0;
         while self.acc >= STEP {
             self.step();
             self.acc -= STEP;
+            passos += 1;
         }
         self.write_poses(scene, (self.acc / STEP) as f32);
+        passos
     }
 
     fn step(&mut self) {

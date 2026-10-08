@@ -1180,3 +1180,15 @@ fn desenho_de_depuracao_mostra_queda_e_velocidade_de_personagem() {
     assert!(andando.origin[0] > 300.0, "{andando:?}");
     assert!(d.shapes.iter().any(|f| f.node == heroi && f.role == BodyRole::Character));
 }
+
+#[test]
+fn advance_devolve_quantos_passos_rodaram() {
+    // Scripts de física (OnPhysicsProcess) rodam uma vez por passo: o número tem de bater com o avanço.
+    let mut s = Scene::new("teste", 90);
+    let root = raiz(&mut s);
+    caixa_em(&mut s, root, 0.0, 0.0, json!({}));
+    let mut p = Physics::build(&s, &cfg());
+    assert_eq!(p.advance(&mut s, 0.0), 0);
+    let n = p.advance(&mut s, 1.0);
+    assert!((7..=8).contains(&n), "{n}");
+}

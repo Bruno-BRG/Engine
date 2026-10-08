@@ -81,7 +81,7 @@ export async function save(silent = false) {
 /** Duração de um quadro no Passo a passo (60 quadros por segundo). */
 export const STEP_SECONDS = 1 / 60;
 
-export function togglePlay() {
+export async function togglePlay() {
   if (!app.project) return;
   if (app.playing) {
     runtime.stop();
@@ -93,7 +93,7 @@ export function togglePlay() {
   } else {
     app.workspace = 'cena';
     // Um script com erro de compilação impede o início: o erro já foi para o Console.
-    if (!runtime.start()) return;
+    if (!(await runtime.start())) return;
     log.onPlayStart();
     app.playing = true;
     log.info('Jogo iniciado no viewport.');

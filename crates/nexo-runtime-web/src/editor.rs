@@ -211,9 +211,9 @@ impl SceneEditor {
     pub fn play_tick(&mut self, dt: f64) {
         if let Some(p) = &mut self.play {
             p.time += dt;
-            p.physics.advance(&mut p.scene, dt);
+            let passos = p.physics.advance(&mut p.scene, dt);
             p.timers.advance(&p.scene, dt);
-            scripts::tick(p, &self.settings, &self.input, self.pointer, &mut self.console, dt);
+            scripts::tick(p, passos, &self.settings, &self.input, self.pointer, &mut self.console, dt);
             p.audio.update(&p.scene, p.time);
             self.input.latch();
         }
