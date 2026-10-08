@@ -13,6 +13,7 @@ use crate::editor::SceneEditor;
 impl SceneEditor {
     /// Valor de um eixo do controle em [-1, 1]: "gamepad_left_x", "gamepad_left_y", "gamepad_right_x" ou
     /// "gamepad_right_y". O TypeScript envia a cada quadro da reprodução. Nome desconhecido é ignorado.
+    /// The triggers "gamepad_lt" and "gamepad_rt" are also accepted, unsigned, from 0 to 1 (INP-001).
     pub fn set_axis(&mut self, axis: &str, value: f64) {
         self.input.set_axis(axis, value);
     }

@@ -10,6 +10,7 @@ import { logicDebug, type InstanciaDebug } from '$lib/logic/debug.svelte';
 import type { TraceEvent } from '$lib/logic/model';
 import type { AudioCommand } from '$lib/audio/types';
 import { pollGamepad, resetGamepad, syncMouse } from '$lib/runtime/devices';
+import { settingsUi } from '$lib/state/settings.svelte';
 
 /** Evento de física como o Rust o envia (PHY-005). `node` recebe o evento; `other` causou. */
 export interface PhysicsEvent {
@@ -77,7 +78,8 @@ class PlayRuntime {
   step(dt: number) {
     const ed = scene.editor;
     if (!ed) return;
-    pollGamepad(ed);
+    // While a binding capture waits for a gamepad press, the controller does not reach the game.
+    pollGamepad(ed, !settingsUi.capture);
     ed.play_tick(dt);
     this.#drainEvents();
     this.#drainAudio();
