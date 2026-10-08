@@ -11,8 +11,9 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 /// Reprodução: cópia da cena, relógio, mundo de física, áudio e temporizadores montados a partir dela.
-struct Play {
-    scene: Scene,
+pub(crate) struct Play {
+    /// `pub(crate)` para `input_devices` ler as propriedades dos nós (joystick de toque).
+    pub(crate) scene: Scene,
     time: f64,
     physics: Physics,
     audio: AudioPlayback,
@@ -22,10 +23,11 @@ struct Play {
 #[wasm_bindgen]
 pub struct SceneEditor {
     scene: Scene,
-    play: Option<Play>,
+    /// `pub(crate)`: os métodos de entrada em `input_devices` leem a reprodução e escrevem a entrada.
+    pub(crate) play: Option<Play>,
     /// Configurações do projeto (settings.ron). O mapa de entrada usado pelo jogo é `settings.input`.
     settings: ProjectSettings,
-    input: Input,
+    pub(crate) input: Input,
 }
 
 fn js_err(e: impl std::fmt::Display) -> JsError {

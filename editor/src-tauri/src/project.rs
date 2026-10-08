@@ -2,7 +2,7 @@
 //! Layout atual (SCN-001): `project.nexo` e `scenes/principal.scene.ron`. O layout da Fase 0
 //! (`projeto.nexo` e `cenas/`) é migrado sozinho ao abrir o projeto, sem apagar nada.
 
-use nexo_core::{Scene, seed_now};
+use nexo_core::{ProjectSettings, Scene, seed_now};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -217,6 +217,9 @@ fn scaffold(
     .map_err(err)?;
     fs::write(dir.join(".gitignore"), ".nexo/cache/\n").map_err(err)?;
     write_atomic(&dir.join(MAIN_SCENE), text.as_bytes())?;
+    // Projeto novo grava os padrões (INP-002): as ações ui_* e os botões do controle ficam no settings.ron.
+    let settings = ProjectSettings::default().to_ron()?;
+    write_atomic(&dir.join(crate::settings::SETTINGS_FILE), settings.as_bytes())?;
     read_project(dir)
 }
 
@@ -404,6 +407,19 @@ pub(crate) mod testes {
         assert!(is_format_2(&text));
         assert_eq!(info.name, "Novo");
         assert!(dir.join("assets").is_dir() && dir.join(".nexo/cache").is_dir());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn projeto_novo_grava_as_acoes_padrao_no_settings() {
+        // INP-002: o settings.ron do projeto novo tem as ações ui_* com teclas, cruz e botões do controle.
+        let dir = pasta_temporaria("novo-settings");
+        scaffold(&dir, "Novo", "vazio", &cena_v1()).unwrap();
+        let text = fs::read_to_string(dir.join(crate::settings::SETTINGS_FILE)).unwrap();
+        let settings = ProjectSettings::from_ron(&text).unwrap();
+        assert_eq!(settings, ProjectSettings::default());
+        assert!(settings.input.keys("ui_left").contains(&"dpad_left".to_string()));
+        assert!(settings.input.keys("ui_accept").contains(&"gamepad_a".to_string()));
         fs::remove_dir_all(&dir).ok();
     }
 

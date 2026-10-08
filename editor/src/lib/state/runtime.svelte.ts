@@ -5,6 +5,7 @@ import { scene, type NodeView } from './scene.svelte';
 import { log } from './log.svelte';
 import { audio } from './audio.svelte';
 import type { AudioCommand } from '$lib/audio/types';
+import { pollGamepad, resetGamepad, syncMouse } from '$lib/runtime/devices';
 
 /** Evento de física como o Rust o envia (PHY-005). `node` recebe o evento; `other` causou. */
 export interface PhysicsEvent {
@@ -26,6 +27,7 @@ class PlayRuntime {
     if (!ed) return;
     ed.play_start();
     ed.release_keys();
+    resetGamepad();
     audio.beginPlay();
     // Os players com autoplay já estão na fila: começam neste mesmo clique.
     this.#drainAudio();
@@ -40,6 +42,7 @@ class PlayRuntime {
   step(dt: number) {
     const ed = scene.editor;
     if (!ed) return;
+    pollGamepad(ed);
     ed.play_tick(dt);
     this.#drainEvents();
     this.#drainAudio();
@@ -48,6 +51,12 @@ class PlayRuntime {
       this.#sinceLive = 0;
       this.syncLive();
     }
+  }
+
+  /** Botões do mouse e do toque no viewport de jogo. `buttons` é o `PointerEvent.buttons` do evento. */
+  pointerButtons(buttons: number) {
+    const ed = scene.editor;
+    if (ed?.is_playing()) syncMouse(ed, buttons);
   }
 
   /** Atualiza o Depurador agora, sem esperar o intervalo de 0,1 s (usado pelo Passo a passo). */
@@ -67,6 +76,7 @@ class PlayRuntime {
     window.removeEventListener('keyup', this.#keyUp, true);
     window.removeEventListener('blur', this.#blur);
     scene.editor?.release_keys();
+    resetGamepad();
     scene.editor?.play_stop();
     audio.endPlay();
     this.live = [];
@@ -115,6 +125,7 @@ class PlayRuntime {
 
   #blur = () => {
     scene.editor?.release_keys();
+    resetGamepad();
   };
 }
 
