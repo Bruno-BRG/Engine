@@ -9,7 +9,7 @@ use crate::vm::{
 };
 use std::collections::BTreeSet;
 
-/// Onde a execução parou para depuração: o nó da op que vai rodar e o evento do programa.
+/// Where execution stopped for debugging: the node of the op about to run, and the event of the program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pausa {
     pub node: u64,
