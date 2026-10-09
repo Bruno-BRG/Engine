@@ -3,7 +3,7 @@
 //! este arquivo só traduz para o JavaScript. Os ids de nós e de caixas são números (`f64`): cabem sem perda, e um
 //! `u64` viraria BigInt no wasm-bindgen.
 
-use nexo_graph::{Fragment, Graph, PinType, Value, library};
+use nexo_graph::{Fragment, Graph, PinType, Value, csharp_of_graph, library};
 use serde::Serialize;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -105,6 +105,14 @@ impl GraphEditor {
             "variables": self.graph.variables,
             "pins": self.graph.pins(),
         }))
+    }
+
+    /// C# do script, gerado da IR (VIS-024), somente leitura. `class_name` já é um identificador C#. Se o grafo não
+    /// compila, o erro junta as mensagens de compilação, como `validate`, e não há texto.
+    pub fn to_csharp(&self, class_name: &str) -> Result<String, JsError> {
+        csharp_of_graph(&self.graph, class_name).map_err(|erros| {
+            JsError::new(&erros.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+        })
     }
 
     /// Erros de validação em JSON: [{node, message}]. `node` é null quando o erro não é de um nó.

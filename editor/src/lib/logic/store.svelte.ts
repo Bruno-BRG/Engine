@@ -7,6 +7,7 @@ import { scene, type NodeView } from '$lib/state/scene.svelte';
 import { log } from '$lib/state/log.svelte';
 import { createGraphEditor, readNodeLibrary, type GraphEditor } from '$lib/runtime/engine';
 import { isTauri } from '$lib/platform';
+import { className } from '$lib/csharp';
 import { logicDebug } from './debug.svelte';
 import {
   COMMENT_SIZE,
@@ -41,6 +42,9 @@ const VAZIO: GraphSnapshot = { nodes: [], wires: [], comments: [], variables: []
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** C# de um script (VIS-024): o texto gerado da IR e o nome da classe, ou o erro que impede a geração. */
+export type CSharpScript = { ok: true; classe: string; codigo: string } | { ok: false; erro: string };
+
 /** Chama um comando do Tauri. Sem o app desktop, scripts não existem. */
 async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   if (!isTauri) throw new Error('Os scripts de lógica precisam do app desktop');
@@ -66,6 +70,8 @@ class LogicState {
   snap = $state.raw<GraphSnapshot>(VAZIO);
   /** Erros de validação do grafo aberto. */
   errors = $state.raw<GraphError[]>([]);
+  /** C# do grafo aberto, gerado da IR a cada alteração (VIS-024). `null` sem script aberto. */
+  csharp = $state.raw<CSharpScript | null>(null);
   /** Seleção do grafo aberto (ids de nós, de caixas e um fio). */
   selNodes = $state<number[]>([]);
   selComments = $state<number[]>([]);
@@ -132,6 +138,7 @@ class LogicState {
     this.active = null;
     this.snap = VAZIO;
     this.errors = [];
+    this.csharp = null;
     this.selNodes = [];
     this.selComments = [];
     this.selWire = null;
@@ -259,6 +266,7 @@ class LogicState {
       this.active = null;
       this.snap = VAZIO;
       this.errors = [];
+      this.csharp = null;
       this.selNodes = [];
       this.selComments = [];
       this.selWire = null;
@@ -344,18 +352,30 @@ class LogicState {
     if (!ed) {
       this.snap = VAZIO;
       this.errors = [];
+      this.csharp = null;
       this.canUndo = false;
       this.canRedo = false;
       return;
     }
     this.snap = JSON.parse(ed.snapshot()) as GraphSnapshot;
     this.errors = JSON.parse(ed.validate()) as GraphError[];
+    this.csharp = this.#gerarCSharp(ed);
     this.canUndo = ed.can_undo();
     this.canRedo = ed.can_redo();
     const nos = new Set(this.snap.nodes.map((n) => n.id));
     const caixas = new Set(this.snap.comments.map((c) => c.id));
     this.selNodes = this.selNodes.filter((id) => nos.has(id));
     this.selComments = this.selComments.filter((id) => caixas.has(id));
+  }
+
+  /** C# do script aberto, gerado da IR (VIS-024). Se o grafo não compila, guarda a mensagem em vez do texto. */
+  #gerarCSharp(ed: GraphEditor): CSharpScript {
+    const classe = className(this.active ?? '');
+    try {
+      return { ok: true, classe, codigo: ed.to_csharp(classe) };
+    } catch (e) {
+      return { ok: false, erro: msg(e) };
+    }
   }
 
   #touched() {

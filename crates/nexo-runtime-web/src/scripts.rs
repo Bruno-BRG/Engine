@@ -6,8 +6,8 @@
 use crate::editor::{Play, SceneEditor, js_err};
 use crate::host::{Mensagem, Mundo, Ponteiro};
 use nexo_core::{Input, ProjectSettings, Scene, Uid};
-use nexo_graph::{Compiled, Context, Graph, Scheduler, compile};
-use nexo_physics::STEP;
+use nexo_graph::{Compiled, Contato, Context, Graph, Scheduler, compile};
+use nexo_physics::{EventKind, PhysicsEvent, STEP};
 use std::collections::{BTreeMap, BTreeSet};
 use wasm_bindgen::prelude::*;
 
@@ -105,9 +105,10 @@ pub(crate) fn sincronizar(
     }
 }
 
-/// Um quadro de todos os scripts da reprodução. Por instância: primeiro um evento "OnPhysicsProcess" por passo de
-/// física (com o passo fixo), depois o "OnProcess" do quadro, com o estado ativo. Erro de execução vai ao console uma
-/// vez por mensagem; a instância segue.
+/// Um quadro de todos os scripts da reprodução. Por instância, nesta ordem: um evento de colisão ("Ao colidir" ou
+/// "Ao entrar um corpo") por evento de física que aconteceu com o nó dono, com dt zero (uma espera não conta o tempo
+/// de novo); um "OnPhysicsProcess" por passo de física (com o passo fixo); o "OnProcess" do quadro, com o estado
+/// ativo. Erro de execução vai ao console uma vez por mensagem; a instância segue.
 pub(crate) fn tick(
     p: &mut Play,
     passos: usize,
@@ -117,11 +118,18 @@ pub(crate) fn tick(
     console: &mut Vec<Mensagem>,
     dt: f64,
 ) {
+    let eventos = std::mem::take(&mut p.eventos_quadro);
     p.instancias.retain(|i| p.scene.node(i.dono).is_some());
     for inst in &mut p.instancias {
         let mut resultado = Ok(());
-        let quadro = (0..passos).map(|_| ("OnPhysicsProcess", STEP)).chain(std::iter::once(("OnProcess", dt)));
-        for (evento, passo) in quadro {
+        let dono = inst.dono;
+        let colisoes = eventos
+            .iter()
+            .filter(|e| e.node == dono)
+            .filter_map(|e| Some((evento_de_colisao(e.kind)?, 0.0, Some(contato_de(e)))));
+        let fisica = (0..passos).map(|_| ("OnPhysicsProcess", STEP, None));
+        let quadro = colisoes.chain(fisica).chain(std::iter::once(("OnProcess", dt, None)));
+        for (evento, passo, contato) in quadro {
             let mut mundo = Mundo {
                 cena: &mut p.scene,
                 fisica: &mut p.physics,
@@ -130,9 +138,12 @@ pub(crate) fn tick(
                 ajustes,
                 ponteiro,
                 console: &mut *console,
-                dono: inst.dono,
+                dono,
             };
             inst.agenda.iniciar(&inst.grafo, evento);
+            if let Some(contato) = contato {
+                inst.contexto.contato = contato;
+            }
             if evento == "OnProcess" {
                 inst.agenda.iniciar_estado(&inst.grafo, &inst.contexto.estado);
             }
@@ -147,6 +158,25 @@ pub(crate) fn tick(
                 console.push(erro_no_console(&p.scene, inst.dono, mensagem));
             }
         }
+    }
+}
+
+/// Evento de script que um evento de física dispara: "Ao colidir" para colisão sólida e "Ao entrar um corpo" para
+/// área. Os outros eventos de física ainda não têm evento de script.
+fn evento_de_colisao(kind: EventKind) -> Option<&'static str> {
+    match kind {
+        EventKind::CollisionStarted => Some("OnCollision"),
+        EventKind::BodyEntered => Some("OnBodyEntered"),
+        _ => None,
+    }
+}
+
+/// Contato de um evento de física, como os eventos de colisão do script o leem. Área não tem ponto nem normal.
+fn contato_de(e: &PhysicsEvent) -> Contato {
+    Contato {
+        outro: e.other.0,
+        ponto: e.point.unwrap_or([0.0, 0.0]),
+        normal: e.normal.unwrap_or([0.0, 0.0]),
     }
 }
 

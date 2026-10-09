@@ -6,7 +6,8 @@
 //! uma instrução. Os saltos da IR viram `goto` com rótulos `L<n>`: a reconstrução de `if` e `while` estruturados
 //! não é feita aqui. As chamadas `Nexo.*` são a API do motor em C#; as pausas latentes viram `await`.
 
-use crate::ir::{AudioOp, Compiled, Op, Program};
+use crate::graph::{CompileError, Graph};
+use crate::ir::{AudioOp, Compiled, Op, Program, compile};
 use crate::types::{LogLevel, PinType, Value, Variable};
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -92,6 +93,12 @@ const RESERVADAS: &[&str] = &[
     "while",
 ];
 
+/// C# de um grafo, como o painel mostra (VIS-024): compila e gera. Se o grafo não compila, devolve os erros de
+/// compilação, sem texto. `class_name` precisa ser um identificador C# válido (quem chama garante).
+pub fn csharp_of_graph(graph: &Graph, class_name: &str) -> Result<String, Vec<CompileError>> {
+    compile(graph).map(|compiled| generate_csharp(&compiled, class_name))
+}
+
 /// Gera a classe C# do script. `class_name` precisa ser um identificador C# válido (quem chama garante).
 pub fn generate_csharp(compiled: &Compiled, class_name: &str) -> String {
     let mut out = String::new();
@@ -131,10 +138,11 @@ fn campo(out: &mut String, var: &Variable) {
 fn metodo(out: &mut String, compiled: &Compiled, programa: &Program) {
     let assincrono = programa.ops.iter().any(latente);
     let retorno = if assincrono { "async Task" } else { "void" };
-    let parametros = if matches!(programa.event.as_str(), "OnProcess" | "OnPhysicsProcess") {
-        "NodeRef self, double delta"
-    } else {
-        "NodeRef self"
+    let parametros = match programa.event.as_str() {
+        "OnProcess" | "OnPhysicsProcess" => "NodeRef self, double delta",
+        "OnCollision" => "NodeRef self, NodeRef other, Vector2 point, Vector2 normal",
+        "OnBodyEntered" => "NodeRef self, NodeRef other",
+        _ => "NodeRef self",
     };
     let _ = writeln!(
         out,
@@ -168,9 +176,11 @@ fn tipos_dos_registradores(compiled: &Compiled, programa: &Program) -> Vec<PinTy
     for op in &programa.ops {
         let (dst, ty) = match op {
             Op::Const { dst, value } => (*dst, value.ty()),
-            Op::Owner { dst } | Op::FindNode { dst, .. } | Op::InstanceScene { dst, .. } => {
-                (*dst, PinType::Node)
-            }
+            Op::Owner { dst }
+            | Op::Outro { dst }
+            | Op::FindNode { dst, .. }
+            | Op::InstanceScene { dst, .. } => (*dst, PinType::Node),
+            Op::Ponto { dst } | Op::Normal { dst } => (*dst, PinType::Vec2),
             Op::Delta { dst }
             | Op::Add { dst, .. }
             | Op::Sub { dst, .. }
@@ -217,6 +227,9 @@ fn instrucao(c: &Compiled, op: &Op) -> String {
         Op::Const { dst, value } => format!("r{dst} = {};", literal(value)),
         Op::Owner { dst } => format!("r{dst} = self;"),
         Op::Delta { dst } => format!("r{dst} = delta;"),
+        Op::Outro { dst } => format!("r{dst} = other;"),
+        Op::Ponto { dst } => format!("r{dst} = point;"),
+        Op::Normal { dst } => format!("r{dst} = normal;"),
         Op::GetVar { dst, var } => format!("r{dst} = {};", nome_variavel(c, *var)),
         Op::SetVar { var, src } => format!("{} = r{src};", nome_variavel(c, *var)),
         Op::Add { dst, a, b }
@@ -438,8 +451,6 @@ fn ident(nome: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Graph;
-    use crate::ir::compile;
     use crate::types::PinType;
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
@@ -531,5 +542,53 @@ mod tests {
         assert_eq!(ident("vida total"), "vida_total");
         assert_eq!(ident("2x"), "_2x");
         assert_eq!(ident("int"), "@int");
+    }
+
+    #[test]
+    fn do_grafo_igual_a_gerar_pela_ir() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnReady");
+        let p = adiciona(&mut g, "Print");
+        g.set_value(p, "msg", Value::String("oi".into())).unwrap();
+        g.connect((ev, "exec"), (p, "exec")).unwrap();
+        let texto = csharp_of_graph(&g, "Teste").unwrap();
+        assert!(
+            texto.contains("public partial class Teste : NexoScript"),
+            "{texto}"
+        );
+        assert_eq!(texto, generate_csharp(&compile(&g).unwrap(), "Teste"));
+    }
+
+    #[test]
+    fn do_grafo_com_erro_devolve_os_erros_sem_texto() {
+        let mut g = Graph::default();
+        let gv = adiciona(&mut g, "GetVariable");
+        g.set_value(gv, "name", Value::String("nao_existe".into()))
+            .unwrap();
+        let erros = csharp_of_graph(&g, "Teste").unwrap_err();
+        assert!(
+            erros.iter().any(|e| e.message.contains("nao_existe")),
+            "{erros:?}"
+        );
+    }
+
+    #[test]
+    fn evento_de_colisao_recebe_outro_ponto_e_normal() {
+        let mut g = Graph::default();
+        let ev = adiciona(&mut g, "OnCollision");
+        let p = adiciona(&mut g, "Print");
+        g.set_value(p, "msg", Value::String("bateu".into()))
+            .unwrap();
+        g.connect((ev, "exec"), (p, "exec")).unwrap();
+        let texto = csharp_of_graph(&g, "Teste").unwrap();
+        assert!(
+            texto.contains(
+                "public void OnCollision_1(NodeRef self, NodeRef other, Vector2 point, Vector2 normal)"
+            ),
+            "{texto}"
+        );
+        assert!(texto.contains("= other;"), "{texto}");
+        assert!(texto.contains("= point;"), "{texto}");
+        assert!(texto.contains("= normal;"), "{texto}");
     }
 }

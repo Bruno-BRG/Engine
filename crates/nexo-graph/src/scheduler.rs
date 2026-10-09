@@ -283,6 +283,7 @@ pub fn recarregar_contexto(ctx: &Context, antigo: &Compiled, novo: &Compiled) ->
         delta: ctx.delta,
         vars,
         estado: ctx.estado.clone(),
+        contato: ctx.contato,
     }
 }
 
@@ -293,6 +294,7 @@ mod tests {
     use nexo_core::{AudioCommand, Uid};
     use crate::ir::compile;
     use crate::types::{LogLevel, PinType, Value};
+    use crate::vm::Contato;
     use crate::vm::tests::{Mock, grafo_de_movimento};
 
     fn adiciona(g: &mut Graph, kind: &str) -> u64 {
@@ -910,5 +912,69 @@ mod tests {
                 .any(|e| e.node == Some(vai) && e.message.contains("estado 'Nada' não existe")),
             "{erros:?}"
         );
+    }
+
+    #[test]
+    fn contato_de_colisao_chega_ao_script_e_nao_muda_durante_a_espera() {
+        // "Ao colidir" grava o outro nó numa variável depois de esperar 1 s. Outra colisão no meio da espera
+        // não pode trocar o outro da primeira: o programa copiou o contato ao começar.
+        let mut g = Graph::default();
+        g.add_variable("alvo", PinType::Node, Value::Node(0), false)
+            .unwrap();
+        let ev = adiciona(&mut g, "OnCollision");
+        let espera = adiciona(&mut g, "Wait");
+        g.set_value(espera, "seconds", Value::Float(1.0)).unwrap();
+        g.connect((ev, "exec"), (espera, "exec")).unwrap();
+        let grava = adiciona(&mut g, "SetVariable");
+        texto(&mut g, grava, "name", "alvo");
+        g.connect((espera, "exec"), (grava, "exec")).unwrap();
+        g.connect((ev, "other"), (grava, "value")).unwrap();
+        let compilado = compile(&g).unwrap();
+
+        let mut ctx = compilado.new_context(5);
+        ctx.contato = Contato {
+            outro: 7,
+            ponto: [1.0, 2.0],
+            normal: [0.0, 1.0],
+        };
+        let mut agenda = Scheduler::new();
+        let mut host = Mock::default();
+        agenda.iniciar(&compilado, "OnCollision");
+        agenda.tick(&compilado, &mut ctx, &mut host, 0.0).unwrap();
+        ctx.contato.outro = 9;
+        agenda.tick(&compilado, &mut ctx, &mut host, 1.0).unwrap();
+        assert_eq!(ctx.vars[0], Value::Node(7));
+    }
+
+    #[test]
+    fn ponto_e_normal_do_contato_chegam_aos_pinos() {
+        let mut g = Graph::default();
+        g.add_variable("ponto", PinType::Vec2, Value::Vec2([0.0, 0.0]), false)
+            .unwrap();
+        g.add_variable("normal", PinType::Vec2, Value::Vec2([0.0, 0.0]), false)
+            .unwrap();
+        let ev = adiciona(&mut g, "OnCollision");
+        let p = adiciona(&mut g, "SetVariable");
+        texto(&mut g, p, "name", "ponto");
+        let n = adiciona(&mut g, "SetVariable");
+        texto(&mut g, n, "name", "normal");
+        g.connect((ev, "exec"), (p, "exec")).unwrap();
+        g.connect((p, "exec"), (n, "exec")).unwrap();
+        g.connect((ev, "point"), (p, "value")).unwrap();
+        g.connect((ev, "normal"), (n, "value")).unwrap();
+        let compilado = compile(&g).unwrap();
+
+        let mut ctx = compilado.new_context(5);
+        ctx.contato = Contato {
+            outro: 7,
+            ponto: [3.0, 4.0],
+            normal: [0.0, -1.0],
+        };
+        let mut agenda = Scheduler::new();
+        let mut host = Mock::default();
+        agenda.iniciar(&compilado, "OnCollision");
+        agenda.tick(&compilado, &mut ctx, &mut host, 0.0).unwrap();
+        assert_eq!(ctx.vars[0], Value::Vec2([3.0, 4.0]));
+        assert_eq!(ctx.vars[1], Value::Vec2([0.0, -1.0]));
     }
 }

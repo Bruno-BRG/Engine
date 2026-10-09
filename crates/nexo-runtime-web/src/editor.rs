@@ -7,7 +7,7 @@ use crate::scripts::{self, Instancia};
 use nexo_core::query::{self, Draw};
 use nexo_core::timer::{TimerEvent, Timers};
 use nexo_core::{AudioPlayback, Input, InputMap, ProjectSettings, Scene, Uid, registry};
-use nexo_physics::{Physics, check_reference};
+use nexo_physics::{Physics, PhysicsEvent, check_reference};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -22,6 +22,10 @@ pub(crate) struct Play {
     pub(crate) audio: AudioPlayback,
     pub(crate) timers: Timers,
     pub(crate) instancias: Vec<Instancia>,
+    /// Eventos de física do quadro em curso. `scripts::tick` os entrega aos scripts e os tira daqui.
+    pub(crate) eventos_quadro: Vec<PhysicsEvent>,
+    /// Eventos de física que `physics_events` ainda não entregou ao Console.
+    pub(crate) eventos_fisica: Vec<PhysicsEvent>,
 }
 
 #[wasm_bindgen]
@@ -194,7 +198,16 @@ impl SceneEditor {
         timers.autostart(&scene);
         // Bordas de entrada: a tecla já apertada antes de começar não conta como aperto no primeiro quadro.
         self.input.latch();
-        self.play = Some(Play { scene, time: 0.0, physics, audio, timers, instancias });
+        self.play = Some(Play {
+            scene,
+            time: 0.0,
+            physics,
+            audio,
+            timers,
+            instancias,
+            eventos_quadro: Vec::new(),
+            eventos_fisica: Vec::new(),
+        });
         Ok(())
     }
 
@@ -213,6 +226,10 @@ impl SceneEditor {
             p.time += dt;
             let passos = p.physics.advance(&mut p.scene, dt);
             p.timers.advance(&p.scene, dt);
+            // Os eventos do quadro vão aos scripts (Ao colidir, Ao entrar um corpo) e ficam na fila do Console.
+            let eventos = p.physics.take_events();
+            p.eventos_fisica.extend_from_slice(&eventos);
+            p.eventos_quadro = eventos;
             scripts::tick(p, passos, &self.settings, &self.input, self.pointer, &mut self.console, dt);
             p.audio.update(&p.scene, p.time);
             self.input.latch();
@@ -255,7 +272,7 @@ impl SceneEditor {
     /// Eventos de física desde a última chamada, em JSON: [{kind, node, other}]. A fila é esvaziada.
     pub fn physics_events(&mut self) -> Result<String, JsError> {
         let events = match &mut self.play {
-            Some(p) => p.physics.take_events(),
+            Some(p) => std::mem::take(&mut p.eventos_fisica),
             None => Vec::new(),
         };
         to_json(&events)

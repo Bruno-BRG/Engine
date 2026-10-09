@@ -8,6 +8,7 @@
   import EventsPanel from './EventsPanel.svelte';
   import UsedByPanel from './UsedByPanel.svelte';
   import VariablesPanel from './VariablesPanel.svelte';
+  import ScriptCSharp from './ScriptCSharp.svelte';
   import { Undo2, Redo2, Maximize, Focus, Plus, MessageSquare } from '@lucide/svelte';
 
   let nomeFuncao = $state('');
@@ -81,6 +82,7 @@
     <EventsPanel />
     <UsedByPanel />
     <VariablesPanel />
+    <ScriptCSharp />
   </aside>
 </div>
 

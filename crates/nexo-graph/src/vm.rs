@@ -48,6 +48,18 @@ pub trait Host {
     fn audio(&mut self, command: AudioCommand);
 }
 
+/// Contato que disparou um evento de colisão (VIS-002, PHY-032): o outro nó, o ponto e a normal. Os eventos
+/// "Ao colidir" e "Ao entrar um corpo" leem esses valores; fora deles, ficam zerados.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Contato {
+    /// Id do outro nó do contato.
+    pub outro: u64,
+    /// Ponto de contato no mundo. Zero em "Ao entrar um corpo", que não tem ponto.
+    pub ponto: [f64; 2],
+    /// Normal do contato, apontando do outro nó para o dono. Zero em "Ao entrar um corpo".
+    pub normal: [f64; 2],
+}
+
 /// Estado de uma instância do script entre as execuções.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Context {
@@ -59,6 +71,8 @@ pub struct Context {
     pub vars: Vec<Value>,
     /// Estado ativo (VIS-027). Vazio quando o grafo não tem estados.
     pub estado: String,
+    /// Contato do evento de colisão que está rodando. Os programas copiam para os registradores no começo.
+    pub contato: Contato,
 }
 
 /// Evento de rastro (VIS-030, DBG-003). O editor usa para pulsar os fios e mostrar valores no hover.
@@ -315,6 +329,9 @@ fn executa(
         Op::Const { dst, value } => set(regs, *dst, value.clone(), origem)?,
         Op::Owner { dst } => set(regs, *dst, Value::Node(amb.ctx.owner), origem)?,
         Op::Delta { dst } => set(regs, *dst, Value::Float(amb.ctx.delta), origem)?,
+        Op::Outro { dst } => set(regs, *dst, Value::Node(amb.ctx.contato.outro), origem)?,
+        Op::Ponto { dst } => set(regs, *dst, Value::Vec2(amb.ctx.contato.ponto), origem)?,
+        Op::Normal { dst } => set(regs, *dst, Value::Vec2(amb.ctx.contato.normal), origem)?,
         Op::GetVar { dst, var } => {
             let v = amb
                 .ctx
@@ -703,6 +720,9 @@ fn destino(op: &Op) -> Option<Reg> {
         Op::Const { dst, .. }
         | Op::Owner { dst }
         | Op::Delta { dst }
+        | Op::Outro { dst }
+        | Op::Ponto { dst }
+        | Op::Normal { dst }
         | Op::GetVar { dst, .. }
         | Op::Add { dst, .. }
         | Op::Sub { dst, .. }
@@ -1081,6 +1101,7 @@ pub(crate) mod tests {
             delta: 0.0,
             vars: Vec::new(),
             estado: String::new(),
+            contato: Contato::default(),
         };
         let erro = Vm::run(&program, &mut Mock::default(), &mut ctx).unwrap_err();
         assert_eq!(

@@ -35,6 +35,8 @@ const EN: Record<string, string> = {
   OnReady: 'on ready create start awake begin',
   OnProcess: 'on process update step frame tick every frame',
   OnPhysicsProcess: 'on physics process fixed step physics tick',
+  OnCollision: 'on collision collide hit touch contact with',
+  OnBodyEntered: 'on body entered enter area overlap trigger coin',
   Branch: 'if branch condition',
   Sequence: 'sequence then order',
   ForEach: 'for each loop repeat',

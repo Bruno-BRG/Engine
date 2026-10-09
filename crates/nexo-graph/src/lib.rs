@@ -15,10 +15,10 @@ pub mod scheduler;
 pub mod types;
 pub mod vm;
 
-pub use csharp::generate_csharp;
+pub use csharp::{csharp_of_graph, generate_csharp};
 pub use graph::{Colados, Comment, CompileError, Fragment, Graph, GraphNode, PinInfo, PinRef, Wire};
 pub use ir::{Compiled, Op, Program, Reg, compile};
 pub use library::{NodeDef, PinDef};
 pub use scheduler::{Pausa, Scheduler, recarregar_contexto};
 pub use types::{LogLevel, PinType, Value, Variable};
-pub use vm::{Context, Host, TraceEvent, Vm, VmError};
+pub use vm::{Contato, Context, Host, TraceEvent, Vm, VmError};

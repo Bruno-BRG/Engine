@@ -4,17 +4,18 @@
   import { Zap, ChevronDown, ChevronRight } from '@lucide/svelte';
 
   // Eventos do script aberto (VIS-002). Cada evento é um nó da biblioteca com `event: true`.
-  // Os que ainda não têm nó (colisão, ação, sinal, desenho, destruição, temporizador) aparecem desabilitados.
+  // Os que ainda não têm nó (ação, sinal, desenho, destruição, temporizador) aparecem desabilitados.
   const DISPONIVEIS: { kind: string; nome: string }[] = [
     { kind: 'OnReady', nome: 'Ao ficar pronto (On Ready)' },
     { kind: 'OnProcess', nome: 'A cada quadro (On Process)' },
     { kind: 'OnPhysicsProcess', nome: 'A cada quadro de física (On Physics Process)' },
+    { kind: 'OnCollision', nome: 'Ao colidir com (On Collision with)' },
+    { kind: 'OnBodyEntered', nome: 'Ao entrar um corpo (On Body Entered)' },
     { kind: 'State', nome: 'Estado (State)' },
     { kind: 'StateEnter', nome: 'Ao entrar no estado (On Enter State)' },
     { kind: 'StateExit', nome: 'Ao sair do estado (On Exit State)' },
   ];
   const PENDENTES = [
-    'Ao colidir com... (On Collision with)',
     'Ao receber ação (On Input Action)',
     'Ao receber sinal (On Signal)',
     'Ao desenhar (On Draw)',

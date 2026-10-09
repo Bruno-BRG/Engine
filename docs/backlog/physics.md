@@ -30,5 +30,5 @@ Legend: **P0** next phase · **P1** before 1.0 · **P2** after 1.0. References: 
 
 - [ ] **PHY-030** (P1) `RayCast2D` and `ShapeCast2D` nodes; raycast/overlap visual nodes. *Status (Fase 2): parcial: nós RayCast2D e ShapeCast2D (alvo, máscara, ativo, atingir áreas), consultas por nó no WASM (`ray_hit`, `shape_hit`) e consultas livres (`raycast`, `overlap_point`, `overlap_rect`). Faltam os nós de consulta na programação visual (depende da VM) e o desenho do raio no viewport.*
 - [x] **PHY-031** (P1) Joints: pin, groove, damped spring.
-- [ ] **PHY-032** (P1) Collision events available to visual scripts (contact point, normal, other node). *Status (Fase 2): parcial: eventos de colisão sólida chegam à fila (lado a lado). Faltam ponto de contato e normal.*
+- [x] **PHY-032** (P1) Collision events available to visual scripts (contact point, normal, other node). *Status (Fase 2): feito: "Ao colidir com" (OnCollision) recebe o outro nó, o ponto de contato e a normal; "Ao entrar um corpo" (OnBodyEntered) recebe o outro nó. Os valores são copiados no começo do programa, então uma espera não os troca. Ver `nexo-graph/src/ir.rs` (`contato_do_evento`).*
 - [ ] **PHY-033** (P2) Deterministic mode for replays/networking.

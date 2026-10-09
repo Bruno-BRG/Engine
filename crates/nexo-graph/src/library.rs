@@ -174,6 +174,23 @@ fn build() -> Vec<NodeDef> {
                 PinDef::new("self", "Este nó", PinType::Node),
             ],
         ),
+        evento(
+            "OnCollision",
+            "Ao colidir com",
+            "Roda quando este corpo começa a tocar outro corpo sólido (On Collision with). Fornece o outro nó, o ponto de contato e a normal.",
+            vec![
+                exec(),
+                PinDef::new("other", "Outro nó", PinType::Node),
+                PinDef::new("point", "Ponto de contato", PinType::Vec2),
+                PinDef::new("normal", "Normal", PinType::Vec2),
+            ],
+        ),
+        evento(
+            "OnBodyEntered",
+            "Ao entrar um corpo",
+            "Roda quando um corpo entra nesta área (On Body Entered). Fornece o outro nó.",
+            vec![exec(), PinDef::new("other", "Outro nó", PinType::Node)],
+        ),
         // Fluxo.
         def(
             "Branch",
@@ -700,8 +717,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn eventos_de_colisao_trazem_outro_ponto_e_normal() {
+        let colisao = find("OnCollision").expect("OnCollision na biblioteca");
+        assert!(colisao.event);
+        let pinos: Vec<&str> = colisao.outputs.iter().map(|p| p.name).collect();
+        assert_eq!(pinos, ["exec", "other", "point", "normal"]);
+        let entrada = find("OnBodyEntered").expect("OnBodyEntered na biblioteca");
+        assert!(entrada.event);
+        let pinos: Vec<&str> = entrada.outputs.iter().map(|p| p.name).collect();
+        assert_eq!(pinos, ["exec", "other"]);
+    }
+
+    #[test]
     fn biblioteca_serializa_para_o_editor() {
-        assert_eq!(library().len(), 55);
+        assert_eq!(library().len(), 57);
         assert!(find("Branch").is_some_and(|d| !d.event));
         assert!(find("OnProcess").is_some_and(|d| d.event));
         assert!(find("OnPhysicsProcess").is_some_and(|d| d.event));

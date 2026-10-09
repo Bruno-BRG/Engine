@@ -6,7 +6,7 @@
 use crate::graph::{Graph, GraphNode, REROUTE, def_of};
 use crate::library;
 use crate::types::{LogLevel, Value, Variable};
-use crate::vm::Context;
+use crate::vm::{Contato, Context};
 use std::collections::BTreeMap;
 
 pub use crate::graph::CompileError;
@@ -55,6 +55,18 @@ pub enum Op {
     },
     /// `dst` recebe o delta do quadro (saída "delta").
     Delta {
+        dst: Reg,
+    },
+    /// `dst` recebe o outro nó do contato de colisão (saída "other" de OnCollision e OnBodyEntered).
+    Outro {
+        dst: Reg,
+    },
+    /// `dst` recebe o ponto de contato (saída "point" de OnCollision).
+    Ponto {
+        dst: Reg,
+    },
+    /// `dst` recebe a normal do contato (saída "normal" de OnCollision).
+    Normal {
         dst: Reg,
     },
     /// `dst` recebe o valor da variável `var` da instância.
@@ -294,6 +306,7 @@ impl Compiled {
             delta: 0.0,
             vars: self.variables.iter().map(|v| v.default.clone()).collect(),
             estado: self.estado_inicial.clone().unwrap_or_default(),
+            contato: Contato::default(),
         }
     }
 
@@ -354,6 +367,7 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         chamadas: Vec::new(),
         retornos: Vec::new(),
     };
+    contato_do_evento(&mut e, event);
     e.flow(event.id, "exec")?;
     // Estados guardam o nome no pino "state" do evento; os demais eventos não têm estado.
     let estado = match event.kind.as_str() {
@@ -368,6 +382,26 @@ fn compile_event(graph: &Graph, event: &GraphNode) -> Result<Program, CompileErr
         regs: e.regs,
         estado,
     })
+}
+
+/// Lê o contato de um evento de colisão para registradores, antes de qualquer op do programa. Assim o valor
+/// fica no registrador da tarefa: se o programa espera (Wait) e outra colisão acontece, ele continua com o
+/// contato que o disparou. As saídas "other", "point" e "normal" são registradas como produzidas pelo evento.
+fn contato_do_evento(e: &mut Emitter<'_>, event: &GraphNode) {
+    if !matches!(event.kind.as_str(), "OnCollision" | "OnBodyEntered") {
+        return;
+    }
+    let outro = e.reg();
+    e.emit(Op::Outro { dst: outro }, event.id);
+    e.produzidas.insert((event.id, "other".into()), outro);
+    if event.kind == "OnCollision" {
+        let ponto = e.reg();
+        e.emit(Op::Ponto { dst: ponto }, event.id);
+        e.produzidas.insert((event.id, "point".into()), ponto);
+        let normal = e.reg();
+        e.emit(Op::Normal { dst: normal }, event.id);
+        e.produzidas.insert((event.id, "normal".into()), normal);
+    }
 }
 
 /// Texto embutido num pino do nó, ou vazio quando o pino não tem valor embutido.

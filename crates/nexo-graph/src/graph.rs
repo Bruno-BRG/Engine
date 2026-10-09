@@ -664,7 +664,7 @@ impl Graph {
         // Cada entrada aceita um fio só. Vale para fluxo e para dados.
         if self.wires.iter().any(|w| w.to == to) {
             return Err(format!(
-                "a entrada '{}' do nó {} já está conectada",
+                "a entrada '{}' do nó {} já está conectada. Apague o fio que chega nela antes de ligar outro.",
                 to.pin, to.node
             ));
         }
@@ -673,7 +673,7 @@ impl Graph {
         if self.reaches(to.node, from.node, flow) {
             let classe = if flow { "de fluxo" } else { "de dados" };
             return Err(format!(
-                "ligação criaria um ciclo {classe}: o nó {} já alcança o nó {}",
+                "ligação criaria um ciclo {classe}: o nó {} já alcança o nó {}. Escolha uma entrada de um nó que não dependa desta saída.",
                 to.node, from.node
             ));
         }
@@ -722,13 +722,17 @@ impl Graph {
             self.input_type(b, &to.pin)?
         };
         if out != inp {
+            // A correção está em um dos dois lados: um pino de destino do tipo da origem, ou uma origem do tipo
+            // do destino. Não há conversão automática entre tipos.
             return Err(format!(
-                "tipos incompatíveis: {}.{} ({}) não pode ligar em {}.{} ({})",
+                "tipos incompatíveis: {}.{} ({}) não pode ligar em {}.{} ({}). Ligue a uma entrada do tipo {}, ou a uma saída do tipo {}.",
                 a.etiqueta(),
                 from.pin,
                 out.nome(),
                 b.etiqueta(),
                 to.pin,
+                inp.nome(),
+                out.nome(),
                 inp.nome()
             ));
         }
@@ -1055,6 +1059,11 @@ mod tests {
         // Booleano não liga em decimal.
         let erro = g.connect((cmp, "result"), (soma, "a")).unwrap_err();
         assert!(erro.contains("incompatíveis"), "{erro}");
+        // A correção sugerida: mudar o destino para um pino do tipo da origem, ou a origem para o tipo do destino.
+        assert!(
+            erro.contains("Ligue a uma entrada do tipo booleano, ou a uma saída do tipo decimal"),
+            "{erro}"
+        );
         assert!(g.wires.is_empty());
     }
 
@@ -1080,6 +1089,7 @@ mod tests {
         g.connect((a, "result"), (m, "a")).unwrap();
         let erro = g.connect((b, "result"), (m, "a")).unwrap_err();
         assert!(erro.contains("já está conectada"), "{erro}");
+        assert!(erro.contains("Apague o fio que chega nela"), "{erro}");
     }
 
     #[test]
@@ -1090,6 +1100,7 @@ mod tests {
         g.connect((a, "then_0"), (b, "exec")).unwrap();
         let erro = g.connect((b, "then_0"), (a, "exec")).unwrap_err();
         assert!(erro.contains("ciclo de fluxo"), "{erro}");
+        assert!(erro.contains("não dependa desta saída"), "{erro}");
         // Um fio que volta para o próprio nó também é ciclo.
         let c = adiciona(&mut g, "Sequence");
         let erro = g.connect((c, "then_0"), (c, "exec")).unwrap_err();
